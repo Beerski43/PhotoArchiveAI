@@ -11,6 +11,15 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 - CLI でのピックアップ/コピー実行
 - 元の写真・動画ファイルは変更しない
 
+## 全体のフロー
+
+1. `config/app_settings.sample.json` をコピーして `config/app_settings.json` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
+2. `photoarchive init-db` で SQLite データベースを初期化します。
+3. `photoarchive scan` で対象ディレクトリをスキャンします。
+4. `photoarchive analyze` で AI 解析を実行します。
+5. `photoarchive-gui` で人物登録 GUI を起動し、登録を行います。
+6. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+
 ## インストール
 
 Ubuntu 環境での例:
@@ -31,31 +40,45 @@ pip install -e .
 
 ## 使い方
 
-### 1. データベース初期化
+### 1. アプリ設定ファイル作成
 
 ```bash
-photoarchive init-db --db photoarchive.db
+cp config/app_settings.sample.json config/app_settings.json
 ```
 
-### 2. メディアのスキャン
+必要に応じて `database_path` / `source_root` / `output_root` を編集します。
+
+### 2. データベース初期化
 
 ```bash
-photoarchive scan --source /path/to/media --db photoarchive.db
+photoarchive init-db
 ```
 
-### 3. AI 解析の実行
+### 3. メディアのスキャン
 
 ```bash
-photoarchive analyze --db photoarchive.db
+photoarchive scan
 ```
 
-### 4. GUI で人物登録
+### 4. AI 解析の実行
 
 ```bash
-photoarchive-gui --db photoarchive.db
+photoarchive analyze
 ```
 
-### 5. 抽出ルールに基づく選択とコピー
+### 5. GUI で人物登録
+
+```bash
+photoarchive-gui
+```
+
+### 6. 抽出ルールに基づく選択とコピー
+
+`config/rule.sample.json` をコピーして `config/rule.json` とし、必要に応じて編集します。
+
+```bash
+photoarchive select
+```
 
 `rule.json` の例:
 
@@ -75,7 +98,15 @@ photoarchive-gui --db photoarchive.db
 実行:
 
 ```bash
-photoarchive select --db photoarchive.db --rule rule.json --output /path/to/output --source /path/to/media
+photoarchive select
+```
+
+直接引数を使う場合は `--db`, `--source`, `--output`, `--rule` で設定を上書きできます。
+
+例:
+
+```bash
+photoarchive select --output /path/to/output --source /path/to/media --rule config/rule.json
 ```
 
 ## ディレクトリ構成
@@ -85,11 +116,16 @@ PhotoArchiveAI/
   pyproject.toml
   requirements.txt
   README.md
+  .gitignore
+  config/
+    app_settings.sample.json
+    rule.sample.json
   docs/
   src/
     photoarchive_ai/
       __init__.py
       __main__.py
+      config.py
       db.py
       scanner.py
       analyzer.py

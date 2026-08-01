@@ -62,6 +62,36 @@ AIを利用して家族の思い出となるメディアを自動選択するシ
 
 クラウドAIや外部APIは将来的なオプションとして扱う。
 
+## 2.3 Configuration
+
+アプリケーション設定は JSON ファイルで管理する。
+
+- `config/app_settings.json` にデータベースパス、メディアソース、出力先、ルールファイルパスを記載する。
+- Git には `config/app_settings.sample.json` を格納し、実際の設定ファイル `config/app_settings.json` は管理対象外とする。
+- 抽出ルールは `config/rule.json`（または YAML）として管理できる。
+- `config/rule.sample.json` をサンプルとして提供する。
+
+`database_path` および `rule_path` を設定ファイルで指定することで、アプリケーション内に DB パスやルールパスをハードコードしない。
+
+### 設定ファイルの格納場所
+
+- アプリ設定ファイル: `config/app_settings.json`
+- サンプル設定: `config/app_settings.sample.json`
+- ルール設定: `config/rule.json`
+- サンプルルール: `config/rule.sample.json`
+
+### 設定ファイルのパス変更方法
+
+`config/app_settings.json` のパスを変更するには、`src/photoarchive_ai/config.py` の `DEFAULT_CONFIG_PATH` を編集する。
+## 2.4 Git 管理対象外ファイル
+
+開発環境固有の生成物や実行環境は Git 管理から除外する。
+
+- `.venv/`
+- `data/`（生成される SQLite DB と出力先）
+- `config/app_settings.json`（個別設定ファイル）
+- `__pycache__/`, `*.pyc` などの Python ビルド成果物
+
 ---
 
 # 3. Design Principles
@@ -117,6 +147,15 @@ SQLite Database
 既存の顔認識モデルから取得した顔特徴量
 (embedding)
 を利用して人物識別する。
+
+## 3.4 Git 管理対象外ファイル
+
+開発環境固有の生成物や実行環境は Git 管理から除外する。
+
+- `.venv/`
+- `data/`（生成される SQLite DB と出力先）
+- `config/app_settings.json`（個別設定ファイル）
+- `__pycache__/`, `*.pyc` などの Python ビルド成果物
 
 ---
 
