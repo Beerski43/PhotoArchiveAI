@@ -1,0 +1,6 @@
+{
+  "database_path": "data/photoarchive.db",
+  "source_root": "/path/to/media",
+  "output_root": "/path/to/output",
+  "rule_path": "config/rule.json"
+}

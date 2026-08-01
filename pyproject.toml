@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photoarchive-ai"
+version = "0.1.0"
+description = "Family photo and video archive selection tool with local analysis, SQLite persistence, CLI and PySide6 GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.7",
+    "Pillow>=10.0",
+    "face_recognition>=1.3",
+    "opencv-python>=4.8",
+    "numpy>=1.26",
+    "PyYAML>=6.0"
+]
+
+[project.scripts]
+photoarchive = "photoarchive_ai.cli:main"
+photoarchive-gui = "photoarchive_ai.gui:main"
+
+[tool.setuptools]
+packages = ["photoarchive_ai"]
+package-dir = {"" = "src"}
