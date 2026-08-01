@@ -24,3 +24,11 @@ photoarchive-gui = "photoarchive_ai.gui:main"
 [tool.setuptools]
 packages = ["photoarchive_ai"]
 package-dir = {"" = "src"}
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
