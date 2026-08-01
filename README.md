@@ -26,7 +26,7 @@ Ubuntu 環境での例:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip build-essential cmake libopenblas-dev liblapack-dev libx11-dev libxrandr-dev libxkbcommon-x11-0 libjpeg-dev libpng-dev libtiff-dev libavcodec-dev libavformat-dev libswscale-dev
+sudo apt install -y python3 python3-venv python3-pip python3-dev build-essential cmake libboost-python-dev libopenblas-dev liblapack-dev libx11-dev libxrandr-dev libxkbcommon-x11-0 libjpeg-dev libpng-dev libtiff-dev libavcodec-dev libavformat-dev libswscale-dev
 
 cd /home/suu/github/PhotoArchiveAI
 python3 -m venv .venv
