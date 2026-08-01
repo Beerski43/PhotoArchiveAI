@@ -1,0 +1,10 @@
+{
+  "date": {
+    "start": "2000-01-01",
+    "end": "2025-12-31"
+  },
+  "family_only": true,
+  "count_per_year": 30,
+  "include_video": true,
+  "remove_duplicate": true
+}
