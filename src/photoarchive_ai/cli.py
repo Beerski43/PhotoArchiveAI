@@ -31,13 +31,9 @@ def main() -> None:
 
     args = parser.parse_args()
     settings = load_settings()
-    db_path = args.db or get_database_path(settings)
+    db_path = getattr(args, "db", None) or get_database_path(settings)
     if not db_path:
         raise SystemExit("Database path is required via application settings or --db.")
-
-    source_root = args.source or get_source_root(settings)
-    output_root = args.output or get_output_root(settings)
-    rule_path = args.rule or get_rule_path(settings)
 
     if args.command == "init-db":
         ensure_database(db_path).close()
@@ -45,6 +41,7 @@ def main() -> None:
         return
 
     if args.command == "scan":
+        source_root = getattr(args, "source", None) or get_source_root(settings)
         if not source_root:
             raise SystemExit("Source root is required either via --source or application settings.")
         with ensure_database(db_path) as connection:
@@ -59,6 +56,9 @@ def main() -> None:
         return
 
     if args.command == "select":
+        source_root = getattr(args, "source", None) or get_source_root(settings)
+        output_root = getattr(args, "output", None) or get_output_root(settings)
+        rule_path = getattr(args, "rule", None) or get_rule_path(settings)
         if not source_root:
             raise SystemExit("Source root is required via application settings or --source.")
         if not output_root:

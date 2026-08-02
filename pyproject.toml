@@ -12,6 +12,7 @@ dependencies = [
     "PySide6>=6.7",
     "Pillow>=10.0",
     "face_recognition>=1.3",
+    "face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models",
     "opencv-python>=4.8",
     "numpy>=1.26",
     "PyYAML>=6.0"
@@ -32,3 +33,4 @@ test = ["pytest>=8.0"]
 minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = ["system: end-to-end system tests"]
