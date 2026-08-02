@@ -7,6 +7,7 @@ Description-Content-Type: text/markdown
 Requires-Dist: PySide6>=6.7
 Requires-Dist: Pillow>=10.0
 Requires-Dist: face_recognition>=1.3
+Requires-Dist: face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models
 Requires-Dist: opencv-python>=4.8
 Requires-Dist: numpy>=1.26
 Requires-Dist: PyYAML>=6.0
@@ -52,6 +53,11 @@ pip install -e .
 ```
 
 `face_recognition` は `dlib` を必要とするため、依存ライブラリが不足している場合はビルドに失敗する可能性があります。
+また `face_recognition_models` も必要です。インストール時に以下を実行してください。
+
+```bash
+pip install git+https://github.com/ageitgey/face_recognition_models
+```
 
 ## 使い方
 

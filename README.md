@@ -37,6 +37,11 @@ pip install -e .
 ```
 
 `face_recognition` は `dlib` を必要とするため、依存ライブラリが不足している場合はビルドに失敗する可能性があります。
+また `face_recognition_models` も必要です。インストール時に以下を実行してください。
+
+```bash
+pip install git+https://github.com/ageitgey/face_recognition_models
+```
 
 ## 使い方
 
@@ -107,6 +112,30 @@ photoarchive select
 
 ```bash
 photoarchive select --output /path/to/output --source /path/to/media --rule config/rule.json
+```
+
+## テスト
+
+このプロジェクトでは `pytest` を使って単体テストとシステムテストを実行します。
+
+`tests/conftest.py` では、テスト収集時に `face_recognition` / `face_recognition_models` のフェイクモジュールを挿入し、依存関係が揃わない環境でも `tests/test_system.py` の実行を安定させます。
+
+システムテストを実行するには:
+
+```bash
+pytest -q tests/test_system.py
+```
+
+個別のエンドツーエンドテストだけを実行する場合:
+
+```bash
+pytest -q tests/test_system.py::test_end_to_end_flow
+```
+
+`system` マーカー付きテストを指定する場合:
+
+```bash
+pytest -q -m system
 ```
 
 ## ディレクトリ構成

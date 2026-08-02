@@ -26,6 +26,24 @@ pytest tests/test_db.py
 pytest tests/test_selection.py
 ```
 
+システムテストを実行する場合:
+
+```bash
+pytest -q tests/test_system.py
+```
+
+個別のエンドツーエンドテストのみを実行する場合:
+
+```bash
+pytest -q tests/test_system.py::test_end_to_end_flow
+```
+
+`system` マーカー付きテストを全て実行する場合:
+
+```bash
+pytest -q -m system
+```
+
 ## 3. VS Code Test Explorerでの実行
 
 1. VS Code でこのワークスペースを開く
@@ -43,6 +61,8 @@ pytest tests/test_selection.py
 ## 5. テストデータについて
 
 このテストでは、SQLite の一時ファイルを `tmp_path` に生成し、テスト終了後に自動的に削除します。
+
+`tests/test_system.py` では GUI からの人物登録や顔登録をテストします。`tests/conftest.py` によって、`face_recognition` / `face_recognition_models` がインポートできない環境でもテスト実行が安定するようにフェイクモジュールが挿入されています。
 
 ## 6. 追加の手動確認
 
