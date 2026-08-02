@@ -65,11 +65,15 @@ photoarchive init-db
 photoarchive scan
 ```
 
+スキャン中は、処理済み件数と進捗バーがターミナルに表示されます。
+
 ### 4. AI 解析の実行
 
 ```bash
 photoarchive analyze
 ```
+
+解析中も進捗バーが表示され、対象メディアごとの処理状況を追跡できます。
 
 ### 5. GUI で人物登録
 
@@ -105,6 +109,8 @@ photoarchive select
 ```bash
 photoarchive select
 ```
+
+コピー処理でも進捗バーが表示され、出力先へどこまでコピー済みか確認できます。
 
 直接引数を使う場合は `--db`, `--source`, `--output`, `--rule` で設定を上書きできます。
 
