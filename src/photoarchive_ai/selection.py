@@ -109,7 +109,14 @@ def copy_selected_media(selected_media: List[Dict[str, Any]], output_dir: str, s
     output_root.mkdir(parents=True, exist_ok=True)
     copied = 0
     for media in selected_media:
-        source_path = Path(media["path"]).resolve()
+        path_value = media.get("path")
+        if path_value is None:
+            continue
+        source_path = Path(path_value)
+        if not source_path.is_absolute():
+            source_path = source_root_path / source_path
+        source_path = source_path.resolve()
+
         if source_root_path in source_path.parents or source_path == source_root_path:
             try:
                 relative = source_path.relative_to(source_root_path)

@@ -5,4 +5,6 @@ face_recognition_models @ git+https://github.com/ageitgey/face_recognition_model
 opencv-python>=4.8
 numpy>=1.26
 PyYAML>=6.0
+
+[test]
 pytest>=8.0

@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: photoarchive-ai
+Version: 0.1.0
+Summary: Family photo and video archive selection tool with local analysis, SQLite persistence, CLI and PySide6 GUI.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: PySide6>=6.7
+Requires-Dist: Pillow>=10.0
+Requires-Dist: face_recognition>=1.3
+Requires-Dist: face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models
+Requires-Dist: opencv-python>=4.8
+Requires-Dist: numpy>=1.26
+Requires-Dist: PyYAML>=6.0
+Provides-Extra: test
+Requires-Dist: pytest>=8.0; extra == "test"
+
 # PhotoArchiveAI
 
 PhotoArchiveAI は、長期間保存された家族の写真・動画アーカイブから、AI解析とルールに基づいて良い素材を抽出し、別フォルダへコピーするローカルアプリケーションです。
@@ -112,30 +128,6 @@ photoarchive select
 
 ```bash
 photoarchive select --output /path/to/output --source /path/to/media --rule config/rule.json
-```
-
-## テスト
-
-このプロジェクトでは `pytest` を使って単体テストとシステムテストを実行します。
-
-`tests/conftest.py` では、テスト収集時に `face_recognition` / `face_recognition_models` のフェイクモジュールを挿入し、依存関係が揃わない環境でも `tests/test_system.py` の実行を安定させます。
-
-システムテストを実行するには:
-
-```bash
-pytest -q tests/test_system.py
-```
-
-個別のエンドツーエンドテストだけを実行する場合:
-
-```bash
-pytest -q tests/test_system.py::test_end_to_end_flow
-```
-
-`system` マーカー付きテストを指定する場合:
-
-```bash
-pytest -q -m system
 ```
 
 ## ディレクトリ構成
