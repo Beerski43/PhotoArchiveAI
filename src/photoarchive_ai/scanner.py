@@ -2,7 +2,7 @@ import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Generator, List, Optional
+from typing import Callable, Dict, Generator, List, Optional
 
 from PIL import Image, ExifTags
 
@@ -58,12 +58,19 @@ def iter_media_files(root: Path) -> Generator[Path, None, None]:
             yield path
 
 
-def scan_directory(source_dir: str, db_connection, analyzer_version: str = ANALYZER_VERSION) -> List[int]:
+def scan_directory(
+    source_dir: str,
+    db_connection,
+    analyzer_version: str = ANALYZER_VERSION,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> List[int]:
     root = Path(source_dir)
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
+    media_files = list(iter_media_files(root))
+    total_files = len(media_files)
     saved_ids = []
-    for path in iter_media_files(root):
+    for index, path in enumerate(media_files, start=1):
         file_type = get_media_type(path)
         file_hash = compute_file_hash(path)
         created_time = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
@@ -83,4 +90,6 @@ def scan_directory(source_dir: str, db_connection, analyzer_version: str = ANALY
         }
         media_id = save_media(db_connection, media)
         saved_ids.append(media_id)
+        if progress_callback is not None:
+            progress_callback(index, total_files, path.name)
     return saved_ids

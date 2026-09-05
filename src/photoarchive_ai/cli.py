@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -7,6 +8,19 @@ from .config import get_database_path, get_output_root, get_rule_path, get_sourc
 from .db import ensure_database
 from .scanner import scan_directory
 from .selection import copy_selected_media, load_rule, select_media
+
+
+def _emit_progress(current: int, total: int, detail: str, prefix: str = "Progress") -> None:
+    if total <= 0:
+        return
+    percent = min(100, max(0, int(current * 100 / total)))
+    bar_width = 20
+    filled = int(bar_width * current / total)
+    bar = "#" * filled + "-" * (bar_width - filled)
+    sys.stdout.write(f"\r{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {detail}")
+    sys.stdout.flush()
+    if current >= total:
+        sys.stdout.write("\n")
 
 
 def main() -> None:
@@ -45,13 +59,20 @@ def main() -> None:
         if not source_root:
             raise SystemExit("Source root is required either via --source or application settings.")
         with ensure_database(db_path) as connection:
-            media_ids = scan_directory(source_root, connection)
+            media_ids = scan_directory(
+                source_root,
+                connection,
+                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Scanning"),
+            )
         print(f"Scanned {len(media_ids)} media entries.")
         return
 
     if args.command == "analyze":
         with ensure_database(db_path) as connection:
-            analyze_database(connection)
+            analyze_database(
+                connection,
+                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Analyzing"),
+            )
         print("Analysis completed.")
         return
 
@@ -68,7 +89,12 @@ def main() -> None:
         with ensure_database(db_path) as connection:
             rule = load_rule(rule_path)
             selected = select_media(connection, rule)
-            copied = copy_selected_media(selected, output_root, source_root)
+            copied = copy_selected_media(
+                selected,
+                output_root,
+                source_root,
+                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Copying"),
+            )
         print(f"Copied {copied} files to {output_root}.")
         return
 
