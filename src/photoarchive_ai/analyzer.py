@@ -34,7 +34,7 @@ def _set_latest_error(msg: str) -> None:
 
 logger = logging.getLogger("photoarchive.analyzer")
 
-ANALYZER_VERSION = "1.0"
+ANALYZER_VERSION = "1.3"
 
 
 @contextmanager
@@ -105,7 +105,7 @@ def _load_mediapipe_face_detection():
         import mediapipe as mp  # type: ignore
         with _capture_mediapipe_output("face detection initialization"):
             return mp.solutions.face_detection.FaceDetection(
-                model_selection=0,
+                model_selection=1,
                 min_detection_confidence=0.5
             )
     except Exception as error:
@@ -126,17 +126,38 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
     try:
         with _capture_mediapipe_output("face detection"):
             results = detector.process(rgb)
-        if not results.detections:
+        detections = results.detections or []
+        logger.info("MediaPipe raw face detections: count=%s", len(detections))
+        if not detections:
+            logger.warning("MediaPipe face detection result: count=0")
             return []
         faces = []
         h, w = rgb.shape[:2]
-        for detection in results.detections:
-            bbox = detection.location_data.bounding_box
+        for index, detection in enumerate(detections, start=1):
+            location_data = detection.location_data
+            bbox = getattr(location_data, "relative_bounding_box", None)
+            if bbox is None or (bbox.width == 0 and bbox.height == 0):
+                bbox = location_data.bounding_box
             left = max(0, int(bbox.xmin * w))
             top = max(0, int(bbox.ymin * h))
             right = min(w, int((bbox.xmin + bbox.width) * w))
             bottom = min(h, int((bbox.ymin + bbox.height) * h))
+            scores = getattr(detection, "score", [])
+            logger.info(
+                "MediaPipe detection[%s]: score=%s bbox=(xmin=%s,ymin=%s,width=%s,height=%s) converted=(top=%s,right=%s,bottom=%s,left=%s)",
+                index,
+                list(scores),
+                bbox.xmin,
+                bbox.ymin,
+                bbox.width,
+                bbox.height,
+                top,
+                right,
+                bottom,
+                left,
+            )
             faces.append((top, right, bottom, left))
+        logger.info("MediaPipe converted face locations: count=%s", len(faces))
         return faces
     except Exception as error:
         logger.exception("MediaPipe face detection failed: %s", error)
@@ -185,13 +206,22 @@ def compute_face_embedding(rgb: np.ndarray, face_location: Tuple[int, int, int, 
         logger.error("MediaPipe face mesh is unavailable")
         return None
     try:
+        top, right, bottom, left = face_location
+        face_rgb = np.ascontiguousarray(rgb[top:bottom, left:right])
+        if face_rgb.size == 0:
+            logger.warning("Face crop is empty: location=%s", face_location)
+            return None
         with _capture_mediapipe_output("face mesh"):
-            results = mesh.process(rgb)
-        if not results.multi_face_landmarks or len(results.multi_face_landmarks) == 0:
+            results = mesh.process(face_rgb)
+        landmarks_results = results.multi_face_landmarks or []
+        logger.info("MediaPipe raw face mesh results: count=%s", len(landmarks_results))
+        if not landmarks_results:
             logger.warning("MediaPipe face mesh found no landmarks")
             return None
-        landmarks = results.multi_face_landmarks[0]
+        landmarks = landmarks_results[0]
+        logger.info("MediaPipe face mesh landmarks: count=%s", len(landmarks.landmark))
         embedding = _get_landmarks_embedding(landmarks.landmark)
+        logger.info("Face embedding conversion: dimensions=%s", len(embedding) if embedding else 0)
         return embedding
     except Exception as error:
         logger.exception("MediaPipe face mesh failed: %s", error)
@@ -221,7 +251,11 @@ def _estimate_smile_score(rgb: np.ndarray, face_location: Tuple[int, int, int, i
     if mesh is None:
         return 0.0
     try:
-        results = mesh.process(rgb)
+        top, right, bottom, left = face_location
+        face_rgb = np.ascontiguousarray(rgb[top:bottom, left:right])
+        if face_rgb.size == 0:
+            return 0.0
+        results = mesh.process(face_rgb)
         if not results.multi_face_landmarks or len(results.multi_face_landmarks) == 0:
             return 0.0
         landmarks = results.multi_face_landmarks[0].landmark
@@ -260,11 +294,31 @@ def analyze_media(db_connection, media: Dict[str, any]) -> None:
     try:
         rgb = _read_image(path)
         if rgb is None:
+            logger.error(
+                "DB save skipped MediaPipe: path=%s face_count=0 reason=image_read_failed",
+                path,
+            )
             save_analysis_result(db_connection, media["id"], 0, 0.0, 0.0, 0.0)
+            logger.info(
+                "DB save completed: media_id=%s face_count=0 family_score=0.0 smile_score=0.0 quality_score=0.0",
+                media["id"],
+            )
             return
         face_locations = detect_faces(rgb)
         face_count = len(face_locations)
-        if face_count == 0:
+        mediapipe_error = get_latest_error()
+        logger.info(
+            "MediaPipe face detection result: path=%s raw_face_count=%s converted_face_count=%s",
+            path,
+            len(face_locations),
+            face_count,
+        )
+        if face_count == 0 and mediapipe_error.startswith("MediaPipe"):
+            logger.error(
+                "MediaPipe did not produce a detection; face_count=0 is an unavailable/error result: %s",
+                mediapipe_error,
+            )
+        elif face_count == 0:
             msg = f"No face detected: {path}"
             logger.warning(msg)
             _set_latest_error(msg)
@@ -306,6 +360,14 @@ def analyze_media(db_connection, media: Dict[str, any]) -> None:
             best_family_score = max(best_family_score, similarity)
             best_smile_score = max(best_smile_score, _estimate_smile_score(rgb, location))
             best_quality_score = max(best_quality_score, _estimate_quality(rgb, location))
+        logger.info(
+            "DB save input: media_id=%s face_count=%s family_score=%.3f smile_score=%.3f quality_score=%.3f",
+            media["id"],
+            face_count,
+            best_family_score,
+            best_smile_score,
+            best_quality_score,
+        )
         save_analysis_result(
             db_connection,
             media["id"],
@@ -315,6 +377,14 @@ def analyze_media(db_connection, media: Dict[str, any]) -> None:
             best_quality_score,
             duplicate_group=None,
             event_category=None,
+        )
+        logger.info(
+            "DB save completed: media_id=%s face_count=%s family_score=%.3f smile_score=%.3f quality_score=%.3f",
+            media["id"],
+            face_count,
+            best_family_score,
+            best_smile_score,
+            best_quality_score,
         )
         db_connection.execute(
             "UPDATE Media SET analyzed_date = ?, analyzer_version = ? WHERE id = ?",
