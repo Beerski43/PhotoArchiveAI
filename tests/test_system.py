@@ -12,24 +12,8 @@ import pytest
 from PIL import Image
 from PySide6.QtWidgets import QApplication, QDialog
 
-# face_recognition/face_recognition_models may not import cleanly in the test environment.
-# Provide a fake module when import would fail so the system test can exercise the pipeline.
-
-def _install_fake_face_recognition() -> None:
-    fake_face_recognition = types.ModuleType("face_recognition")
-    fake_face_recognition.face_locations = lambda rgb, model="hog": [(10, 110, 110, 10)]
-    fake_face_recognition.face_encodings = lambda rgb, locations: [np.ones(128)]
-    fake_face_recognition.face_landmarks = lambda rgb, locations: [{"top_lip": [(10, 10), (20, 10)], "bottom_lip": [(10, 20), (20, 20)]}]
-    fake_face_recognition.face_distance = lambda arr, emb: np.array([0.2])
-    sys.modules["face_recognition"] = fake_face_recognition
-    sys.modules["face_recognition_models"] = types.ModuleType("face_recognition_models")
-
-try:
-    import face_recognition  # type: ignore
-    import face_recognition_models  # type: ignore
-except BaseException:
-    _install_fake_face_recognition()
-    import face_recognition  # type: ignore
+# mediapipe may not import cleanly in the test environment.
+# conftest.py provides a fake module when import would fail.
 
 from photoarchive_ai import cli as photoarchive_cli
 from photoarchive_ai import gui as photoarchive_gui
@@ -86,54 +70,50 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     sample_image_path = source_root / "person.jpg"
     _create_sample_image(sample_image_path)
 
-    with patch.object(face_recognition, "face_locations", return_value=[(10, 110, 110, 10)]), \
-         patch.object(face_recognition, "face_encodings", return_value=[np.ones(128)]), \
-         patch.object(face_recognition, "face_landmarks", return_value=[{"top_lip": [(10, 10), (20, 10)], "bottom_lip": [(10, 20), (20, 20)]}]), \
-         patch.object(face_recognition, "face_distance", return_value=np.array([0.2])):
-        monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
-        # 1) データベース初期化
-        _run_cli(["init-db"], tmp_path)
-        assert Path(database_path).exists()
+    # 1) データベース初期化
+    _run_cli(["init-db"], tmp_path)
+    assert Path(database_path).exists()
 
-        # 2) メディアスキャン
-        _run_cli(["scan"], tmp_path)
+    # 2) メディアスキャン
+    _run_cli(["scan"], tmp_path)
 
-        # 3) GUI 起動と人物登録
-        _ensure_qt_app()
-        window = photoarchive_gui.MainWindow(database_path)
-        monkeypatch.setattr(photoarchive_gui.PersonDialog, "exec", lambda self: QDialog.Accepted)
-        monkeypatch.setattr(photoarchive_gui.PersonDialog, "values", lambda self: ("Test Person", "family", "test memo"))
-        window._add_person()
-        persons = window.connection.execute("SELECT * FROM Person").fetchall()
-        assert len(persons) == 1
-        person_id = persons[0]["id"]
+    # 3) GUI 起動と人物登録
+    _ensure_qt_app()
+    window = photoarchive_gui.MainWindow(database_path)
+    monkeypatch.setattr(photoarchive_gui.PersonDialog, "exec", lambda self: QDialog.Accepted)
+    monkeypatch.setattr(photoarchive_gui.PersonDialog, "values", lambda self: ("Test Person", "family", "test memo"))
+    window._add_person()
+    persons = window.connection.execute("SELECT * FROM Person").fetchall()
+    assert len(persons) == 1
+    person_id = persons[0]["id"]
 
-        # 4) 顔画像登録
-        window._register_face(str(sample_image_path), person_id, (10, 110, 110, 10))
-        embeddings = window.connection.execute("SELECT * FROM FaceEmbedding WHERE person_id = ?", (person_id,)).fetchall()
-        assert len(embeddings) == 1
+    # 4) 顔画像登録
+    window._register_face(str(sample_image_path), person_id, (10, 110, 110, 10))
+    embeddings = window.connection.execute("SELECT * FROM FaceEmbedding WHERE person_id = ?", (person_id,)).fetchall()
+    assert len(embeddings) == 1
 
-        # 5) AI 解析実行
-        _run_cli(["analyze"], tmp_path)
-        analysis = window.connection.execute("SELECT * FROM AnalysisResult").fetchone()
-        assert analysis is not None
-        assert analysis["face_count"] == 1
-        assert analysis["family_score"] > 0.0
+    # 5) AI 解析実行
+    _run_cli(["analyze"], tmp_path)
+    analysis = window.connection.execute("SELECT * FROM AnalysisResult").fetchone()
+    assert analysis is not None
+    assert analysis["face_count"] == 1
+    assert analysis["family_score"] > 0.0
 
-        # 6) ルール作成と抽出実行
-        rule = {
-            "date": {"start": "2000-01-01", "end": "2100-01-01"},
-            "family_only": True,
-            "count_per_year": 1,
-            "include_video": False,
-            "remove_duplicate": True,
-        }
-        Path(rule_path).write_text(json.dumps(rule), encoding="utf-8")
-        _run_cli(["select"], tmp_path)
+    # 6) ルール作成と抽出実行
+    rule = {
+        "date": {"start": "2000-01-01", "end": "2100-01-01"},
+        "family_only": True,
+        "count_per_year": 1,
+        "include_video": False,
+        "remove_duplicate": True,
+    }
+    Path(rule_path).write_text(json.dumps(rule), encoding="utf-8")
+    _run_cli(["select"], tmp_path)
 
-        output_files = list((output_root).rglob("*") )
-        assert any(path.is_file() for path in output_files)
-        copied_files = [path for path in output_files if path.is_file()]
-        assert len(copied_files) == 1
-        assert copied_files[0].name == sample_image_path.name
+    output_files = list((output_root).rglob("*") )
+    assert any(path.is_file() for path in output_files)
+    copied_files = [path for path in output_files if path.is_file()]
+    assert len(copied_files) == 1
+    assert copied_files[0].name == sample_image_path.name
