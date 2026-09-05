@@ -1,4 +1,5 @@
 import io
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -14,22 +15,32 @@ from .db import (
     get_media_by_path,
 )
 
+logger = logging.getLogger(__name__)
+
 ANALYZER_VERSION = "1.0"
 
 
 def _read_image(path: Path) -> Optional[np.ndarray]:
+    """Read image or video file. Returns None if file cannot be read, with warning logged."""
     suffix = path.suffix.lower().lstrip(".")
     if suffix in {"mp4", "avi", "mov", "mkv"}:
         capture = cv2.VideoCapture(str(path))
-        ok, frame = capture.read()
-        capture.release()
-        if not ok or frame is None:
+        try:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                logger.warning(f"Failed to read video frame from: {path}")
+                return None
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            logger.warning(f"Error reading video file {path}: {e}")
             return None
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        finally:
+            capture.release()
     try:
         with Image.open(path) as image:
             return np.asarray(image.convert("RGB"))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to read image file {path}: {e}")
         return None
 
 
