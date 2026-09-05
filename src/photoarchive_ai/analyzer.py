@@ -2,7 +2,7 @@ import io
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -248,14 +248,20 @@ def analyze_media(db_connection, media: Dict[str, any]) -> None:
     db_connection.commit()
 
 
-def analyze_database(db_connection) -> None:
+def analyze_database(
+    db_connection,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> None:
     cursor = db_connection.cursor()
     rows = cursor.execute(
         "SELECT * FROM Media WHERE analyzed_date IS NULL OR analyzer_version != ? ORDER BY path",
         (ANALYZER_VERSION,),
     ).fetchall()
-    for row in rows:
+    total = len(rows)
+    for index, row in enumerate(rows, start=1):
         analyze_media(db_connection, dict(row))
+        if progress_callback is not None:
+            progress_callback(index, total, Path(row["path"]).name)
 
 
 def detect_faces_in_file(path: str) -> List[Tuple[int, int, int, int]]:

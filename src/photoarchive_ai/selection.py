@@ -3,7 +3,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
@@ -103,12 +103,18 @@ def select_media(connection, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
     return filtered
 
 
-def copy_selected_media(selected_media: List[Dict[str, Any]], output_dir: str, source_root: str) -> int:
+def copy_selected_media(
+    selected_media: List[Dict[str, Any]],
+    output_dir: str,
+    source_root: str,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> int:
     source_root_path = Path(source_root).resolve()
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     copied = 0
-    for media in selected_media:
+    total = len(selected_media)
+    for index, media in enumerate(selected_media, start=1):
         path_value = media.get("path")
         if path_value is None:
             continue
@@ -132,4 +138,6 @@ def copy_selected_media(selected_media: List[Dict[str, Any]], output_dir: str, s
             destination = destination.with_name(f"{base}_{copied}{suffix}")
         shutil.copy2(source_path, destination)
         copied += 1
+        if progress_callback is not None:
+            progress_callback(index, total, relative.as_posix())
     return copied
