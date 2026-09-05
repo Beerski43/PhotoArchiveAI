@@ -3,7 +3,6 @@ import io
 from pathlib import Path
 from typing import List, Optional
 
-import face_recognition
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import Qt
@@ -26,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import db
-from .analyzer import detect_faces_in_file
+from .analyzer import detect_faces_in_file, compute_face_embedding, _read_image
 
 
 class PersonDialog(QDialog):
@@ -199,16 +198,20 @@ class MainWindow(QWidget):
         self._on_person_selected(item, None)
 
     def _register_face(self, image_path: str, person_id: int, face_location: tuple):
+        rgb = _read_image(Path(image_path))
+        if rgb is None:
+            QMessageBox.warning(self, "登録失敗", "画像の読み込みに失敗しました。別の画像を試してください。")
+            return
+        embedding = compute_face_embedding(rgb, face_location)
+        if embedding is None:
+            QMessageBox.warning(self, "登録失敗", "顔埋め込みの生成に失敗しました。別の画像を試してください。")
+            return
         image = Image.open(image_path).convert("RGB")
         top, right, bottom, left = face_location
         cropped = image.crop((left, top, right, bottom))
-        embedding = face_recognition.face_encodings(np.array(image), [face_location])
-        if not embedding:
-            QMessageBox.warning(self, "登録失敗", "顔埋め込みの生成に失敗しました。別の画像を試してください。")
-            return
         buffer = io.BytesIO()
         cropped.save(buffer, format="JPEG", quality=90)
-        db.add_face_embedding(self.connection, person_id, embedding[0].tolist(), face_image=buffer.getvalue())
+        db.add_face_embedding(self.connection, person_id, embedding, face_image=buffer.getvalue())
         QMessageBox.information(self, "登録完了", "顔画像を登録しました。")
 
 
