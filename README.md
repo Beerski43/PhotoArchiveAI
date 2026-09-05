@@ -56,6 +56,7 @@ cp config/app_settings.sample.json config/app_settings.json
 ### 2. データベース初期化
 
 ```bash
+source .venv/bin/activate
 photoarchive init-db
 ```
 

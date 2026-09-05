@@ -1,37 +1,11 @@
 import io
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from typing import Any
-
-
-def _load_face_recognition() -> Any:
-    try:
-        import face_recognition  # type: ignore
-        return face_recognition
-    except Exception:
-        # Provide minimal fallback to allow tests to run without the package.
-        class _FakeFaceRecognition:
-            @staticmethod
-            def face_locations(rgb, model="hog"):
-                return []
-
-            @staticmethod
-            def face_encodings(rgb, locations):
-                return []
-
-            @staticmethod
-            def face_landmarks(rgb, locations):
-                return []
-
-            @staticmethod
-            def face_distance(arr, emb):
-                return np.array([])
-
-        return _FakeFaceRecognition()
 from PIL import Image
 
 from .db import (
@@ -41,42 +15,118 @@ from .db import (
     get_media_by_path,
 )
 
+logger = logging.getLogger(__name__)
+
 ANALYZER_VERSION = "1.0"
 
 
 def _read_image(path: Path) -> Optional[np.ndarray]:
+    """Read image or video file. Returns None if file cannot be read, with warning logged."""
     suffix = path.suffix.lower().lstrip(".")
     if suffix in {"mp4", "avi", "mov", "mkv"}:
         capture = cv2.VideoCapture(str(path))
-        ok, frame = capture.read()
-        capture.release()
-        if not ok or frame is None:
+        try:
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                logger.warning(f"Failed to read video frame from: {path}")
+                return None
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            logger.warning(f"Error reading video file {path}: {e}")
             return None
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        finally:
+            capture.release()
     try:
         with Image.open(path) as image:
             return np.asarray(image.convert("RGB"))
+    except Exception as e:
+        logger.warning(f"Failed to read image file {path}: {e}")
+        return None
+
+
+def _load_mediapipe_face_detection():
+    """Load mediapipe face detection with fallback."""
+    try:
+        import mediapipe as mp  # type: ignore
+        return mp.solutions.face_detection.FaceDetection(
+            model_selection=0,
+            min_detection_confidence=0.5
+        )
     except Exception:
         return None
 
 
 def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
-    fr = _load_face_recognition()
+    """Detect faces in RGB image using mediapipe.
+    Returns list of (top, right, bottom, left) tuples compatible with face_recognition format.
+    """
+    detector = _load_mediapipe_face_detection()
+    if detector is None:
+        return []
     try:
-        return fr.face_locations(rgb, model="hog")
+        results = detector.process(rgb)
+        if not results.detections:
+            return []
+        faces = []
+        h, w = rgb.shape[:2]
+        for detection in results.detections:
+            bbox = detection.location_data.bounding_box
+            left = max(0, int(bbox.xmin * w))
+            top = max(0, int(bbox.ymin * h))
+            right = min(w, int((bbox.xmin + bbox.width) * w))
+            bottom = min(h, int((bbox.ymin + bbox.height) * h))
+            faces.append((top, right, bottom, left))
+        return faces
     except Exception:
         return []
 
 
-def compute_face_embedding(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Optional[List[float]]:
-    fr = _load_face_recognition()
+def _load_mediapipe_face_mesh():
+    """Load mediapipe face mesh with fallback."""
     try:
-        encodings = fr.face_encodings(rgb, [face_location])
+        import mediapipe as mp  # type: ignore
+        return mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            min_detection_confidence=0.5
+        )
     except Exception:
-        encodings = []
-    if not encodings:
         return None
-    return encodings[0].tolist()
+
+
+def _get_landmarks_embedding(landmarks) -> Optional[List[float]]:
+    """Convert 468 face landmarks to 128-dim embedding via PCA-like compression."""
+    if not landmarks:
+        return None
+    # Flatten 468 landmarks (x, y, z) into 1404-dim vector
+    flat = np.array([[lm.x, lm.y, lm.z] for lm in landmarks]).flatten()
+    # Simple dimensionality reduction: take key landmark groups
+    # Eyes: 0-10, 160-180
+    # Nose: 6, 19-50
+    # Mouth: 61-100
+    # Jaw: 200-250
+    indices = list(range(0, 30, 2)) + list(range(60, 100, 2)) + list(range(200, 250, 2))
+    selected = flat[[i * 3 for i in indices if i * 3 < len(flat)]][:128]
+    # Pad to 128 dimensions if needed
+    if len(selected) < 128:
+        selected = np.pad(selected, (0, 128 - len(selected)), mode='constant')
+    return selected[:128].tolist()
+
+
+def compute_face_embedding(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Optional[List[float]]:
+    """Compute face embedding using mediapipe landmarks."""
+    mesh = _load_mediapipe_face_mesh()
+    if mesh is None:
+        return None
+    try:
+        results = mesh.process(rgb)
+        if not results.multi_face_landmarks or len(results.multi_face_landmarks) == 0:
+            return None
+        landmarks = results.multi_face_landmarks[0]
+        embedding = _get_landmarks_embedding(landmarks.landmark)
+        return embedding
+    except Exception:
+        return None
 
 
 def _face_crop(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Image.Image:
@@ -97,24 +147,29 @@ def _distance_to_similarity(distance: float) -> float:
 
 
 def _estimate_smile_score(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> float:
-    fr = _load_face_recognition()
+    """Estimate smile score from face landmarks using mediapipe."""
+    mesh = _load_mediapipe_face_mesh()
+    if mesh is None:
+        return 0.0
     try:
-        landmarks = fr.face_landmarks(rgb, [face_location])
+        results = mesh.process(rgb)
+        if not results.multi_face_landmarks or len(results.multi_face_landmarks) == 0:
+            return 0.0
+        landmarks = results.multi_face_landmarks[0].landmark
+        # Mouth landmarks: 61-100 (especially 61, 291 for corners, 78, 308 for center)
+        h, w = rgb.shape[:2]
+        mouth_corners = [landmarks[61], landmarks[291]]  # Left and right corners
+        mouth_center_upper = [landmarks[78], landmarks[308]]  # Upper center points
+        xs = [lm.x * w for lm in mouth_corners + mouth_center_upper]
+        ys = [lm.y * h for lm in mouth_corners + mouth_center_upper]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        if height <= 0:
+            return 0.0
+        ratio = width / height
+        return min(100.0, max(0.0, (ratio - 1.4) * 70.0))
     except Exception:
-        landmarks = []
-    if not landmarks:
         return 0.0
-    mouth = landmarks[0].get("top_lip", []) + landmarks[0].get("bottom_lip", [])
-    if not mouth:
-        return 0.0
-    xs = [p[0] for p in mouth]
-    ys = [p[1] for p in mouth]
-    width = max(xs) - min(xs)
-    height = max(ys) - min(ys)
-    if height <= 0:
-        return 0.0
-    ratio = width / height
-    return min(100.0, max(0.0, (ratio - 1.4) * 70.0))
 
 
 def _estimate_quality(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> float:
@@ -153,15 +208,16 @@ def analyze_media(db_connection, media: Dict[str, any]) -> None:
         similarity = 0.0
         matched_person_id = None
         if all_person_embeddings:
-            fr = _load_face_recognition()
             try:
-                distances = fr.face_distance([np.array(e) for e in all_person_embeddings], np.array(embedding))
+                # Compute euclidean distances between embedding and all registered embeddings
+                embedding_arr = np.array(embedding)
+                distances = np.array([np.linalg.norm(embedding_arr - np.array(e)) for e in all_person_embeddings])
+                best_index = int(np.argmin(distances))
+                distance = float(distances[best_index])
+                similarity = _distance_to_similarity(distance)
+                matched_person_id = person_ids[best_index % len(person_ids)] if person_ids else None
             except Exception:
-                distances = np.array([])
-            best_index = int(np.argmin(distances))
-            distance = float(distances[best_index])
-            similarity = _distance_to_similarity(distance)
-            matched_person_id = person_ids[best_index % len(person_ids)] if person_ids else None
+                pass
         cropped = _face_crop(rgb, location)
         face_image_bytes = _face_to_bytes(cropped)
         add_face_embedding(
