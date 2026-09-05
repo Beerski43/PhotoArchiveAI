@@ -12,16 +12,19 @@ from .scanner import scan_directory
 from .selection import copy_selected_media, load_rule, select_media
 
 
-def _setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
+def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") -> logging.Logger:
     """Set up file logging for the CLI and all analyzer children."""
     logger = logging.getLogger("photoarchive")
-    logger.setLevel(logging.DEBUG)
+    level = getattr(logging, log_level.upper(), None)
+    if not isinstance(level, int):
+        raise ValueError(f"Invalid log level: {log_level}")
+    logger.setLevel(level)
     logger.handlers.clear()
 
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(level)
         file_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(file_format)
         logger.addHandler(file_handler)
@@ -71,6 +74,13 @@ def main() -> None:
 
     analyze_parser = subparsers.add_parser("analyze", help="Run AI analysis on scanned media.")
     analyze_parser.add_argument("--db", help="SQLite database path.")
+    analyze_parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        type=str.upper,
+        default="WARNING",
+        help="Log verbosity (default: WARNING).",
+    )
 
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
     select_parser.add_argument("--db", help="SQLite database path.")
@@ -104,7 +114,7 @@ def main() -> None:
 
     if args.command == "analyze":
         log_file = Path("data/logs") / f"analyze_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        logger = _setup_logging(log_file)
+        logger = _setup_logging(log_file, args.log_level)
         logger.info(f"Analysis started. Log file: {log_file}")
         _progress_started = False
         try:
