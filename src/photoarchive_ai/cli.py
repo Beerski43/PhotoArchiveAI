@@ -1,29 +1,64 @@
 import argparse
+import logging
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
-from .analyzer import analyze_database
+from .analyzer import analyze_database, get_latest_error
 from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
 from .db import ensure_database
 from .scanner import scan_directory
 from .selection import copy_selected_media, load_rule, select_media
 
 
-def _emit_progress(current: int, total: int, detail: str, prefix: str = "Progress") -> None:
-    if total <= 0:
-        return
-    percent = min(100, max(0, int(current * 100 / total)))
+def _setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
+    """Set up file logging for the CLI and all analyzer children."""
+    logger = logging.getLogger("photoarchive")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        file_handler.setFormatter(file_format)
+        logger.addHandler(file_handler)
+
+    return logger
+
+
+_progress_started = False
+
+
+def _emit_progress(
+    current: int,
+    total: int,
+    detail: str,
+    prefix: str = "Progress",
+    error: str = "",
+) -> None:
+    global _progress_started
     bar_width = 20
-    filled = int(bar_width * current / total)
+    percent = min(100, max(0, int(current * 100 / total))) if total > 0 else 0
+    filled = int(bar_width * current / total) if total > 0 else 0
     bar = "#" * filled + "-" * (bar_width - filled)
-    sys.stdout.write(f"\r{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {detail}")
+    progress_line = f"{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {detail}"
+    error_line = f"Error: {error}" if error else "Error: none"
+    if _progress_started:
+        sys.stdout.write(f"\033[2A\r{progress_line}\033[K\n\r{error_line}\033[K")
+    else:
+        sys.stdout.write(f"{progress_line}\n{error_line}")
+        _progress_started = True
     sys.stdout.flush()
     if current >= total:
         sys.stdout.write("\n")
+        _progress_started = False
 
 
 def main() -> None:
+    global _progress_started
     parser = argparse.ArgumentParser(prog="photoarchive")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -68,12 +103,27 @@ def main() -> None:
         return
 
     if args.command == "analyze":
-        with ensure_database(db_path) as connection:
-            analyze_database(
-                connection,
-                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Analyzing"),
-            )
-        print("Analysis completed.")
+        log_file = Path("data/logs") / f"analyze_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        logger = _setup_logging(log_file)
+        logger.info(f"Analysis started. Log file: {log_file}")
+        _progress_started = False
+        try:
+            with ensure_database(db_path) as connection:
+                analyze_database(
+                    connection,
+                    progress_callback=lambda current, total, detail: _emit_progress(
+                        current,
+                        total,
+                        detail,
+                        prefix="Analyzing",
+                        error=get_latest_error(),
+                    ),
+                )
+            logger.info("Analysis completed successfully.")
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}", exc_info=True)
+            _emit_progress(0, 1, "aborted", prefix="Analyzing", error=str(e))
+            raise SystemExit(1) from e
         return
 
     if args.command == "select":
