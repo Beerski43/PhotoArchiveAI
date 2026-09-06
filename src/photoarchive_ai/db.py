@@ -30,6 +30,7 @@ SCHEMA = [
     "embedding TEXT NOT NULL,"
     "similarity_score REAL,"
     "face_image BLOB,"
+    "age INTEGER,"
     "added_at TEXT NOT NULL,"
     "FOREIGN KEY(media_id) REFERENCES Media(id),"
     "FOREIGN KEY(person_id) REFERENCES Person(id)"
@@ -62,6 +63,9 @@ def create_tables(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     for statement in SCHEMA:
         cursor.execute(statement)
+    face_columns = {row[1] for row in cursor.execute("PRAGMA table_info(FaceEmbedding)").fetchall()}
+    if "age" not in face_columns:
+        cursor.execute("ALTER TABLE FaceEmbedding ADD COLUMN age INTEGER")
     connection.commit()
 
 
@@ -147,7 +151,12 @@ def get_media_by_path(connection: sqlite3.Connection, path: str) -> Optional[Dic
     return _row_to_dict(row)
 
 
-def add_person(connection: sqlite3.Connection, name: str, relation: Optional[str] = None, memo: Optional[str] = None) -> int:
+def add_person(
+    connection: sqlite3.Connection,
+    name: str,
+    relation: Optional[str] = None,
+    memo: Optional[str] = None,
+) -> int:
     cursor = connection.cursor()
     cursor.execute(
         "INSERT INTO Person (name, relation, memo) VALUES (?, ?, ?)",
@@ -157,7 +166,13 @@ def add_person(connection: sqlite3.Connection, name: str, relation: Optional[str
     return cursor.lastrowid
 
 
-def update_person(connection: sqlite3.Connection, person_id: int, name: str, relation: Optional[str], memo: Optional[str]) -> None:
+def update_person(
+    connection: sqlite3.Connection,
+    person_id: int,
+    name: str,
+    relation: Optional[str],
+    memo: Optional[str],
+) -> None:
     cursor = connection.cursor()
     cursor.execute(
         "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
@@ -198,10 +213,11 @@ def add_face_embedding(
     similarity_score: Optional[float] = None,
     face_image: Optional[bytes] = None,
     media_id: Optional[int] = None,
+    age: Optional[int] = None,
 ) -> int:
     cursor = connection.cursor()
     cursor.execute(
-        "INSERT INTO FaceEmbedding (media_id, person_id, embedding, similarity_score, face_image, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO FaceEmbedding (media_id, person_id, embedding, similarity_score, face_image, added_at, age) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             media_id,
             person_id,
@@ -209,6 +225,7 @@ def add_face_embedding(
             similarity_score,
             face_image,
             datetime.utcnow().isoformat(),
+            age,
         ),
     )
     connection.commit()
