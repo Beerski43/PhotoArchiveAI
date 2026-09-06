@@ -74,7 +74,22 @@ photoarchive scan
 photoarchive analyze
 ```
 
-解析中も進捗バーが表示され、対象メディアごとの処理状況を追跡できます。
+解析中も進捗バーが表示されます。ログは `data/logs/` に出力され、通常は警告以上だけを記録します。
+
+ログレベルは `--log-level` で指定できます。
+
+```bash
+# 通常運用（デフォルト）
+photoarchive analyze --log-level WARNING
+
+# 顔未検出などの情報も確認
+photoarchive analyze --log-level INFO
+
+# ファイル確認などの詳細情報も確認
+photoarchive analyze --log-level DEBUG
+```
+
+指定できるレベルは `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` です。ログレベルを下げるほど出力が増えるため、通常はデフォルトの `WARNING` を使用してください。
 
 ### 5. GUI で人物登録
 
