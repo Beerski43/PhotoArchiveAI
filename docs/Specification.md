@@ -246,6 +246,7 @@ Videos:
 - id
 - name
 - relation
+- memo
 
 
 ## 6.3 Face Embedding Table
@@ -259,6 +260,7 @@ Videos:
 - person_id
 - embedding
 - similarity_score
+- age
 
 
 ## 6.4 Analysis Result Table
