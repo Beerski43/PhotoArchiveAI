@@ -22,26 +22,54 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 
 ## インストール
 
-Ubuntu 環境での例:
+### Ubuntu のシステム依存
+
+Python、仮想環境、`dlib` のビルド、OpenCVの画像/動画処理、PySide6のGUI起動に必要です。
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip python3-dev build-essential cmake libboost-python-dev libopenblas-dev liblapack-dev libx11-dev libxrandr-dev libxkbcommon-x11-0 libjpeg-dev libpng-dev libtiff-dev libavcodec-dev libavformat-dev libswscale-dev
+sudo apt install -y \
+  python3 python3-venv python3-pip python3-dev \
+  build-essential cmake libboost-python-dev libopenblas-dev liblapack-dev \
+  libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+  libx11-dev libxrandr-dev libxkbcommon-x11-0 libxcb-cursor0 \
+  libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 \
+  libjpeg-dev libpng-dev libtiff-dev libavcodec-dev libavformat-dev libswscale-dev
+```
 
+GUIを通常のデスクトップで起動するには、X11またはWaylandの表示セッションも必要です。リモート接続やサーバー環境では `DISPLAY` / Wayland の設定が必要になります。
+
+### Python の依存ライブラリ
+
+`requirements.txt` には、アプリケーションが直接使用する次のライブラリを記載しています。
+
+- `PySide6`: GUI
+- `Pillow`: 画像読み込み、変換、EXIF読み込み
+- `mediapipe==0.10.21`: 顔検出、顔ランドマーク。旧 `solutions` APIを使用するため、このバージョンを固定
+- `opencv-python`: 動画読み込み、画像変換、画質評価
+- `numpy`: 画像配列と数値処理
+- `PyYAML`: YAML形式のルール読み込み
+- `pytest`: テスト実行
+
+`pyproject.toml` には、上記に加えて人物登録・顔照合で使用する次のライブラリも記載しています。
+
+- `face_recognition`: 顔エンコーディングと顔照合
+- `face_recognition_models`: `face_recognition` 用モデル。GitHubからインストール
+
+通常は以下で全Python依存をインストールできます。
+
+```bash
 cd /home/suu/github/PhotoArchiveAI
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-pip install -e .
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
-`face_recognition` は `dlib` を必要とするため、依存ライブラリが不足している場合はビルドに失敗する可能性があります。
-また `face_recognition_models` も必要です。インストール時に以下を実行してください。
+`face_recognition` は内部で `dlib` を使用するため、上記の `cmake`、C/C++ビルドツール、Boost、OpenBLAS、LAPACKが必要です。`face_recognition_models` はGitHubリポジトリから取得されます。
 
-```bash
-pip install git+https://github.com/ageitgey/face_recognition_models
-```
+SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` などはPython標準ライブラリのため、個別インストールは不要です。
 
 ## 使い方
 
