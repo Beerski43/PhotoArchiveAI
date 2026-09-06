@@ -1,5 +1,6 @@
 import argparse
 import io
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -221,6 +222,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="photoarchive-gui")
     parser.add_argument("--db", required=True, help="SQLite database path.")
     args = parser.parse_args()
+    from PySide6.QtCore import QLibraryInfo
+
+    # OpenCV may register its own Qt plugins first; use the PySide6 plugins for this GUI.
+    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = QLibraryInfo.path(
+        QLibraryInfo.LibraryPath.PluginsPath
+    )
     app = QApplication([])
     window = MainWindow(args.db)
     window.show()
