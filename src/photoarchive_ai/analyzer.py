@@ -1,5 +1,7 @@
 import io
 import logging
+import os
+import sys
 from contextlib import contextmanager, redirect_stderr
 from datetime import datetime
 from pathlib import Path
@@ -33,13 +35,28 @@ def _set_latest_error(msg: str) -> None:
 
 logger = logging.getLogger("photoarchive.analyzer")
 
-ANALYZER_VERSION = "1.3"
+ANALYZER_VERSION = "1.4"
+FACE_DETECTION_MAX_SIZE = 1280
+_face_detection = None
+_face_detection_initialized = False
+_face_mesh = None
+_face_mesh_initialized = False
 
 
 @contextmanager
 def _suppress_mediapipe_output():
-    with redirect_stderr(io.StringIO()):
-        yield
+    saved_stderr = os.dup(sys.stderr.fileno())
+    null_stderr = os.open(os.devnull, os.O_WRONLY)
+    try:
+        sys.stderr.flush()
+        os.dup2(null_stderr, sys.stderr.fileno())
+        with redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved_stderr, sys.stderr.fileno())
+        os.close(null_stderr)
+        os.close(saved_stderr)
 
 
 def _read_image(path: Path) -> Optional[np.ndarray]:
@@ -89,14 +106,20 @@ def _read_image(path: Path) -> Optional[np.ndarray]:
 
 def _load_mediapipe_face_detection():
     """Load mediapipe face detection with fallback."""
+    global _face_detection, _face_detection_initialized
+    if _face_detection_initialized:
+        return _face_detection
     try:
         import mediapipe as mp  # type: ignore
         with _suppress_mediapipe_output():
-            return mp.solutions.face_detection.FaceDetection(
+            _face_detection = mp.solutions.face_detection.FaceDetection(
                 model_selection=1,
                 min_detection_confidence=0.5
             )
+        _face_detection_initialized = True
+        return _face_detection
     except Exception as error:
+        _face_detection_initialized = True
         logger.exception("MediaPipe face detection initialization failed: %s", error)
         return None
 
@@ -112,22 +135,34 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
         _set_latest_error(msg)
         return []
     try:
+        original_height, original_width = rgb.shape[:2]
+        scale = min(1.0, FACE_DETECTION_MAX_SIZE / max(original_height, original_width))
+        if scale < 1.0:
+            detection_rgb = cv2.resize(
+                rgb,
+                (int(original_width * scale), int(original_height * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            detection_rgb = rgb
         with _suppress_mediapipe_output():
-            results = detector.process(rgb)
+            results = detector.process(detection_rgb)
         detections = results.detections or []
         if not detections:
             return []
         faces = []
-        h, w = rgb.shape[:2]
+        h, w = detection_rgb.shape[:2]
+        x_scale = original_width / w
+        y_scale = original_height / h
         for index, detection in enumerate(detections, start=1):
             location_data = detection.location_data
             bbox = getattr(location_data, "relative_bounding_box", None)
             if bbox is None or (bbox.width == 0 and bbox.height == 0):
                 bbox = location_data.bounding_box
-            left = max(0, int(bbox.xmin * w))
-            top = max(0, int(bbox.ymin * h))
-            right = min(w, int((bbox.xmin + bbox.width) * w))
-            bottom = min(h, int((bbox.ymin + bbox.height) * h))
+            left = max(0, int(bbox.xmin * w * x_scale))
+            top = max(0, int(bbox.ymin * h * y_scale))
+            right = min(original_width, int((bbox.xmin + bbox.width) * w * x_scale))
+            bottom = min(original_height, int((bbox.ymin + bbox.height) * h * y_scale))
             faces.append((top, right, bottom, left))
         return faces
     except Exception as error:
@@ -138,15 +173,21 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
 
 def _load_mediapipe_face_mesh():
     """Load mediapipe face mesh with fallback."""
+    global _face_mesh, _face_mesh_initialized
+    if _face_mesh_initialized:
+        return _face_mesh
     try:
         import mediapipe as mp  # type: ignore
         with _suppress_mediapipe_output():
-            return mp.solutions.face_mesh.FaceMesh(
+            _face_mesh = mp.solutions.face_mesh.FaceMesh(
                 static_image_mode=True,
                 max_num_faces=1,
                 min_detection_confidence=0.5
             )
+        _face_mesh_initialized = True
+        return _face_mesh
     except Exception as error:
+        _face_mesh_initialized = True
         logger.exception("MediaPipe face mesh initialization failed: %s", error)
         return None
 
