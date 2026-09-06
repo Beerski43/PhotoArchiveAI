@@ -122,8 +122,10 @@ photoarchive analyze --log-level DEBUG
 ### 5. GUI で人物登録
 
 ```bash
-photoarchive-gui
+photoarchive-gui --db data/photoarchive.db
 ```
+
+GUIの起動方法、人物情報の追加・編集・削除、顔画像の登録方法は [GUI利用手順](docs/operation/GUI_USAGE.md) を参照してください。
 
 ### 6. 抽出ルールに基づく選択とコピー
 
