@@ -7,6 +7,7 @@ from typing import Optional
 
 from .analyzer import analyze_database, get_latest_error
 from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
+from .converter import convert_heic_files
 from .db import ensure_database
 from .scanner import scan_directory
 from .selection import copy_selected_media, load_rule, select_media
@@ -74,6 +75,9 @@ def main() -> None:
     scan_parser.add_argument("--source", help="Source directory to scan.")
     scan_parser.add_argument("--db", help="SQLite database path.")
 
+    convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
+    convert_parser.add_argument("--source", help="Directory to convert recursively.")
+
     analyze_parser = subparsers.add_parser("analyze", help="Run AI analysis on scanned media.")
     analyze_parser.add_argument("--db", help="SQLite database path.")
     analyze_parser.add_argument(
@@ -112,6 +116,28 @@ def main() -> None:
                 progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Scanning"),
             )
         print(f"Scanned {len(media_ids)} media entries.")
+        return
+
+    if args.command == "convert-heic":
+        source_root = getattr(args, "source", None) or get_source_root(settings)
+        if not source_root:
+            raise SystemExit("Source root is required via --source or application settings.")
+
+        def confirm_write_error(path: Path, error: Exception) -> bool:
+            answer = input(f"Write failed for {path}: {error}\nContinue with the next file? [y/N]: ")
+            return answer.strip().lower() in {"y", "yes"}
+
+        try:
+            converted, skipped = convert_heic_files(
+                source_root,
+                progress_callback=lambda current, total, detail: _emit_progress(
+                    current, total, detail, prefix="Converting"
+                ),
+                confirm_write_error=confirm_write_error,
+            )
+        except (OSError, PermissionError) as error:
+            raise SystemExit(f"Conversion stopped: {error}") from error
+        print(f"Converted {converted} files; skipped {skipped} existing files.")
         return
 
     if args.command == "analyze":

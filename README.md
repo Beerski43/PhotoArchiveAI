@@ -15,10 +15,11 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 
 1. `config/app_settings.sample.json` をコピーして `config/app_settings.json` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
 2. `photoarchive init-db` で SQLite データベースを初期化します。
-3. `photoarchive scan` で対象ディレクトリをスキャンします。
-4. `photoarchive analyze` で AI 解析を実行します。
-5. `photoarchive-gui` で人物登録 GUI を起動し、登録を行います。
-6. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
+4. `photoarchive scan` で対象ディレクトリをスキャンします。
+5. `photoarchive analyze` で AI 解析を実行します。
+6. `photoarchive-gui` で人物登録 GUI を起動し、登録を行います。
+7. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
 
 ## インストール
 
@@ -45,6 +46,7 @@ GUIを通常のデスクトップで起動するには、X11またはWaylandの�
 
 - `PySide6`: GUI
 - `Pillow`: 画像読み込み、変換、EXIF読み込み
+- `pillow-heif`: PillowでHEIC/HEIFを読み込むためのデコーダー
 - `mediapipe==0.10.21`: 顔検出、顔ランドマーク。旧 `solutions` APIを使用するため、このバージョンを固定
 - `opencv-python`: 動画読み込み、画像変換、画質評価
 - `numpy`: 画像配列と数値処理
@@ -88,7 +90,25 @@ source .venv/bin/activate
 photoarchive init-db
 ```
 
-### 3. メディアのスキャン
+### 3. HEIC/HEIFのJPEG変換
+
+HEIC/HEIF画像を含む場合は、スキャン前にJPEGへ変換できます。
+
+```bash
+photoarchive convert-heic
+```
+
+`source_root` 設定のディレクトリ以下を再帰的に処理します。別のディレクトリを指定する場合は、次のように `--source` を使用します。
+
+```bash
+photoarchive convert-heic --source /path/to/photo
+```
+
+変換先は元ファイルと同じディレクトリで、拡張子だけを `.jpg` にした同名ファイルです。変換先に同名JPEGがあり、内容が同じ写真の場合は変換をスキップします。異なる写真の場合は `photo_1.jpg`、`photo_2.jpg` のように空いている連番を付けます。元のHEIC/HEIFファイルは変更しません。
+
+変換先へ書き込めない場合は、続行するか確認を求めます。`y` または `yes` を入力すると次のファイルへ進み、それ以外を入力すると処理を停止します。
+
+### 4. メディアのスキャン
 
 ```bash
 photoarchive scan
@@ -96,7 +116,7 @@ photoarchive scan
 
 スキャン中は、処理済み件数と進捗バーがターミナルに表示されます。
 
-### 4. AI 解析の実行
+### 5. AI 解析の実行
 
 ```bash
 photoarchive analyze
@@ -119,7 +139,7 @@ photoarchive analyze --log-level DEBUG
 
 指定できるレベルは `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` です。ログレベルを下げるほど出力が増えるため、通常はデフォルトの `WARNING` を使用してください。
 
-### 5. GUI で人物登録
+### 6. GUI で人物登録
 
 ```bash
 photoarchive-gui --db data/photoarchive.db
@@ -127,7 +147,7 @@ photoarchive-gui --db data/photoarchive.db
 
 GUIの起動方法、人物情報の追加・編集・削除、顔画像の登録方法は [GUI利用手順](docs/operation/GUI_USAGE.md) を参照してください。
 
-### 6. 抽出ルールに基づく選択とコピー
+### 7. 抽出ルールに基づく選択とコピー
 
 `config/rule.sample.json` をコピーして `config/rule.json` とし、必要に応じて編集します。
 
@@ -219,6 +239,7 @@ PhotoArchiveAI/
 
 - PySide6: GUI
 - Pillow: 画像処理
+- pillow-heif: HEIC/HEIF画像の読み込み
 - face_recognition: 顔検出と埋め込み
 - opencv-python: 画像/動画読み込みと品質評価
 - numpy: 数値処理
