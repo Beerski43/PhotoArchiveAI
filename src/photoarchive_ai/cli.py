@@ -47,8 +47,10 @@ def _emit_progress(
     percent = min(100, max(0, int(current * 100 / total))) if total > 0 else 0
     filled = int(bar_width * current / total) if total > 0 else 0
     bar = "#" * filled + "-" * (bar_width - filled)
-    progress_line = f"{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {detail}"
-    error_line = f"Error: {error}" if error else "Error: none"
+    progress_detail = str(detail).replace("\r", " ").replace("\n", " ")
+    error_detail = str(error).replace("\r", " ").replace("\n", " ")[:120]
+    progress_line = f"{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {progress_detail}"
+    error_line = f"Error: {error_detail}" if error_detail else "Error: none"
     if _progress_started:
         sys.stdout.write(f"\033[2A\r{progress_line}\033[K\n\r{error_line}\033[K")
     else:

@@ -1,5 +1,7 @@
 import io
 import logging
+import os
+import sys
 from contextlib import contextmanager, redirect_stderr
 from datetime import datetime
 from pathlib import Path
@@ -38,8 +40,18 @@ ANALYZER_VERSION = "1.3"
 
 @contextmanager
 def _suppress_mediapipe_output():
-    with redirect_stderr(io.StringIO()):
-        yield
+    saved_stderr = os.dup(sys.stderr.fileno())
+    null_stderr = os.open(os.devnull, os.O_WRONLY)
+    try:
+        sys.stderr.flush()
+        os.dup2(null_stderr, sys.stderr.fileno())
+        with redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved_stderr, sys.stderr.fileno())
+        os.close(null_stderr)
+        os.close(saved_stderr)
 
 
 def _read_image(path: Path) -> Optional[np.ndarray]:
