@@ -33,10 +33,10 @@
 
 対象ファイルが存在しない場合は、存在しないことを確認したうえで、読めるものだけを読む。
 
-1. `docs/Specification.md` — 要件・仕様・DB設計
+1. `docs/spec/Specification.md` — 要件・仕様・DB設計
 2. `README.md` — セットアップ、依存関係、CLIの使い方
 3. `docs/` 配下の、今回の作業に関連する現行ドキュメント
-4. `docs/handoff/` に申し送りがあれば、その最新のもの
+4. `docs/history/WORKLOG.md` の先頭と、`docs/history/details/` の最新のもの
 5. 対象機能に対応する既存テスト
 
 **ブランチごとに文書の配置も内容も違う。** 別ブランチで読んだ記憶を、
@@ -79,7 +79,7 @@ pytest -q -m models    # 実物の dlib モデルが要るテスト
 
 **テストを実行できない場合は、理由と代替の確認方法を報告する。**
 仕様やドキュメントに未解決の矛盾が残る場合は、**完了扱いにせず**
-`docs/handoff/SESSION_HANDOFF_<日付>.md` に申し送りとして書く。
+`docs/history/details/<日付>-<英語のケバブケース>.md` に申し送りとして書く。
 
 ---
 
@@ -90,10 +90,10 @@ pytest -q -m models    # 実物の dlib モデルが要るテスト
 | パス | 内容 |
 |---|---|
 | `README.md` | セットアップ、依存関係、基本操作、CLI利用方法 |
-| `docs/Specification.md` | 要件・仕様・DB設計 |
-| `docs/TESTING.md` | テスト環境と実行手順 |
+| `docs/spec/Specification.md` | 要件・仕様・DB設計 |
+| `docs/testing/TESTING.md` | テスト環境と実行手順 |
 | `docs/operation/` | GUIなどの操作手順 |
-| `docs/handoff/` | セッション間の申し送り |
+| `docs/history/` | 作業履歴と、セッション間の申し送り |
 
 ### 処理の流れ（Issue #28 以降）
 
