@@ -174,7 +174,7 @@
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 
-### `test_gui_person.py` — 人物編集とプレビュー（8件）
+### `test_gui_person.py` — 人物編集とプレビュー（15件）
 
 | テスト | 内容 |
 |---|---|
@@ -186,6 +186,13 @@
 | `test_the_preview_names_the_file_when_the_original_is_gone` | **元写真が消えていたらパスを出す**（NFS 未マウント時に起きる） |
 | `test_the_preview_does_nothing_without_a_selection` | 未選択なら何もしない |
 | `test_the_preview_uses_the_last_selected_face` | 複数選択では最後の1件 |
+| `test_the_shooting_date_is_shown_when_the_photo_has_one` | 撮影日時を出す（**年齢はこれを見て入れる**） |
+| `test_a_photo_without_exif_says_so_and_falls_back_to_the_file_time` | **ファイルの日時を撮影日時として出さない**（コピーで変わる） |
+| `test_the_folder_is_shown_relative_to_the_source_root` | フォルダは `source_root` からの相対。日付の手がかりになる |
+| `test_a_photo_outside_the_source_root_keeps_its_full_path` | `source_root` の外は絶対パスのまま |
+| `test_the_folder_is_shown_without_a_source_root` | `source_root` が無くても動く |
+| `test_selecting_a_face_fills_the_information_under_the_preview` | 顔を選ぶと情報欄が埋まる |
+| `test_the_information_is_still_shown_when_the_original_is_gone` | **元写真が開けないときこそ出す**（出どころはDB） |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
