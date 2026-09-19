@@ -11,6 +11,38 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
+## 2026-09-19 — #30 作業ルール・実装プラン・回帰テスト環境の整備と、既知の欠陥修正
+
+リポジトリ全体の立て直し。`docs/` 直下を `spec/` `plan/` `history/` `testing/`
+`operation/` へ整理し、作業ルールを `CLAUDE.md` に一本化した
+（`.github/copilot-instructions.md` はポインタへ縮退）。
+
+**素の `pytest` が収集エラーで落ちていた**（`pythonpath` 未設定）。3つの文書が
+そろってこの落ちるコマンドを案内していた。`pyproject.toml` に
+`pythonpath = ["."]` と `--strict-markers` を足して直した。
+`scripts/run_regression.sh` を PR 起票前の必須手順にした。
+
+`docs/plan/ROADMAP.md`（フェーズと Issue の対応）と
+`docs/history/WORKLOG.md`（この文書）を新設し、CLAUDE.md から必ず参照させる
+ようにした。WORKLOG は `scripts/archive_worklog.py` が直近20件だけを残し、
+古いものを年ごとに `archive/` へ切り出す。
+
+仕様書を v1.0 へ改訂した。各章に 実装済み / 一部実装 / 未実装 を明示し、
+CLI リファレンス・スキーマ版と移行・特徴量の生成規約・非機能要件を新設。
+画質評価は2要素しか実装していないこと、重複検出はハッシュ一致だけであること、
+用途プリセットが未実装であることを、仕様の側で認めた。
+
+**実データ運用を壊す欠陥を10件修正した。** 特に、更新時刻だけ変わった
+ファイルが恒久的に再ハッシュされる問題（441GB を毎回読み直す）と、
+dlib モデルが読めないと顔が無言で全損する問題は、全件スキャンの前に
+潰す必要があった。テストは 40件 → 110件。
+
+次にやること: ROADMAP の Phase 3（全件スキャン → GUI で人物ごとに20〜50枚を
+割り当て → `match` の**取りこぼし率**を実測して閾値を確定）。
+これまで測れているのは誤一致率だけ。
+
+詳細: [details/2026-09-19-issue30-foundation.md](details/2026-09-19-issue30-foundation.md)
+
 ## 2026-09-19 — #28 scan と analyze の処理順を転換し、自動紐づけを match へ分離
 
 PR [#29](https://github.com/Beerski43/PhotoArchiveAI/pull/29)（merged）。
