@@ -1,3 +1,0 @@
-[console_scripts]
-photoarchive = photoarchive_ai.cli:main
-photoarchive-gui = photoarchive_ai.gui:main
