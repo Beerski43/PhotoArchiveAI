@@ -15,12 +15,14 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 ## 全体のフロー
 
 1. `config/app_settings.sample.json` をコピーして `config/app_settings.json` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
-2. `photoarchive init-db` で SQLite データベースを初期化します。（既存のデータベースがある場合は `photoarchive migrate` を実行します）
+2. `photoarchive init-db` で SQLite データベースを初期化します。（既存のデータベースがある場合は `photoarchive migrate` を実行します。バックアップは自動で作られます）
 3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
 4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
 5. `photoarchive-gui` で人物を登録し、検出された顔を人物へ割り当てます。
 6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。
 7. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+
+設計・仕様の詳細は [仕様書](docs/spec/Specification.md)、開発の道筋は [実装プラン](docs/plan/ROADMAP.md)、これまでの経緯は [作業履歴](docs/history/WORKLOG.md) にあります。文書の索引は [docs/README.md](docs/README.md)。
 
 顔の紐づけは **必ず人物を登録したあと** に行います。人物を登録する前に自動で紐づけると、誰とも分からない顔が誤った人物に結びついてしまうためです（Issue #28）。
 
@@ -90,7 +92,13 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 cp config/app_settings.sample.json config/app_settings.json
 ```
 
-必要に応じて `database_path` / `source_root` / `output_root` を編集します。
+必要に応じて `database_path` / `source_root` / `output_root` / `rule_path` を編集します。
+
+設定ファイルは次の順に探し、最初に見つかったものを使います。**リポジトリ以外のディレクトリから実行しても設定が効きます。**
+
+1. 環境変数 `PHOTOARCHIVE_CONFIG` が指すファイル
+2. カレントディレクトリの `config/app_settings.json`
+3. リポジトリ直下の `config/app_settings.json`
 
 ### 2. データベース初期化
 
@@ -144,6 +152,8 @@ photoarchive scan --no-prune
 photoarchive scan --force-rescan
 ```
 
+顔特徴量のモデル (dlib) を読み込めない場合、`scan` は処理を始める前に中断します。そのまま進むと、顔は検出されるのに特徴量が保存されず、`match` が一切効かない状態のまま「スキャン済み」として記録されてしまうためです。承知のうえで進める場合は `--allow-missing-embeddings` を付けます。
+
 実体が見つからないメディアが登録数の2割を超えた場合は、ソースの指定間違いやNFSの未マウントを疑って処理を中断します。意図した削除であれば `--force-prune` を付けて再実行してください。
 
 ログは `data/logs/scan_*.log` に出力されます。ログレベルは `--log-level` で `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` を指定できます（既定は `WARNING`）。
@@ -153,8 +163,10 @@ photoarchive scan --force-rescan
 ### 5. GUI で人物登録と顔の割り当て
 
 ```bash
-photoarchive-gui --db data/photoarchive.db
+photoarchive-gui
 ```
+
+`--db` を省くと `config/app_settings.json` の `database_path` を使います。別のデータベースを開く場合は `photoarchive-gui --db data/photoarchive.db` のように指定します。
 
 人物を登録し、`scan` が検出した顔のサムネイル一覧から、その人物の顔を選んで割り当てます。ここで割り当てた顔が次の `match` の手本になります。
 
@@ -178,9 +190,12 @@ photoarchive match --dry-run
 
 # 判定を厳しく／緩くする（既定は 0.4、小さいほど厳しい）
 photoarchive match --threshold 0.45
+
+# 2位の人物との距離差の下限（既定は 0.05）
+photoarchive match --margin 0.1
 ```
 
-`--dry-run` は顔の距離の分布を表示するので、`--threshold` を決める目安になります。ログは `data/logs/match_*.log` に出力されます。
+`--dry-run` は顔の距離の分布を表示するので、`--threshold` を決める目安になります。**`match` を実行したあとでも同じ結果が出ます**（自動割り当てを取り消したあとの状態を再現して数えるため）。ログは `data/logs/match_*.log` に出力されます。
 
 ### 7. 抽出ルールに基づく選択とコピー
 
@@ -223,55 +238,71 @@ photoarchive select --output /path/to/output --source /path/to/media --rule conf
 
 ## テスト
 
-このプロジェクトでは `pytest` を使って単体テストとシステムテストを実行します。
-
-`tests/conftest.py` では、テスト収集時に `mediapipe` のフェイクモジュールを挿入し、`dlib` のモデル読み込みも差し替えます。依存関係やモデルファイルが揃わない環境でもテストが安定して動きます。
-
-システムテストを実行するには:
+変更を加えたら、回帰テストを実行します。
 
 ```bash
-pytest -q tests/test_system.py
+source .venv/bin/activate
+./scripts/run_regression.sh
 ```
 
-個別のエンドツーエンドテストだけを実行する場合:
+全110件がおよそ2〜3秒で終わります。最終行に次の形のまとめが出ます。
+
+```
+回帰テスト: 107 passed / 0 failed (2.20s) 実行日: 2026-09-19
+```
+
+個別に動かす場合:
 
 ```bash
-pytest -q tests/test_system.py::test_end_to_end_flow
+pytest -q                          # 全部
+pytest -q tests/test_matcher.py    # ファイル単位
+pytest -q -m system                # 通しテストだけ
+pytest -q -m models                # 実物の dlib モデルを使う確認だけ(環境依存)
 ```
 
-`system` マーカー付きテストを指定する場合:
+`tests/conftest.py` が `mediapipe` と `dlib` をフェイクに差し替えるので、依存関係やモデルファイルが揃わない環境でもテストが安定して動きます。テストはネットワーク・NFS・実データベースに一切触りません。
 
-```bash
-pytest -q -m system
-```
+詳しい手順は [テストの実行手順](docs/testing/TESTING.md)、何がテストで守られているかは [テスト項目一覧](docs/testing/TEST_CASES.md) を参照してください。
 
 ## ディレクトリ構成
 
 ```
 PhotoArchiveAI/
+  README.md
+  CLAUDE.md                    AIエージェント向けの作業ルール
   pyproject.toml
   requirements.txt
-  README.md
-  .gitignore
+  scripts/
+    run_regression.sh          回帰テスト
+    archive_worklog.py         作業履歴の切り出し
   config/
-    app_settings.sample.json
-    rule.sample.json
+    app_settings.sample.json   アプリ設定のサンプル
+    rule.sample.json           抽出ルールのサンプル
   docs/
+    README.md                  文書の索引
+    spec/Specification.md      要件・仕様・DB設計・CLIリファレンス
+    plan/ROADMAP.md            実装プラン
+    history/WORKLOG.md         作業履歴
+    testing/                   テストの手順とテスト項目一覧
+    operation/GUI_USAGE.md     GUIの操作手順
   src/
     photoarchive_ai/
       __init__.py
       __main__.py
-      config.py
-      db.py
-      migration.py
-      scanner.py
-      face.py
-      scoring.py
-      matcher.py
-      converter.py
-      selection.py
-      cli.py
-      gui.py
+      config.py                設定ファイルの探索と読み込み
+      db.py                    スキーマと永続化
+      migration.py             旧スキーマからの移行
+      scanner.py               走査・差分判定・顔検出の呼び出し
+      face.py                  顔検出(MediaPipe)と顔特徴量(dlib)
+      scoring.py               笑顔・画質のスコア
+      matcher.py               自動紐づけ
+      converter.py             HEIC/HEIF → JPEG 変換
+      selection.py             ルールに基づく抽出とコピー
+      cli.py                   サブコマンド定義
+      gui.py                   人物登録と顔の割り当て画面
+  tests/                       テスト(リポジトリ内には書き込まない)
+  data/                        DB・ログ・バックアップ(git管理外)
+  mediaFiles/                  実データへのsymlink置き場(git管理外)
 ```
 
 ## 主要ライブラリ
@@ -292,3 +323,5 @@ PhotoArchiveAI/
 - 出力先フォルダへファイルをコピーします。
 - GUI は人物登録と顔の割り当てを担当し、顔検出と自動紐づけは CLI で実行します。
 - `photoarchive analyze` は廃止しました。顔検出は `photoarchive scan` に、人物への紐づけは GUI と `photoarchive match` に分かれています。
+- `photoarchive convert-heic` はデータベースを使わないので、`--db` も設定ファイルも必要ありません。
+- 顔の切り出し方（`face.EMBED_PADDING` など）を変えた場合は、`face.EMBED_VERSION` を必ず上げて再スキャンしてください。古い特徴量と新しい特徴量が混ざると照合が成立しません。
