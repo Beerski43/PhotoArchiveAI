@@ -39,6 +39,46 @@ from . import db, face
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
+def _format_timestamp(value: Optional[str]) -> Optional[str]:
+    """DB の ISO 文字列を "YYYY-MM-DD HH:MM:SS" にする。読めなければそのまま。"""
+    if not value:
+        return None
+    return str(value).replace("T", " ")[:19]
+
+
+def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
+    """プレビューの下に出す、撮影日時とフォルダの説明。
+
+    **年齢を入れるには、その写真がいつ撮られたか分からないといけない。**
+    EXIF の撮影日時は実データの 15.8% で欠けているので、日付を持つことが多い
+    フォルダ名も併せて出す。
+
+    ``created_time`` は**撮影日時ではない**（コピーで変わる）。取り違えると
+    年齢を間違えるので、EXIF が無いときだけ、別の名前で出す。
+    """
+    lines = []
+    shooting_date = _format_timestamp(media.get("shooting_date"))
+    if shooting_date:
+        lines.append(f"撮影日時: {shooting_date}")
+    else:
+        lines.append("撮影日時: 不明（EXIFなし）")
+        file_time = _format_timestamp(media.get("created_time"))
+        if file_time:
+            lines.append(f"ファイル日時: {file_time}")
+
+    path = Path(media.get("path", ""))
+    folder = path.parent
+    if source_root:
+        try:
+            folder = folder.relative_to(Path(source_root).expanduser().resolve())
+        except ValueError:
+            # source_root の外にあるメディア。絶対パスのまま出す。
+            pass
+    lines.append(f"フォルダ: {folder}")
+    lines.append(f"ファイル: {path.name}")
+    return "\n".join(lines)
+
+
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "除外済み"
@@ -257,9 +297,12 @@ def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
 
 
 class MainWindow(QWidget):
-    def __init__(self, database_path: str):
+    def __init__(self, database_path: str, source_root: Optional[str] = None):
         super().__init__()
         self.db_path = database_path
+        #: プレビューのフォルダ表示を相対パスにするためだけに使う。
+        #: 無ければ絶対パスで出すので、渡さなくても動く。
+        self.source_root = source_root
         self.connection = db.ensure_database(database_path)
         self.setWindowTitle("PhotoArchiveAI 人物登録と顔の割り当て")
         self.page = 0
@@ -331,11 +374,24 @@ class MainWindow(QWidget):
         self.preview_label.setMinimumWidth(320)
         self.preview_label.setWordWrap(True)
         self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
+
+        # 撮影日時とフォルダ。**年齢を入れるのに要る。**
+        # QLabel は画像か文字のどちらかしか持てないので、もう1枚に分ける。
+        self.preview_info = QLabel("")
+        self.preview_info.setWordWrap(True)
+        self.preview_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.preview_info.setStyleSheet("padding: 4px;")
+
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.addWidget(self.preview_label, 1)
+        preview_layout.addWidget(self.preview_info, 0)
         self.face_list.itemSelectionChanged.connect(self._show_preview)
 
         face_area = QSplitter(Qt.Horizontal)
         face_area.addWidget(self.face_list)
-        face_area.addWidget(self.preview_label)
+        face_area.addWidget(preview_panel)
         face_area.setStretchFactor(0, 3)
         face_area.setStretchFactor(1, 2)
 
@@ -501,6 +557,9 @@ class MainWindow(QWidget):
         media = db.get_media_by_id(self.connection, record["media_id"])
         if not media:
             return
+        # 情報は画像より先に出す。**元写真が開けないときこそ、
+        # どのフォルダのどのファイルなのかが要る。**
+        self.preview_info.setText(format_media_info(media, self.source_root))
         bbox = (
             record["bbox_top"],
             record["bbox_right"],
@@ -567,9 +626,12 @@ def main() -> None:
 
     # CLI と同じ解決順にする。GUI だけ設定ファイルを読まないと、
     # 「アプリケーション内にDBパスをハードコードしない」という方針から外れる。
-    from .config import get_database_path, load_settings
+    from .config import get_database_path, get_source_root, load_settings
 
-    db_path = args.db or get_database_path(load_settings())
+    settings = load_settings()
+    db_path = args.db or get_database_path(settings)
+    # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く。
+    source_root = get_source_root(settings)
     if not db_path:
         raise SystemExit(
             "データベースのパスが必要です。--db で指定するか、"
@@ -583,6 +645,6 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    window = MainWindow(db_path)
+    window = MainWindow(db_path, source_root=source_root)
     window.show()
     sys.exit(app.exec())
