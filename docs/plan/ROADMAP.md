@@ -14,17 +14,17 @@
 
 ## 現在地
 
-**Phase 0 と Phase 1 は Issue #30 で完了。次は Phase 2。**
+**Phase 0 / Phase 1 は Issue #30 で、Phase 2 は Issue #32 で完了。次は Phase 3。**
 
-Phase 2（テストの穴埋め）は #30 で前倒しした分が多い（並列スキャン・converter・
-config・cli・進捗表示・作業履歴の切り出し）。残っているのは `face.py` の実物経路と
-`scoring.py` の計算式、`gui.py` の未検証クラス。**着手するときに Issue を起票する。**
+Phase 3（実データでの精度確立）が、この製品の価値をまだ実証していない工程。
+全件スキャン → GUI で人物ごとに20〜50枚を割り当て → `match` の**取りこぼし率**を
+実測して閾値を確定する。**着手するときに Issue を起票する。**
 
 | フェーズ | 状態 | 内容 | Issue |
 |---|---|---|---|
 | [Phase 0 基盤整備](phase-0-foundation.md) | **完了** | ファイル配置・作業ルール・実装プラン・作業履歴・回帰テスト環境・仕様書 v1.0 | #30 |
 | [Phase 1 既知の欠陥修正](phase-1-known-defects.md) | **完了** | 実データ運用を壊す欠陥を潰す。全件スキャンの前提 | #30（#25 を含む） |
-| Phase 2 テストの穴埋め | **一部完了** | 残りは face の実物経路・scoring の計算式・gui の未検証クラス | 未起票 |
+| Phase 2 テストの穴埋め | **完了** | face の入出力・scoring の計算式・gui の人物編集とプレビュー・migration の残り | #30, #32 |
 | Phase 3 実データでの精度確立 | 未着手 | 全件スキャン → 手動割り当て → `match` の取りこぼし率の実測と閾値の確定 | 未起票 |
 | Phase 4 GUI の作り込み | 未着手 | 人物ごとの枚数表示、顔候補の推薦ほか | #18 |
 | Phase 5 設定と入力の整理 | 未着手 | 設定の YAML 化、ソースディレクトリの複数指定、HEIC の扱いの決着 | #27, #24, #26 |
@@ -49,9 +49,9 @@ NFS 24MB/s で何度も読み直すことになる。Phase 3 が終わるまで�
 Phase 0 の調査で場所まで特定済みの欠陥が10件ある。Issue #25 もここで解消する。
 Phase 0 と同じ Issue で進めるが、コミットは分ける。
 
-### Phase 2 — テストの穴埋め（一部完了）
+### Phase 2 — テストの穴埋め（完了・#30 と #32）
 
-全体の実行時間は10秒以内に収める。
+全体の実行時間は10秒以内に収める。**196件で3秒程度**（#32 時点）。
 
 **#30 で済んだもの**: `scanner.py` の並列経路（実運用の既定が無検査だった）、
 `converter.py`（テストが1件も無かった）、`config.py`、`cli.py` のサブコマンドと
@@ -59,14 +59,19 @@ Phase 0 と同じ Issue で進めるが、コミットは分ける。
 `RegisteredFacesDialog` のページャと年齢、回帰テストの集計行、作業履歴の切り出し、
 `scanner.get_media_type` の `"image"` / `"photo"` のねじれ。
 
-**残っているもの**:
+**#32 で済んだもの**:
 
 - `face.py`: `read_rgb`（動画の先頭1フレーム、読めないファイル）、
-  `detect_faces` のリサイズ、`crop_face`、`make_thumbnail`
-- `scoring.py`: フェイクの FaceMesh が常に同じ landmark を返すため、
-  `estimate_smile_score` と `estimate_quality` の計算式が実質未検証
+  `detect_faces` のリサイズと矩形の戻し、`face_rect`、`crop_face`、`make_thumbnail`
+- `scoring.py`: `estimate_smile_score` と `estimate_quality` の計算式。
+  フェイクの FaceMesh を差し替え可能にして、式そのものを通した
 - `gui.py`: `_show_preview`、`_edit_person`
-- `migration.py`: `backup_database` のパス指定版、`describe_migration`、`no_vacuum`
+- `migration.py`: `describe_migration`、`backup_database`（保存先の指定と既定）、
+  `vacuum=False` / `make_backup=False`、空のDB、存在しないDB
+
+**#32 で見つかった取りこぼし**: `face_rect` のテストが `models` マーカーの
+ファイルに置かれており、回帰テスト（`-m "not models"`）では常に除外されていた。
+モデルを必要としないので `test_face_io.py` へ移した。
 
 ### Phase 3 — 実データでの精度確立
 
