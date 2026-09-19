@@ -35,8 +35,5 @@ def test_real_embedding_has_128_dimensions(monkeypatch):
     assert embedding.dtype == np.float32
 
 
-def test_face_rect_is_square_and_padded():
-    left, top, right, bottom = face.face_rect((100, 200, 200, 100), 1000, 1000)
-    assert right - left == bottom - top
-    # パディング分だけ元の矩形より広い
-    assert right - left > 100
+# `face_rect` の確認は tests/test_face_io.py にある。モデルを必要としないのに
+# ここに置いていたため、回帰テスト(`-m "not models"`)では常に除外されていた。

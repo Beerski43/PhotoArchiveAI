@@ -12,6 +12,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# FaceMesh のフェイクが何を返すか。テストは fake_face_mesh フィクスチャ越しに
+# だけ触る。既定値を据え置くのは、既存のテストの意味を変えないため。
+FACE_MESH_STATE = {"landmarks": {}, "detected": True}
+
 
 def _install_fake_mediapipe_modules():
     if "mediapipe" in sys.modules:
@@ -49,13 +53,26 @@ def _install_fake_mediapipe_modules():
             return types.SimpleNamespace(detections=detections)
 
     class FakeFaceMesh:
+        """ランドマークをテストから差し替えられる FaceMesh のフェイク。
+
+        既定は全点 (0.5, 0.5)。**この既定だけでは計算式が検証できない。**
+        ``estimate_smile_score`` は口の4点の縦横比を見るので、全点が同じ座標
+        だと縦幅が 0 になり、必ず 0.0 で早期 return する。式そのものを
+        確かめるテストは ``fake_face_mesh`` フィクスチャで座標を与えること。
+        """
+
         def __init__(self, static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5):
             pass
 
         def process(self, image):
-            landmarks = types.SimpleNamespace(
-                landmark=[types.SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in range(468)]
-            )
+            if not FACE_MESH_STATE["detected"]:
+                return types.SimpleNamespace(multi_face_landmarks=None)
+            overrides = FACE_MESH_STATE["landmarks"]
+            landmark = []
+            for index in range(468):
+                x, y = overrides.get(index, (0.5, 0.5))
+                landmark.append(types.SimpleNamespace(x=x, y=y, z=0.0))
+            landmarks = types.SimpleNamespace(landmark=landmark)
             return types.SimpleNamespace(multi_face_landmarks=[landmarks])
 
     fake_face_detection.FaceDetection = FakeFaceDetection
@@ -71,6 +88,42 @@ def _install_fake_mediapipe_modules():
 
 
 _install_fake_mediapipe_modules()
+
+
+class _FaceMeshControl:
+    """FaceMesh のフェイクの戻り値を決める操作口。"""
+
+    @staticmethod
+    def set_landmarks(overrides) -> None:
+        """``{ランドマーク番号: (x, y)}`` を与える。指定しない点は (0.5, 0.5)。
+
+        x / y は MediaPipe と同じ 0.0-1.0 の相対座標。
+        """
+        FACE_MESH_STATE["landmarks"] = dict(overrides)
+
+    @staticmethod
+    def detect_nothing() -> None:
+        """顔が1つも取れなかった場合を再現する。"""
+        FACE_MESH_STATE["detected"] = False
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_face_mesh():
+    """FaceMesh のフェイクを毎回既定へ戻す。
+
+    フェイクの状態はモジュール変数なので、戻さないと上書きしたテストの
+    影響が実行順に応じて他のテストへ漏れる。
+    """
+    FACE_MESH_STATE["landmarks"] = {}
+    FACE_MESH_STATE["detected"] = True
+    yield
+    FACE_MESH_STATE["landmarks"] = {}
+    FACE_MESH_STATE["detected"] = True
+
+
+@pytest.fixture()
+def fake_face_mesh():
+    return _FaceMeshControl
 
 
 def fake_embedding_for(image_region: np.ndarray) -> np.ndarray:
