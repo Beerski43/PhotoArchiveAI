@@ -27,3 +27,6 @@ models/
 # (Issue #27 でルールを YAML にしても漏れないよう、名指しにしない)
 config/*
 !config/*.sample.json
+
+# Claude Code のワークツリー（セッションごとの作業場。リポジトリの中身ではない）
+.claude/worktrees/
