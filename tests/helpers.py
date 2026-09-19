@@ -26,3 +26,23 @@ def write_black_image(path: Path, size=(200, 200)) -> Path:
     array = np.zeros((size[1], size[0], 3), dtype=np.uint8)
     Image.fromarray(array).save(path, format="JPEG", quality=95)
     return path
+
+
+def write_heic(path: Path, color=(200, 120, 90), size=(120, 120)) -> Path:
+    """HEIC(HEIF) 画像を書き出す。
+
+    encoder が無い環境ではテストをスキップする。pillow-heif は
+    requirements に入っているが、ビルドによっては読み込み専用のため。
+    """
+    import pytest
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    array = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+    array[:, :] = color
+    try:
+        Image.fromarray(array).save(path, format="HEIF", quality=90)
+    except Exception as error:  # pragma: no cover - 環境依存
+        pytest.skip(f"HEIF の書き出しができない環境: {error}")
+    return path
