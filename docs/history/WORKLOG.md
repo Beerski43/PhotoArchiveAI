@@ -59,6 +59,78 @@
 
 次にやること: Phase 3 の手順2（GUI で人物ごとに20〜50枚を割り当て）。
 
+## 2026-09-20 — #39 全件スキャンの実施と、並列スキャンがDBを壊す欠陥の修正
+
+Phase 3 の手順1（全件スキャン）を実施した。`source_root`（`suzukiFamily`、
+64,974件）は**未スキャン0件**まで到達し、顔 55,812 件を検出した。
+別ソースの `photo_natsu` 5,210 件は `source_root` が1つしか持てないため未着手
+（Issue #24）。
+
+**その途中で、DBが2回壊れた。** どちらも同じ壊れ方で、
+`row N missing from index idx_media_hash` → `scan` が
+`database disk image is malformed` で異常終了。46,184件の地点と55,788件の地点。
+
+**原因は `scan` の並列実行。** `scanner.py` は **DB接続を開いたまま**
+`ProcessPoolExecutor` を作る。Linux / Python 3.12 の既定は `fork` なので、
+**全ワーカーが親の SQLite 接続と WAL の共有メモリを複製して持つ。**
+ワーカー自身はDBに触らないが、子の終了時に引き継いだ接続の後始末が親の
+書き込みと競合する。SQLite は接続を `fork()` をまたいで持ち越すことを禁じている。
+ディスクI/Oエラーもカーネルエラーも無く、ハードウェア障害ではない。
+`--workers 1`（プールを作らない経路）では最後まで通り、破損も起きなかった。
+
+直し方は `mp_context=multiprocessing.get_context("spawn")`。子は白紙の
+インタプリタとして始まるので、親のファイル記述子を引き継がない。
+
+**この修正で、既存の並列テスト2件が `fork` に依存していたことが露見した。**
+子がフェイクの mediapipe / dlib を引き継ぐ前提で書かれており、`spawn` では
+実物を読みに行く。フェイクを `tests/fakes.py` へ切り出し、`scan_directory` に
+`worker_initializer` を足して子へ入れられるようにした。
+
+**壊れないことはテストで確かめられない**（数万件規模でしか再現しない）ので、
+「`fork` で起こしていないこと」と「子が親のメモリ状態を引き継がないこと」を
+テストで固定した。どちらも `WORKER_START_METHOD` を `fork` に戻すと落ちることを
+確認している。CLAUDE.md の落とし穴「並列実行では fork 時の値が全ワーカーに
+複製される」も、`spawn` では成り立たないので書き換えた。
+
+破損したDBは保全したうえ、`REINDEX idx_media_hash` で復旧した
+（テーブルの行は無傷だった）。**保全した2つはレビューでの判断を経て消した。**
+原因が特定できてテストで固定できた以上、289MB×2 を持ち続ける理由が無い。
+消す前に `PRAGMA integrity_check` の出力だけ残す。
+
+```
+data/photoarchive.db.bak-corrupt-20260920_001155  → row 67992 missing from index idx_media_hash
+data/photoarchive.db.bak-corrupt2-003728          → row 65679 missing from index idx_media_hash
+現行 data/photoarchive.db                          → ok
+```
+
+どちらも**インデックスの欠けだけ**で、テーブルの行は壊れていない。
+同じ症状がまた出たら、まずこの形（`row N missing from index ...`）かどうかを見る。
+
+回帰テスト: 200 passed / 0 failed (4.39s)。`spawn` の起動ぶん約1秒増えたが
+10秒の枠内。
+
+**修正後に実データで `--workers 4` を流して確かめた。** 対象は未スキャンだった
+別ソース `photo_natsu` の 5,210 件（並列経路の実地検証と、残っていたデータの
+消化を兼ねた）。最後まで通り、`PRAGMA integrity_check` は `ok`。
+速度も 9 件/秒で、`--workers 1` の 3 件/秒より速い。
+**これで Media 70,297 件すべてが未スキャン0件になった**（顔 58,606 件）。
+
+**レビュー（PR #37）で、この修正の副作用が1件見つかった。** `spawn` の子は
+**ログの設定も引き継がない**ので、`--workers` が2以上（＝既定）のとき
+ワーカーが出した警告がログファイルに1行も残らなくなっていた。書式なしの
+stderr へ漏れて進捗表示に混ざるだけで、「どのファイルがなぜ読めなかったか」
+という記録そのものが消える。実データ 5,210 件の検証で `errors 10` と出ていたが、
+その10件が何だったかはログから追えない状態だった。
+
+`_setup_logging` を `logging_setup.py` へ切り出し、ワーカーの入口
+（`scanner._start_worker`）で張り直すようにした。`scan_directory` が
+`log_file` / `log_level` を受け取って子へ渡す。**これで `worker_initializer` は
+テスト専用の口ではなくなった**（本番でも渡すものが実在する、というのが
+レビューでの判断）。
+
+次にやること: GUI で人物ごとに20〜50枚を割り当て、`photoarchive evaluate` で
+取りこぼし率を実測して閾値を確定する（手順2〜4、PR #36 の道具を使う）。
+
 ## 2026-09-19 — #40 取りこぼし率を測る evaluate を作る（Phase 3 着手）
 
 Phase 3（実データでの精度確立）に着手し、親 Issue #35 を起票した。

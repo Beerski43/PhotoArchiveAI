@@ -128,6 +128,19 @@ photoarchive evaluate --thresholds 0.4,0.45,0.5
 その顔を抜くと手本が残らない顔は、取りこぼしに数えず評価から外れる
 （外さないと、手本の少ない人物のぶんだけ取りこぼし率が悪く出る）。
 
+並列スキャンを変えた場合は、**実データで `--workers` を2以上にして流し、
+終わったら `sqlite3 data/photoarchive.db "PRAGMA integrity_check;"` が `ok` を
+返すことを確かめる。** ワーカーを `fork` で起こすとDBが壊れるが、
+**数万件規模でしか再現しない**ので、テストでは捕まえられない（Issue #39）。
+
+あわせて `data/logs/scan_*.log` に**ワーカーのログが残っているか**を見る。
+`spawn` の子は白紙で始まるので、ログ設定を渡し忘れると
+「どのファイルがなぜ読めなかったか」だけが並列時に消える。
+
+```bash
+grep -c "Cannot read image" data/logs/scan_*.log   # errors の件数と見合うこと
+```
+
 顔の位置や大きさの扱いを変えた場合（`face.EMBED_PADDING` など）は、
 **必ず `face.EMBED_VERSION` を上げて再スキャンする。** 切り出し方が変わると
 顔特徴量の距離が別人判定の閾値と同じ程度に動くため、古い特徴量と新しい特徴量を

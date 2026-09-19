@@ -29,6 +29,9 @@
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
 | `test_scanner_incremental.py::test_an_error_from_one_file_is_not_reported_for_the_next` | 直近のエラーが大域変数に残り、無関係なファイルに付いた |
+| `test_scanner_incremental.py::test_a_worker_writes_its_errors_to_the_log_file` | `fork` をやめた副作用で、並列時にワーカーのログがファイルへ1行も残らなくなった（既定の経路） |
+| `test_scanner_incremental.py::test_the_workers_are_not_started_by_forking` | **並列スキャンが実データのDBを壊した。** fork した子が親の SQLite 接続を引き継ぎ、`row N missing from index idx_media_hash`（Issue #35） |
+| `test_scanner_incremental.py::test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 上と同じ原因を、子が親の状態を引き継いでいないかという側から押さえる |
 | `test_cli_progress.py::test_progress_keeps_the_last_error_instead_of_overwriting_it` | `Error: none` が直近のエラーを塗り潰した（Issue #25） |
 | `test_cli_commands.py::test_convert_heic_does_not_need_a_database` | DB を使わないコマンドが DB パスを要求して落ちた |
 | `test_scanner_incremental.py::test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` で入れた顔が、モデル設置後も回収されなかった |
@@ -57,7 +60,7 @@
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
 
-### `test_scanner_incremental.py` — 走査と差分判定（17件）
+### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
 | テスト | 内容 |
 |---|---|
@@ -78,6 +81,9 @@
 | `test_media_type_is_image_or_video` | `Media.type` の値域 |
 | `test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` の顔を、モデル設置後の通常 `scan` が拾い直す |
 | `test_a_photo_whose_faces_are_all_too_small_is_still_marked_scanned` | 顔が小さすぎて特徴量が作れないのは正常な結果。毎回読み直さない |
+| `test_the_workers_are_not_started_by_forking` | **ワーカーを `fork` で起こさない**（実データのDBが壊れた。Issue #35） |
+| `test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 子が親のメモリ状態を引き継がないこと（引き継ぐなら fork で起きている） |
+| `test_a_worker_writes_its_errors_to_the_log_file` | **ワーカーのログがログファイルに残ること。** `spawn` の子はログ設定も引き継がないので、張り直さないと並列時だけ記録が消える |
 
 ### `test_face_io.py` — 顔の入出力（24件）
 
@@ -293,7 +299,9 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 **外部依存を持たない。** ネットワーク、NFS、実データベース、実物のモデル
 （`models` マーカーを除く）のいずれにも触らない。すべて `tmp_path` の中で完結する。
 
-`tests/conftest.py` が次を差し替える。
+`tests/conftest.py` が次を差し替える。**フェイクの中身は `tests/fakes.py`。**
+`scan` のワーカーは `spawn` で起こすため子は白紙で始まり、`conftest` を
+import できない。子へは `worker_initializer=install_fake_backends` で入れる。
 
 | 差し替えるもの | 何になるか |
 |---|---|

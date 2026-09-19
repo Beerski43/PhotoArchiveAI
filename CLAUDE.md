@@ -263,7 +263,17 @@ select        ルールに従って抽出しコピー
   削除対象が2割を超えると中断する。この安全弁を外さない。
 - **`face.get_latest_error()` は大域変数。** 1ファイルの処理を始めるときに
   `clear_latest_error()` で消さないと、前のファイルのエラーが次に付く。
-  並列実行では fork 時の値が全ワーカーに複製される。
+  1つのワーカーが続けて何件も処理するので、並列でも同じことが起きる。
+- **ワーカープロセスを `fork` で起こさない。** `scan` は DB 接続を開いたまま
+  プールを作るので、`fork` だと全ワーカーが親の SQLite 接続と WAL の共有メモリを
+  複製して持つ。ワーカー自身は DB に触らないが、子の終了時の後始末が親の書き込みと
+  競合し、**実データのDBが壊れる**（`row N missing from index idx_media_hash`、
+  Issue #35）。`scanner.WORKER_START_METHOD`（`"spawn"`）を変えないこと。
+  `spawn` の子は白紙のインタプリタとして始まるので、**親の差し替えも monkeypatch も
+  ログの設定も引き継がれない。** ログを張り直さないと、ワーカーが出した警告が
+  ログファイルに1行も残らない（`scanner._start_worker` が
+  `logging_setup.setup_logging` を呼ぶ）。テストはフェイクを `worker_initializer`
+  で子へ入れる (`tests/fakes.py`)。
 - **`db.assign_faces` の `age` は `KEEP_AGE` が既定。** `None` は
   「未設定に戻す」という指示であって「触らない」ではない。
 - **`--allow-missing-embeddings` で入れたメディアは `detector_version` を書かない。**
