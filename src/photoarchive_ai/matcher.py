@@ -26,7 +26,8 @@ logger = logging.getLogger("photoarchive.matcher")
 #: 誤った紐づけは手作業でのやり直しが高くつくため、取りこぼす側に倒す。
 DEFAULT_THRESHOLD = 0.4
 DEFAULT_MARGIN = 0.05
-CHUNK_SIZE = 5000
+#: 読み出しの塊の大きさは db 側に持つ。二重定義にすると片方だけずれる。
+CHUNK_SIZE = db.MATCH_CHUNK_SIZE
 
 
 def _distances(candidates: np.ndarray, teachers: np.ndarray) -> np.ndarray:
@@ -93,10 +94,16 @@ def match_faces(
             progress_callback(0, 0, "no assigned faces to learn from")
         return summary
 
-    total = db.count_faces(connection, unassigned=True)
+    # dry-run は自動割り当てを取り消さないので、取り消したあとに何が起きるかを
+    # 見せるには auto の顔も候補に入れる必要がある。入れないと、2回目以降の
+    # dry-run が「もう割り当て済みの顔」を数え落として空振りに見える。
+    include_auto = dry_run and reset
+    total = db.count_match_candidates(connection, include_auto=include_auto)
     updates = []
     processed = 0
-    for ids, candidates in db.iter_unassigned_embeddings(connection, CHUNK_SIZE):
+    for ids, candidates in db.iter_unassigned_embeddings(
+        connection, CHUNK_SIZE, include_auto=include_auto
+    ):
         distances = _distances(candidates, teachers)
         for row_index in range(distances.shape[0]):
             person_id, distance = _best_match(
