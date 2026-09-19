@@ -27,3 +27,8 @@ def get_output_root(settings: Dict[str, Any]) -> Optional[str]:
 
 def get_rule_path(settings: Dict[str, Any]) -> Optional[str]:
     return settings.get("rule_path")
+
+
+def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
+    """dlib の学習済みモデルを置いたディレクトリ(任意)。"""
+    return settings.get("dlib_model_dir")
