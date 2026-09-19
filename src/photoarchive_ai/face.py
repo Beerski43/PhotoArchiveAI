@@ -55,6 +55,8 @@ FACE_DETECTION_MAX_SIZE = 1280
 VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 # 埋め込み用の矩形正規化パラメータ。変更したら EMBED_VERSION も上げること。
+# 実データで 0.0 / 0.1 / 0.25 / 0.4 / 0.6 を比較したところ、0.0〜0.25 はほぼ
+# 同等で、0.4 以上は急激に悪化した(0.6 では別人同士の誤一致率が 47〜59%)。
 EMBED_PADDING = 0.25
 EMBED_MIN_FACE_PX = 60
 EMBED_VERSION = "dlib_resnet_v1/sp5/pad0.25/full"

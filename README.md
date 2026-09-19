@@ -176,7 +176,7 @@ photoarchive match
 # どれくらい割り当てられそうかを、書き込まずに確認する
 photoarchive match --dry-run
 
-# 判定を厳しく／緩くする（既定は 0.5、小さいほど厳しい）
+# 判定を厳しく／緩くする（既定は 0.4、小さいほど厳しい）
 photoarchive match --threshold 0.45
 ```
 
