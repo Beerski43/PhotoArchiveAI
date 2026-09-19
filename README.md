@@ -4,22 +4,25 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 
 ## 特長
 
-- メディアを再帰的にスキャンして SQLite に登録
+- メディアを再帰的にスキャンして SQLite に登録し、同時に顔を検出
 - 写真の EXIF / 撮影日時を取得
-- 顔検出と埋め込みを使った人物判定
-- PySide6 GUI での人物登録と顔画像登録
+- 差分スキャン。顔検出済みのメディアは再検出しない
+- PySide6 GUI で人物を登録し、検出済みの顔を人物へ割り当て
+- 割り当て済みの顔を手本に、残りの顔を自動で紐づけ
 - CLI でのピックアップ/コピー実行
 - 元の写真・動画ファイルは変更しない
 
 ## 全体のフロー
 
 1. `config/app_settings.sample.json` をコピーして `config/app_settings.json` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
-2. `photoarchive init-db` で SQLite データベースを初期化します。
+2. `photoarchive init-db` で SQLite データベースを初期化します。（既存のデータベースがある場合は `photoarchive migrate` を実行します）
 3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
-4. `photoarchive scan` で対象ディレクトリをスキャンします。
-5. `photoarchive analyze` で AI 解析を実行します。
-6. `photoarchive-gui` で人物登録 GUI を起動し、登録を行います。
+4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
+5. `photoarchive-gui` で人物を登録し、検出された顔を人物へ割り当てます。
+6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。
 7. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+
+顔の紐づけは **必ず人物を登録したあと** に行います。人物を登録する前に自動で紐づけると、誰とも分からない顔が誤った人物に結びついてしまうためです（Issue #28）。
 
 ## インストール
 
@@ -53,10 +56,10 @@ GUIを通常のデスクトップで起動するには、X11またはWaylandの�
 - `PyYAML`: YAML形式のルール読み込み
 - `pytest`: テスト実行
 
-`pyproject.toml` には、上記に加えて人物登録・顔照合で使用する次のライブラリも記載しています。
+加えて、人物の識別に使う次のライブラリも `requirements.txt` と `pyproject.toml` の両方に記載しています。
 
-- `face_recognition`: 顔エンコーディングと顔照合
-- `face_recognition_models`: `face_recognition` 用モデル。GitHubからインストール
+- `dlib`: 128次元の顔特徴量の生成
+- `face_recognition_models`: dlib の学習済みモデルデータ。GitHubからインストール（モデルファイルの置き場所としてのみ使い、import はしない）
 
 通常は以下で全Python依存をインストールできます。
 
@@ -69,7 +72,13 @@ python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
-`face_recognition` は内部で `dlib` を使用するため、上記の `cmake`、C/C++ビルドツール、Boost、OpenBLAS、LAPACKが必要です。`face_recognition_models` はGitHubリポジトリから取得されます。
+顔の特徴量には `dlib` を使うため、上記の `cmake`、C/C++ビルドツール、Boost、OpenBLAS、LAPACKが必要です。学習済みモデル (`shape_predictor_5_face_landmarks.dat` と `dlib_face_recognition_resnet_model_v1.dat`) は `face_recognition_models` パッケージに含まれており、GitHubリポジトリから取得されます（PyPIには存在しません）。
+
+```bash
+python -m pip install git+https://github.com/ageitgey/face_recognition_models
+```
+
+このパッケージは **モデルファイルの置き場所としてのみ** 使用し、Pythonモジュールとしては読み込みません。`face_recognition_models/__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では `ModuleNotFoundError` になるためです。モデルを別の場所に置く場合は、環境変数 `PHOTOARCHIVE_DLIB_MODEL_DIR` か `config/app_settings.json` の `dlib_model_dir` でディレクトリを指定してください。
 
 SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` などはPython標準ライブラリのため、個別インストールは不要です。
 
@@ -108,44 +117,70 @@ photoarchive convert-heic --source /path/to/photo
 
 変換先へ書き込めない場合は、続行するか確認を求めます。`y` または `yes` を入力すると次のファイルへ進み、それ以外を入力すると処理を停止します。
 
-### 4. メディアのスキャン
+### 4. メディアのスキャンと顔検出
 
 ```bash
 photoarchive scan
 ```
 
-スキャン中は、処理済み件数と進捗バーがターミナルに表示されます。
+`scan` は次をまとめて行います。
 
-### 5. AI 解析の実行
+- メディアファイルの登録（パス、ハッシュ、サイズ、EXIF撮影日時）
+- 顔の検出と、顔画像・特徴量・スコアの保存
+- 実体が無くなったメディアの行の削除
 
-```bash
-photoarchive analyze
-```
+**この時点では人物への紐づけは一切行いません。** 顔は「未割当」として貯まります。
 
-解析中も進捗バーが表示されます。ログは `data/logs/` に出力され、通常は警告以上だけを記録します。
-
-ログレベルは `--log-level` で指定できます。
+2回目以降はファイルサイズと更新時刻が一致するものを読み飛ばすため、短時間で終わります。顔検出済みのメディアも再検出しません。
 
 ```bash
-# 通常運用（デフォルト）
-photoarchive analyze --log-level WARNING
+# 並列数を指定（既定は CPU コア数 - 1、最大 4）
+photoarchive scan --workers 4
 
-# 顔未検出などの情報も確認
-photoarchive analyze --log-level INFO
+# 実体が無いメディアの行を消さない
+photoarchive scan --no-prune
 
-# ファイル確認などの詳細情報も確認
-photoarchive analyze --log-level DEBUG
+# 検出器を変えたなどの理由で、全件の顔を検出し直す
+photoarchive scan --force-rescan
 ```
 
-指定できるレベルは `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` です。ログレベルを下げるほど出力が増えるため、通常はデフォルトの `WARNING` を使用してください。
+実体が見つからないメディアが登録数の2割を超えた場合は、ソースの指定間違いやNFSの未マウントを疑って処理を中断します。意図した削除であれば `--force-prune` を付けて再実行してください。
 
-### 6. GUI で人物登録
+ログは `data/logs/scan_*.log` に出力されます。ログレベルは `--log-level` で `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` を指定できます（既定は `WARNING`）。
+
+途中で中断しても、顔検出が終わったメディアは記録済みなので、再実行すれば続きから再開します。
+
+### 5. GUI で人物登録と顔の割り当て
 
 ```bash
 photoarchive-gui --db data/photoarchive.db
 ```
 
-GUIの起動方法、人物情報の追加・編集・削除、顔画像の登録方法は [GUI利用手順](docs/operation/GUI_USAGE.md) を参照してください。
+人物を登録し、`scan` が検出した顔のサムネイル一覧から、その人物の顔を選んで割り当てます。ここで割り当てた顔が次の `match` の手本になります。
+
+操作手順は [GUI利用手順](docs/operation/GUI_USAGE.md) を参照してください。
+
+### 6. 残りの顔の自動紐づけ
+
+```bash
+photoarchive match
+```
+
+手動で割り当てた顔を手本に、未割当の顔を自動で紐づけます。十分な枚数を手作業で割り当ててあるなら、実行しなくても構いません。
+
+- 手本に使うのは **手動で割り当てた顔だけ** です。自動割り当ての結果を手本に混ぜると、誤りが次の判定の根拠になって増幅するためです。
+- 似ている度合いが基準に届かない顔は **未割当のまま残します**。
+- 実行のたびに自動割り当てを付け直すので、何度実行しても同じ結果になります。
+
+```bash
+# どれくらい割り当てられそうかを、書き込まずに確認する
+photoarchive match --dry-run
+
+# 判定を厳しく／緩くする（既定は 0.5、小さいほど厳しい）
+photoarchive match --threshold 0.45
+```
+
+`--dry-run` は顔の距離の分布を表示するので、`--threshold` を決める目安になります。ログは `data/logs/match_*.log` に出力されます。
 
 ### 7. 抽出ルールに基づく選択とコピー
 
@@ -190,7 +225,7 @@ photoarchive select --output /path/to/output --source /path/to/media --rule conf
 
 このプロジェクトでは `pytest` を使って単体テストとシステムテストを実行します。
 
-`tests/conftest.py` では、テスト収集時に `face_recognition` / `face_recognition_models` のフェイクモジュールを挿入し、依存関係が揃わない環境でも `tests/test_system.py` の実行を安定させます。
+`tests/conftest.py` では、テスト収集時に `mediapipe` のフェイクモジュールを挿入し、`dlib` のモデル読み込みも差し替えます。依存関係やモデルファイルが揃わない環境でもテストが安定して動きます。
 
 システムテストを実行するには:
 
@@ -228,8 +263,12 @@ PhotoArchiveAI/
       __main__.py
       config.py
       db.py
+      migration.py
       scanner.py
-      analyzer.py
+      face.py
+      scoring.py
+      matcher.py
+      converter.py
       selection.py
       cli.py
       gui.py
@@ -240,7 +279,9 @@ PhotoArchiveAI/
 - PySide6: GUI
 - Pillow: 画像処理
 - pillow-heif: HEIC/HEIF画像の読み込み
-- face_recognition: 顔検出と埋め込み
+- mediapipe: 顔検出と表情のランドマーク
+- dlib: 128次元の顔特徴量（人物の識別）
+- face_recognition_models: dlib の学習済みモデルデータ（import はしない）
 - opencv-python: 画像/動画読み込みと品質評価
 - numpy: 数値処理
 - PyYAML: ルールの YAML 読み込み
@@ -249,4 +290,5 @@ PhotoArchiveAI/
 
 - 元の写真・動画を変更しません。
 - 出力先フォルダへファイルをコピーします。
-- GUI は人物登録と顔画像登録をサポートし、解析は CLI で実行します。
+- GUI は人物登録と顔の割り当てを担当し、顔検出と自動紐づけは CLI で実行します。
+- `photoarchive analyze` は廃止しました。顔検出は `photoarchive scan` に、人物への紐づけは GUI と `photoarchive match` に分かれています。
