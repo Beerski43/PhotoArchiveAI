@@ -1,37 +1,47 @@
+"""人物登録と、検出済みの顔の割り当てを行う GUI。
+
+``scan`` が写真から顔を検出して貯めたあと、ここで人物を作り、顔サムネイルを
+選んで人物へ割り当てる。割り当て済みの顔が ``match`` の手本になる。
+
+顔の件数は数万件になりうるので、一覧は必ずページ単位で読む。サムネイルの
+BLOB を全件読むと数百MBになり、画面が固まる。
+"""
+
 import argparse
-import io
 import os
 from pathlib import Path
 from typing import List, Optional
 
-import numpy as np
-from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-    QFileDialog,
     QMessageBox,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
-    QGridLayout,
-    QScrollArea,
+    QPushButton,
     QSpinBox,
     QSplitter,
     QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
-from . import db
-from .analyzer import detect_faces_in_file, compute_face_embedding, _read_image
+from . import db, face
+
+PAGE_SIZE = 200
+THUMBNAIL_SIZE = 120
+
+FILTER_UNASSIGNED = "未割当"
+FILTER_AUTO = "自動割当"
+FILTER_REJECTED = "除外済み"
 
 
 class PersonDialog(QDialog):
@@ -52,17 +62,28 @@ class PersonDialog(QDialog):
         self.setLayout(form)
 
     def values(self):
-        return self.name_input.text().strip(), self.relation_input.text().strip(), self.memo_input.toPlainText().strip()
+        return (
+            self.name_input.text().strip(),
+            self.relation_input.text().strip(),
+            self.memo_input.toPlainText().strip(),
+        )
 
 
 class FaceAgeDialog(QDialog):
+    """撮影時の年齢を任意で入力する。未設定と0歳は区別する。"""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("登録顔の年齢")
+        self.setWindowTitle("撮影時の年齢")
         self.age_input = QSpinBox()
-        self.age_input.setRange(0, 150)
+        # 最小値を -1 にして「未設定」に割り当てる。0 を特別扱いにすると
+        # 0歳の顔を登録できなくなる。
+        self.age_input.setRange(-1, 150)
         self.age_input.setSpecialValueText("未設定")
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.age_input.setValue(-1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QFormLayout(self)
@@ -70,117 +91,20 @@ class FaceAgeDialog(QDialog):
         layout.addRow(buttons)
 
     def age(self) -> Optional[int]:
-        return self.age_input.value() or None
-
-
-class FaceSelectionDialog(QDialog):
-    def __init__(self, parent, image_path: str, face_locations: List[tuple]):
-        super().__init__(parent)
-        self.setWindowTitle("登録する顔を選択")
-        self.selected_index: Optional[int] = None
-        layout = QVBoxLayout()
-        self.labels = []
-        self.image_path = image_path
-        self.face_locations = face_locations
-
-        for index, location in enumerate(face_locations):
-            label = QLabel(f"顔 {index + 1}")
-            label.setAlignment(Qt.AlignCenter)
-            face_image = self._crop_face(image_path, location)
-            pixmap = QPixmap.fromImage(face_image)
-            label.setPixmap(pixmap.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            button = QPushButton(f"選択 {index + 1}")
-            button.clicked.connect(lambda checked, idx=index: self._set_selection(idx))
-            layout.addWidget(label)
-            layout.addWidget(button)
-        self.setLayout(layout)
-
-    def _crop_face(self, image_path: str, face_location: tuple):
-        image = Image.open(image_path).convert("RGB")
-        top, right, bottom, left = face_location
-        crop = image.crop((left, top, right, bottom))
-        data = io.BytesIO()
-        crop.save(data, format="PNG")
-        qimage = QPixmap()
-        qimage.loadFromData(data.getvalue(), "PNG")
-        return qimage.toImage()
-
-    def _set_selection(self, index: int) -> None:
-        self.selected_index = index
-        self.accept()
-
-
-class ImageFileDialog(QFileDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent, "顔画像を選択")
-        self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        self.setFileMode(QFileDialog.FileMode.ExistingFile)
-        self.setNameFilter("Images (*.jpg *.jpeg *.png *.bmp *.heic *.heif)")
-        self.setViewMode(QFileDialog.ViewMode.List)
-
-        self.preview_label = QLabel("画像を選択してください")
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(240, 180)
-        self.preview_label.setWordWrap(True)
-        self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
-        self.preview_label.setToolTip("選択中の画像プレビュー")
-
-        layout = self.layout()
-        file_view = self.findChild(QSplitter, "splitter")
-        if isinstance(layout, QGridLayout) and file_view is not None:
-            layout.removeWidget(file_view)
-            self.preview_splitter = QSplitter(Qt.Horizontal, self)
-            self.preview_splitter.setObjectName("previewSplitter")
-            self.preview_splitter.addWidget(file_view)
-            self.preview_splitter.addWidget(self.preview_label)
-            self.preview_splitter.setStretchFactor(0, 3)
-            self.preview_splitter.setStretchFactor(1, 2)
-            self.preview_splitter.setSizes([640, 360])
-            layout.addWidget(self.preview_splitter, 1, 0, 1, 3)
-        else:
-            layout.addWidget(self.preview_label)
-        self._preview_path = ""
-        self.currentChanged.connect(self._update_preview)
-
-    def _update_preview(self, path: str) -> None:
-        if not path or not Path(path).is_file():
-            self._preview_path = ""
-            self.preview_label.setPixmap(QPixmap())
-            self.preview_label.setText("画像を選択してください")
-            return
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            self._preview_path = ""
-            self.preview_label.setPixmap(QPixmap())
-            self.preview_label.setText("プレビューできない画像です")
-            return
-        self.preview_label.setText("")
-        self._preview_path = path
-        self._set_preview_pixmap(pixmap)
-
-    def _set_preview_pixmap(self, pixmap: QPixmap) -> None:
-        self.preview_label.setPixmap(
-            pixmap.scaled(
-                self.preview_label.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-        )
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if self._preview_path:
-            pixmap = QPixmap(self._preview_path)
-            if not pixmap.isNull():
-                self._set_preview_pixmap(pixmap)
+        value = self.age_input.value()
+        return None if value < 0 else value
 
 
 class RegisteredFacesDialog(QDialog):
-    def __init__(self, parent, person_name: str, face_records: List[dict]):
+    """人物に割り当て済みの顔を確認し、確定・解除する。"""
+
+    def __init__(self, parent, connection, person: dict):
         super().__init__(parent)
-        self.setWindowTitle(f"登録済みの顔 - {person_name}")
-        self.resize(760, 560)
-        self.face_records = face_records
+        self.connection = connection
+        self.person = person
+        self.setWindowTitle(f"割り当て済みの顔 - {person['name']}")
+        self.resize(820, 600)
+
         self.min_age = QSpinBox()
         self.min_age.setRange(0, 150)
         self.min_age.setSpecialValueText("指定なし")
@@ -188,14 +112,21 @@ class RegisteredFacesDialog(QDialog):
         self.max_age.setRange(0, 150)
         self.max_age.setSpecialValueText("指定なし")
         self.max_age.setValue(150)
-        self.preview_label = QLabel("顔画像を選択してください")
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(320, 320)
-        self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
 
-        self.thumbnail_layout = QGridLayout()
-        thumbnails = QWidget()
-        thumbnails.setLayout(self.thumbnail_layout)
+        self.face_list = QListWidget()
+        self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.face_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.face_list.setUniformItemSizes(True)
+        self.face_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+
+        self.confirm_button = QPushButton("選択した顔を確定")
+        self.unassign_button = QPushButton("割り当てを解除")
+        self.age_button = QPushButton("年齢を設定")
+        self.confirm_button.setToolTip("自動割当の顔を手動割当に昇格し、match の手本にする")
+        self.confirm_button.clicked.connect(self._confirm_selected)
+        self.unassign_button.clicked.connect(self._unassign_selected)
+        self.age_button.clicked.connect(self._set_age_selected)
 
         age_filter = QHBoxLayout()
         age_filter.addWidget(QLabel("年齢"))
@@ -203,56 +134,81 @@ class RegisteredFacesDialog(QDialog):
         age_filter.addWidget(QLabel("歳から"))
         age_filter.addWidget(self.max_age)
         age_filter.addWidget(QLabel("歳"))
-        self.min_age.valueChanged.connect(self._refresh_thumbnails)
-        self.max_age.valueChanged.connect(self._refresh_thumbnails)
+        age_filter.addStretch(1)
+        self.min_age.valueChanged.connect(self.reload)
+        self.max_age.valueChanged.connect(self.reload)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(thumbnails)
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(scroll_area)
-        splitter.addWidget(self.preview_label)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([360, 520])
+        actions = QHBoxLayout()
+        actions.addWidget(self.confirm_button)
+        actions.addWidget(self.unassign_button)
+        actions.addWidget(self.age_button)
+        actions.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.addLayout(age_filter)
-        layout.addWidget(splitter)
-        self._refresh_thumbnails()
+        layout.addWidget(self.face_list)
+        layout.addLayout(actions)
+        self.reload()
 
-    def _refresh_thumbnails(self) -> None:
-        while self.thumbnail_layout.count():
-            item = self.thumbnail_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        minimum = self.min_age.value()
-        maximum = self.max_age.value() or 150
-        for index, record in enumerate(
-            record for record in self.face_records
-            if record.get("age") is None or minimum <= record["age"] <= maximum
-        ):
-            image = QPixmap()
-            image.loadFromData(record["face_image"] or b"")
-            if image.isNull():
-                continue
-            button = QPushButton()
-            button.setIcon(image)
-            button.setIconSize(image.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation).size())
-            button.setFixedSize(160, 160)
-            button.setToolTip(f"登録顔 {index + 1} を拡大表示")
-            button.clicked.connect(lambda checked=False, pixmap=image: self._show_preview(pixmap))
-            self.thumbnail_layout.addWidget(button, index // 4, index % 4)
-
-    def _show_preview(self, pixmap: QPixmap) -> None:
-        self.preview_label.setText("")
-        self.preview_label.setPixmap(
-            pixmap.scaled(
-                self.preview_label.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
+    def reload(self) -> None:
+        minimum = self.min_age.value() or None
+        maximum = self.max_age.value() or None
+        records = db.list_faces(
+            self.connection,
+            person_id=self.person["id"],
+            with_thumbnail=True,
+            limit=PAGE_SIZE,
+            min_age=minimum,
+            max_age=maximum,
         )
+        _fill_face_list(self.face_list, records)
+
+    def _selected_ids(self) -> List[int]:
+        return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
+
+    def _confirm_selected(self) -> None:
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        db.assign_faces(self.connection, face_ids, self.person["id"], db.ASSIGN_MANUAL)
+        self.reload()
+
+    def _unassign_selected(self) -> None:
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        db.unassign_faces(self.connection, face_ids)
+        self.reload()
+
+    def _set_age_selected(self) -> None:
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        dialog = FaceAgeDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        age = dialog.age()
+        for face_id in face_ids:
+            db.set_face_age(self.connection, face_id, age)
+        self.reload()
+
+
+def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
+    widget.clear()
+    for record in records:
+        pixmap = QPixmap()
+        pixmap.loadFromData(record.get("thumbnail") or b"")
+        item = QListWidgetItem()
+        if not pixmap.isNull():
+            item.setIcon(pixmap)
+        label = str(record["id"])
+        if record.get("assign_source") == db.ASSIGN_AUTO:
+            label = f"{label} (自動 {record.get('assign_score') or 0:.0f})"
+        if record.get("age") is not None:
+            label = f"{label} {record['age']}歳"
+        item.setText(label)
+        item.setData(Qt.UserRole, record)
+        widget.addItem(item)
 
 
 class MainWindow(QWidget):
@@ -260,40 +216,107 @@ class MainWindow(QWidget):
         super().__init__()
         self.db_path = database_path
         self.connection = db.ensure_database(database_path)
-        self.setWindowTitle("PhotoArchiveAI 人物登録")
+        self.setWindowTitle("PhotoArchiveAI 人物登録と顔の割り当て")
+        self.page = 0
+
+        # --- 左: 人物 ---------------------------------------------------
         self.person_list = QListWidget()
         self.person_list.currentItemChanged.connect(self._on_person_selected)
-
         self.add_person_button = QPushButton("人物追加")
         self.edit_person_button = QPushButton("編集")
         self.delete_person_button = QPushButton("削除")
-        self.add_face_button = QPushButton("顔画像登録")
-        self.view_faces_button = QPushButton("登録顔を確認")
-
-        self.details_label = QLabel("人物詳細")
+        self.view_faces_button = QPushButton("割り当て済みを確認")
+        self.details_label = QLabel("人物を選択してください。")
         self.details_label.setWordWrap(True)
 
         self.add_person_button.clicked.connect(self._add_person)
         self.edit_person_button.clicked.connect(self._edit_person)
         self.delete_person_button.clicked.connect(self._delete_person)
-        self.add_face_button.clicked.connect(self._add_face_image)
-        self.view_faces_button.clicked.connect(self._view_registered_faces)
+        self.view_faces_button.clicked.connect(self._view_assigned_faces)
 
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.add_person_button)
-        button_layout.addWidget(self.edit_person_button)
-        button_layout.addWidget(self.delete_person_button)
-        button_layout.addWidget(self.add_face_button)
-        button_layout.addWidget(self.view_faces_button)
+        person_buttons = QHBoxLayout()
+        person_buttons.addWidget(self.add_person_button)
+        person_buttons.addWidget(self.edit_person_button)
+        person_buttons.addWidget(self.delete_person_button)
 
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(button_layout)
-        main_layout.addWidget(self.person_list)
-        main_layout.addWidget(self.details_label)
+        person_panel = QWidget()
+        person_layout = QVBoxLayout(person_panel)
+        person_layout.addLayout(person_buttons)
+        person_layout.addWidget(self.person_list)
+        person_layout.addWidget(self.view_faces_button)
+        person_layout.addWidget(self.details_label)
 
-        self.setLayout(main_layout)
-        self.resize(800, 600)
+        # --- 右: 顔 -----------------------------------------------------
+        self.filter_box = QComboBox()
+        self.filter_box.addItems([FILTER_UNASSIGNED, FILTER_AUTO, FILTER_REJECTED])
+        self.filter_box.currentIndexChanged.connect(self._reset_page)
+
+        self.face_list = QListWidget()
+        self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.face_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.face_list.setUniformItemSizes(True)
+        self.face_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+
+        self.assign_button = QPushButton("選択した顔を割り当て")
+        self.reject_button = QPushButton("この顔を除外")
+        self.assign_button.clicked.connect(self._assign_selected)
+        self.reject_button.clicked.connect(self._reject_selected)
+
+        self.prev_button = QPushButton("< 前")
+        self.next_button = QPushButton("次 >")
+        self.prev_button.clicked.connect(self._previous_page)
+        self.next_button.clicked.connect(self._next_page)
+        self.page_label = QLabel("-")
+
+        pager = QHBoxLayout()
+        pager.addWidget(self.filter_box)
+        pager.addStretch(1)
+        pager.addWidget(self.prev_button)
+        pager.addWidget(self.page_label)
+        pager.addWidget(self.next_button)
+
+        face_actions = QHBoxLayout()
+        face_actions.addWidget(self.assign_button)
+        face_actions.addWidget(self.reject_button)
+        face_actions.addStretch(1)
+
+        self.preview_label = QLabel("顔を選ぶと元写真から切り出して表示します。")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumWidth(320)
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
+        self.face_list.itemSelectionChanged.connect(self._show_preview)
+
+        face_area = QSplitter(Qt.Horizontal)
+        face_area.addWidget(self.face_list)
+        face_area.addWidget(self.preview_label)
+        face_area.setStretchFactor(0, 3)
+        face_area.setStretchFactor(1, 2)
+
+        face_panel = QWidget()
+        face_layout = QVBoxLayout(face_panel)
+        face_layout.addLayout(pager)
+        face_layout.addWidget(face_area)
+        face_layout.addLayout(face_actions)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(person_panel)
+        splitter.addWidget(face_panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([280, 780])
+
+        main_layout = QVBoxLayout(self)
+        main_layout.addWidget(splitter)
+        self.resize(1100, 720)
+
         self._reload_person_list()
+        self.reload_faces()
+
+    # ------------------------------------------------------------------
+    # 人物
+    # ------------------------------------------------------------------
 
     def _reload_person_list(self):
         self.person_list.clear()
@@ -303,35 +326,31 @@ class MainWindow(QWidget):
             self.person_list.addItem(item)
         self.details_label.setText("人物を選択してください。")
 
-    def _on_person_selected(self, current: QListWidgetItem, previous: QListWidgetItem):
+    def _current_person(self) -> Optional[dict]:
+        item = self.person_list.currentItem()
+        return None if item is None else item.data(Qt.UserRole)
+
+    def _on_person_selected(self, current: QListWidgetItem, previous: QListWidgetItem = None):
         if current is None:
             self.details_label.setText("人物を選択してください。")
             return
         person = current.data(Qt.UserRole)
-        embeddings = db.list_face_embeddings(self.connection, person['id'])
-        self.details_label.setText(
-            f"名前: {person['name']}\n続柄: {person.get('relation') or '-'}\nメモ: {person.get('memo') or '-'}\n登録顔数: {len(embeddings)}"
+        manual = db.count_faces(
+            self.connection, assign_source=db.ASSIGN_MANUAL, person_id=person["id"]
         )
-
-    def _view_registered_faces(self):
-        item = self.person_list.currentItem()
-        if item is None:
-            QMessageBox.information(self, "選択なし", "先に人物を選択してください。")
-            return
-        person = item.data(Qt.UserRole)
-        face_records = [record for record in db.list_face_embeddings(self.connection, person["id"]) if record.get("face_image")]
-        if not face_records:
-            QMessageBox.information(self, "登録顔なし", "この人物には登録済みの顔画像がありません。")
-            return
-        dialog = RegisteredFacesDialog(self, person["name"], face_records)
-        dialog.exec()
+        auto = db.count_faces(self.connection, assign_source=db.ASSIGN_AUTO, person_id=person["id"])
+        self.details_label.setText(
+            f"名前: {person['name']}\n"
+            f"続柄: {person.get('relation') or '-'}\n"
+            f"メモ: {person.get('memo') or '-'}\n"
+            f"手動割当: {manual} 件 / 自動割当: {auto} 件"
+        )
 
     def _add_person(self):
         dialog = PersonDialog(self)
         if dialog.exec() != QDialog.Accepted:
             return
-        values = dialog.values()
-        name, relation, memo = values[:3]
+        name, relation, memo = dialog.values()
         if not name:
             QMessageBox.warning(self, "入力エラー", "名前は必須です。")
             return
@@ -339,74 +358,153 @@ class MainWindow(QWidget):
         self._reload_person_list()
 
     def _edit_person(self):
-        item = self.person_list.currentItem()
-        if item is None:
+        person = self._current_person()
+        if person is None:
             return
-        person = item.data(Qt.UserRole)
-        dialog = PersonDialog(self, person['name'], person.get('relation') or '', person.get('memo') or '')
+        dialog = PersonDialog(
+            self, person["name"], person.get("relation") or "", person.get("memo") or ""
+        )
         if dialog.exec() != QDialog.Accepted:
             return
-        values = dialog.values()
-        name, relation, memo = values[:3]
+        name, relation, memo = dialog.values()
         if not name:
             QMessageBox.warning(self, "入力エラー", "名前は必須です。")
             return
-        db.update_person(self.connection, person['id'], name, relation, memo)
+        db.update_person(self.connection, person["id"], name, relation, memo)
         self._reload_person_list()
 
     def _delete_person(self):
-        item = self.person_list.currentItem()
-        if item is None:
+        person = self._current_person()
+        if person is None:
             return
-        person = item.data(Qt.UserRole)
-        if QMessageBox.question(self, "削除確認", f"{person['name']} を削除しますか？") != QMessageBox.Yes:
+        if QMessageBox.question(
+            self, "削除確認", f"{person['name']} を削除しますか？\n割り当て済みの顔は未割当に戻ります。"
+        ) != QMessageBox.Yes:
             return
-        db.delete_person(self.connection, person['id'])
+        db.delete_person(self.connection, person["id"])
         self._reload_person_list()
+        self.reload_faces()
 
-    def _add_face_image(self):
-        item = self.person_list.currentItem()
-        if item is None:
+    def _view_assigned_faces(self):
+        person = self._current_person()
+        if person is None:
             QMessageBox.information(self, "選択なし", "先に人物を選択してください。")
             return
-        person = item.data(Qt.UserRole)
-        file_dialog = ImageFileDialog(self)
-        if file_dialog.exec() != QDialog.Accepted:
+        if db.count_faces(self.connection, person_id=person["id"]) == 0:
+            QMessageBox.information(self, "割当なし", "この人物に割り当てられた顔はありません。")
             return
-        selected_files = file_dialog.selectedFiles()
-        if not selected_files:
-            return
-        selected_file = selected_files[0]
-        face_locations = detect_faces_in_file(selected_file)
-        if not face_locations:
-            QMessageBox.information(self, "顔検出なし", "この画像から顔を検出できませんでした。別の画像を試してください。")
-            return
-        selection_dialog = FaceSelectionDialog(self, selected_file, face_locations)
-        if selection_dialog.exec() != QDialog.Accepted or selection_dialog.selected_index is None:
-            return
-        chosen_location = face_locations[selection_dialog.selected_index]
-        age_dialog = FaceAgeDialog(self)
-        if age_dialog.exec() != QDialog.Accepted:
-            return
-        self._register_face(selected_file, person['id'], chosen_location, age_dialog.age())
-        self._on_person_selected(item, None)
+        dialog = RegisteredFacesDialog(self, self.connection, person)
+        dialog.exec()
+        self._on_person_selected(self.person_list.currentItem())
+        self.reload_faces()
 
-    def _register_face(self, image_path: str, person_id: int, face_location: tuple, age: Optional[int] = None):
-        rgb = _read_image(Path(image_path))
-        if rgb is None:
-            QMessageBox.warning(self, "登録失敗", "画像の読み込みに失敗しました。別の画像を試してください。")
+    # ------------------------------------------------------------------
+    # 顔一覧
+    # ------------------------------------------------------------------
+
+    def _filter_arguments(self) -> dict:
+        selected = self.filter_box.currentText()
+        if selected == FILTER_AUTO:
+            return {"assign_source": db.ASSIGN_AUTO}
+        if selected == FILTER_REJECTED:
+            return {"assign_source": db.ASSIGN_REJECTED}
+        return {"unassigned": True}
+
+    def _reset_page(self):
+        self.page = 0
+        self.reload_faces()
+
+    def reload_faces(self):
+        filters = self._filter_arguments()
+        total = db.count_faces(self.connection, **filters)
+        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page = max(0, min(self.page, pages - 1))
+        records = db.list_faces(
+            self.connection,
+            with_thumbnail=True,
+            limit=PAGE_SIZE,
+            offset=self.page * PAGE_SIZE,
+            **filters,
+        )
+        _fill_face_list(self.face_list, records)
+        self.page_label.setText(f"{self.page + 1} / {pages} ページ（全 {total} 件）")
+        self.prev_button.setEnabled(self.page > 0)
+        self.next_button.setEnabled(self.page < pages - 1)
+
+    def _previous_page(self):
+        self.page = max(0, self.page - 1)
+        self.reload_faces()
+
+    def _next_page(self):
+        self.page += 1
+        self.reload_faces()
+
+    def _selected_face_ids(self) -> List[int]:
+        return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
+
+    def _show_preview(self) -> None:
+        """選択中の顔を元写真から切り出して大きく表示する。
+
+        サムネイルは160pxまで縮めてあるので、確認には元画像から取り直す。
+        """
+        items = self.face_list.selectedItems()
+        if not items:
             return
-        embedding = compute_face_embedding(rgb, face_location)
-        if embedding is None:
-            QMessageBox.warning(self, "登録失敗", "顔埋め込みの生成に失敗しました。別の画像を試してください。")
+        record = db.get_face(self.connection, items[-1].data(Qt.UserRole)["id"])
+        if not record:
             return
-        image = Image.open(image_path).convert("RGB")
-        top, right, bottom, left = face_location
-        cropped = image.crop((left, top, right, bottom))
-        buffer = io.BytesIO()
-        cropped.save(buffer, format="JPEG", quality=90)
-        db.add_face_embedding(self.connection, person_id, embedding, face_image=buffer.getvalue(), age=age)
-        QMessageBox.information(self, "登録完了", "顔画像を登録しました。")
+        media = db.get_media_by_id(self.connection, record["media_id"])
+        if not media:
+            return
+        bbox = (
+            record["bbox_top"],
+            record["bbox_right"],
+            record["bbox_bottom"],
+            record["bbox_left"],
+        )
+        try:
+            data = face.load_face_image_bytes(Path(media["path"]), bbox)
+        except Exception as error:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText(f"元写真を開けません:\n{media['path']}\n{error}")
+            return
+        pixmap = QPixmap()
+        pixmap.loadFromData(data)
+        if pixmap.isNull():
+            return
+        self.preview_label.setText("")
+        self.preview_label.setPixmap(
+            pixmap.scaled(
+                self.preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+        )
+
+    def assign_faces(self, face_ids: List[int], person_id: int, age: Optional[int] = None) -> int:
+        """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。"""
+        return db.assign_faces(self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age)
+
+    def _assign_selected(self):
+        person = self._current_person()
+        if person is None:
+            QMessageBox.information(self, "選択なし", "先に人物を選択してください。")
+            return
+        face_ids = self._selected_face_ids()
+        if not face_ids:
+            QMessageBox.information(self, "選択なし", "割り当てる顔を選択してください。")
+            return
+        dialog = FaceAgeDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.assign_faces(face_ids, person["id"], dialog.age())
+        self.reload_faces()
+        self._on_person_selected(self.person_list.currentItem())
+
+    def _reject_selected(self):
+        face_ids = self._selected_face_ids()
+        if not face_ids:
+            return
+        db.reject_faces(self.connection, face_ids)
+        self.reload_faces()
 
 
 def main() -> None:
