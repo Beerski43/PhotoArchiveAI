@@ -15,7 +15,7 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -632,6 +632,47 @@ def load_manual_embeddings(
     matrix = np.vstack([decode_embedding(row["embedding"]) for row in rows])
     person_ids = np.asarray([row["person_id"] for row in rows], dtype=np.int64)
     return matrix, person_ids
+
+
+class ManualFaces(NamedTuple):
+    """手本の顔を、評価に必要な付随情報ごと持つ。
+
+    ``face_ids`` / ``media_ids`` / ``person_ids`` / ``embeddings`` は
+    **同じ添字が同じ顔**を指す。
+    """
+
+    face_ids: np.ndarray
+    media_ids: np.ndarray
+    person_ids: np.ndarray
+    embeddings: np.ndarray
+
+
+def load_manual_faces(connection: sqlite3.Connection) -> ManualFaces:
+    """手本の顔を、face_id と media_id つきで読み出す。
+
+    ``load_manual_embeddings`` との違いは添字を引ける情報が付くこと。
+    交差検証は「いま抜いている顔はどれか」「同じ写真に写っている手本はどれか」
+    を知る必要があるが、match 本体には不要なので関数を分けている。
+    """
+    rows = connection.execute(
+        "SELECT id, media_id, person_id, embedding FROM Face"
+        " WHERE person_id IS NOT NULL AND assign_source = ? AND embedding IS NOT NULL"
+        " ORDER BY id",
+        (ASSIGN_MANUAL,),
+    ).fetchall()
+    if not rows:
+        return ManualFaces(
+            np.empty((0,), dtype=np.int64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, EMBEDDING_DIM), dtype=EMBEDDING_DTYPE),
+        )
+    return ManualFaces(
+        np.asarray([row["id"] for row in rows], dtype=np.int64),
+        np.asarray([row["media_id"] for row in rows], dtype=np.int64),
+        np.asarray([row["person_id"] for row in rows], dtype=np.int64),
+        np.vstack([decode_embedding(row["embedding"]) for row in rows]),
+    )
 
 
 #: match が一度に読み出す顔の件数。matcher と二重に持たない。

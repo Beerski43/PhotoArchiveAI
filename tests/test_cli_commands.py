@@ -146,3 +146,152 @@ def test_the_database_path_falls_back_to_the_settings_file(tmp_path, monkeypatch
     run_cli(["init-db"], tmp_path)
 
     assert database.exists()
+
+
+def test_evaluate_arguments_reach_the_evaluation(tmp_path, monkeypatch):
+    """閾値の並びとマージンがそのまま下へ渡ること。
+
+    ここがずれると、表に出る閾値と実際に試した閾値が食い違う。
+    """
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    captured = {}
+
+    def fake_evaluate(connection, thresholds, margin, keep_same_media, progress_callback):
+        captured.update(
+            thresholds=thresholds, margin=margin, keep_same_media=keep_same_media
+        )
+        return {"teachers": 0, "person_names": {}}
+
+    monkeypatch.setattr(cli, "evaluate_match", fake_evaluate)
+    monkeypatch.setattr(cli, "format_report", lambda summary: "報告")
+    run_cli(
+        ["evaluate", "--db", str(database), "--thresholds", "0.4, 0.45",
+         "--margin", "0.1", "--keep-same-media"],
+        tmp_path,
+    )
+
+    assert captured["thresholds"] == [0.4, 0.45]
+    assert captured["margin"] == pytest.approx(0.1)
+    assert captured["keep_same_media"] is True
+
+
+def test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped(tmp_path):
+    """読めない閾値を黙って捨てない。捨てると、頼んだ閾値が表から消える。"""
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(["evaluate", "--db", str(database), "--thresholds", "0.4,およそ0.5"], tmp_path)
+
+    assert "閾値として読めない値です" in str(raised.value)
+
+
+def test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces(tmp_path, capsys):
+    """CLI から実際に数字が出るところまで通す。"""
+    import numpy as np
+
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    connection = db.ensure_database(str(database))
+    person = db.add_person(connection, "Alice")
+    for index, offset in enumerate((0.0, 0.01), start=1):
+        media = db.save_media(
+            connection,
+            {
+                "path": f"/photos/{index}.jpg",
+                "filename": f"{index}.jpg",
+                "type": "image",
+                "file_hash": f"hash{index}",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+            },
+        )
+        vector = np.zeros(128, dtype=np.float32)
+        vector[0] = offset
+        db.add_face(
+            connection,
+            media_id=media,
+            bbox=(0, 10, 10, 0),
+            embedding=vector,
+            embed_version="test",
+            person_id=person,
+            assign_source=db.ASSIGN_MANUAL,
+        )
+    connection.commit()
+    connection.close()
+    capsys.readouterr()
+
+    run_cli(["evaluate", "--db", str(database), "--thresholds", "0.4"], tmp_path)
+
+    output = capsys.readouterr().out
+    assert "Alice" in output
+    assert "取りこぼし" in output
+
+
+def test_the_same_threshold_given_twice_is_counted_once(tmp_path, capsys):
+    """同じ閾値を2度渡しても、行が2つに割れて率が壊れないこと。
+
+    集計先は閾値の値で引くので、重複すると片方が0件、もう片方が2倍になり
+    **正解率が 200% になる。** 表に「0.40 で正解 0.0%」という行が並ぶと、
+    読み手は「0.4 では全部取りこぼす」と受け取り、閾値を緩める方向へ倒れる。
+    """
+    import numpy as np
+
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    connection = db.ensure_database(str(database))
+    person = db.add_person(connection, "Alice")
+    for index, offset in enumerate((0.0, 0.01), start=1):
+        media = db.save_media(
+            connection,
+            {
+                "path": f"/photos/{index}.jpg",
+                "filename": f"{index}.jpg",
+                "type": "image",
+                "file_hash": f"hash{index}",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+            },
+        )
+        vector = np.zeros(128, dtype=np.float32)
+        vector[0] = offset
+        db.add_face(
+            connection,
+            media_id=media,
+            bbox=(0, 10, 10, 0),
+            embedding=vector,
+            embed_version="test",
+            person_id=person,
+            assign_source=db.ASSIGN_MANUAL,
+        )
+    connection.commit()
+    connection.close()
+    capsys.readouterr()
+
+    run_cli(["evaluate", "--db", str(database), "--thresholds", "0.4,0.40"], tmp_path)
+
+    output = capsys.readouterr().out
+    assert output.count("  0.40") == 1
+    assert "200.0%" not in output
+    # 人物ごとの表が見出しだけにならないこと
+    assert "Alice" in output
+
+
+# "-inf" は argparse がオプション名とみなすのでここでは渡せない。
+# 負の無限大は `math.isfinite` で同じ枝に落ちる。
+@pytest.mark.parametrize("value", ["nan", "inf", "0", "-1"])
+def test_a_threshold_that_is_not_a_positive_finite_number_stops(tmp_path, value):
+    """`nan` は float として読めてしまうが、閾値としては通してはいけない。
+
+    `best_distance > nan` は常に False なので、**閾値を掛けていないのと
+    同じ判定**になる。表には `nan 100.0%` と出て、まるで取りこぼしが
+    無いように見える。
+    """
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(["evaluate", "--db", str(database), "--thresholds", value], tmp_path)
+
+    assert "正の有限の数" in str(raised.value)
