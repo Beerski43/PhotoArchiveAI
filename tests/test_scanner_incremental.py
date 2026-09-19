@@ -286,3 +286,16 @@ def test_an_error_from_one_file_is_not_reported_for_the_next(tmp_path, connectio
     summary = scan_directory(str(source), connection, workers=1)
 
     assert summary["errors"] == 0
+
+
+def test_media_type_is_image_or_video(tmp_path):
+    """type の値域は "image" / "video" / None。
+
+    テストの作り物が "photo" を使っていて実装とずれていた。
+    selection が `!= "video"` で判定しているため実害は出ていなかったが、
+    作り物が実装と違う値を使っていると、後から読む人が誤解する。
+    """
+    assert scanner.get_media_type(tmp_path / "a.JPG") == "image"
+    assert scanner.get_media_type(tmp_path / "a.heic") == "image"
+    assert scanner.get_media_type(tmp_path / "a.mp4") == "video"
+    assert scanner.get_media_type(tmp_path / "a.txt") is None

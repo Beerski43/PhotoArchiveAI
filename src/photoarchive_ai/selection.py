@@ -103,6 +103,23 @@ def select_media(connection, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
     return filtered
 
 
+def _free_path(destination: Path) -> Path:
+    """空いているコピー先を返す。
+
+    以前は「コピー済みの総数」を連番に使っていたため、一意である保証が
+    無く、名前の意味も取れなかった。空くまで数を増やす。
+    """
+    if not destination.exists():
+        return destination
+    stem, suffix = destination.stem, destination.suffix
+    number = 1
+    while True:
+        candidate = destination.with_name(f"{stem}_{number}{suffix}")
+        if not candidate.exists():
+            return candidate
+        number += 1
+
+
 def copy_selected_media(
     selected_media: List[Dict[str, Any]],
     output_dir: str,
@@ -132,10 +149,7 @@ def copy_selected_media(
             relative = source_path.name
         destination = output_root.joinpath(relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists():
-            base = destination.stem
-            suffix = destination.suffix
-            destination = destination.with_name(f"{base}_{copied}{suffix}")
+        destination = _free_path(destination)
         shutil.copy2(source_path, destination)
         copied += 1
         if progress_callback is not None:

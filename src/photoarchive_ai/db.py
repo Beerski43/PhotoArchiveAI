@@ -6,7 +6,7 @@
                NULL=未scan / 0=顔なし / N=検出数 を表す。
 - ``Face``   : 写真から検出された顔。人物への紐づけは ``person_id`` と
                ``assign_source`` ('manual' / 'auto' / 'rejected') で表す。
-               手動割当だけが自動紐づけ (match) の教師データになる。
+               手動割当だけが自動紐づけ (match) の手本になる。
 - ``Person`` : 人物。
 - ``AnalysisResult`` : メディア単位のスコア。smile/quality は scan が、
                family は match が書く。
@@ -611,7 +611,7 @@ def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int
 def load_manual_embeddings(
     connection: sqlite3.Connection,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """自動紐づけの教師データを読み出す。
+    """自動紐づけの手本を読み出す。
 
     自動紐づけの結果 (``assign_source='auto'``) は教師に含めない。混ぜると
     誤った紐づけが次回以降の基準として増幅されるため。

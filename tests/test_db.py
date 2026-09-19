@@ -7,7 +7,7 @@ def _media_record(path="2025/01/test.jpg", file_hash="dummyhash"):
     return {
         "path": path,
         "filename": Path(path).name,
-        "type": "photo",
+        "type": "image",
         "file_hash": file_hash,
         "file_size": 12345,
         "created_time": "2025-01-01T00:00:00",

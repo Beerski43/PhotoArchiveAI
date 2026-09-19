@@ -52,7 +52,7 @@ def test_select_media_filters_by_rule(tmp_path: Path):
     media_record_photo = {
         "path": "2025/photo.jpg",
         "filename": "photo.jpg",
-        "type": "photo",
+        "type": "image",
         "file_hash": "hash1",
         "file_size": 100,
         "created_time": "2025-01-01T12:00:00",
@@ -75,7 +75,7 @@ def test_select_media_filters_by_rule(tmp_path: Path):
     selected = select_media(connection, rule)
 
     assert len(selected) == 1
-    assert selected[0]["type"] == "photo"
+    assert selected[0]["type"] == "image"
     assert selected[0]["path"] == media_record_photo["path"]
 
     output_dir = tmp_path / "output"
@@ -243,3 +243,23 @@ def test_copy_skips_entries_without_a_path_and_reports_progress(tmp_path: Path):
 
     assert copied == 1
     assert seen == [(2, 2, "photo.jpg")]
+
+
+def test_copy_makes_room_when_the_name_is_taken(tmp_path: Path):
+    source_root = tmp_path / "src"
+    (source_root / "a").mkdir(parents=True)
+    (source_root / "b").mkdir()
+    (source_root / "a" / "photo.jpg").write_text("a", encoding="utf-8")
+    (source_root / "b" / "photo.jpg").write_text("b", encoding="utf-8")
+    output = tmp_path / "out"
+
+    copied = copy_selected_media(
+        [{"path": str(source_root / "a" / "photo.jpg")},
+         {"path": str(source_root / "b" / "photo.jpg")}],
+        str(output),
+        str(tmp_path / "unrelated"),
+    )
+
+    assert copied == 2
+    assert (output / "photo.jpg").read_text(encoding="utf-8") == "a"
+    assert (output / "photo_1.jpg").read_text(encoding="utf-8") == "b"
