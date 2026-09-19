@@ -192,3 +192,124 @@ def test_check_is_quiet_when_nothing_needs_moving(tmp_path: Path, archive_worklo
 
 def test_a_missing_worklog_is_not_an_error(tmp_path: Path, archive_worklog):
     assert archive_worklog.main(["--worklog", str(tmp_path / "absent.md")]) == 0
+
+
+def test_a_section_that_is_not_a_dated_entry_survives(tmp_path: Path, archive_worklog):
+    """日付エントリでない節を消さないこと。
+
+    このスクリプトは毎コミット実行する決まりなので、消えると git 管理下の
+    文書が静かに欠落する。警告は流れて気づけない。
+    """
+    worklog = tmp_path / "WORKLOG.md"
+    worklog.write_text(
+        "# 作業履歴\n\n新しいものが上。\n\n"
+        "## 運用メモ\n\nこの節は日付エントリではない。\n\n"
+        "## 2026-09-19 — なにか\n\n本文。\n",
+        encoding="utf-8",
+    )
+
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "20"])
+    text = worklog.read_text(encoding="utf-8")
+
+    assert "## 運用メモ" in text
+    assert "この節は日付エントリではない。" in text
+    # 前書きの一部なので、エントリより前のまま動かない。
+    assert text.index("## 運用メモ") < text.index("## 2026-09-19")
+
+
+def test_a_section_after_the_entries_is_moved_to_the_end_not_dropped(
+    tmp_path: Path, archive_worklog, capsys
+):
+    worklog = tmp_path / "WORKLOG.md"
+    worklog.write_text(
+        "# 作業履歴\n\n"
+        "## 2026-09-19 — 新しい\n\n本文A。\n\n"
+        "## 参考リンク\n\nhttps://example.com\n\n"
+        "## 2026-09-01 — 古い\n\n本文B。\n",
+        encoding="utf-8",
+    )
+
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "20"])
+    text = worklog.read_text(encoding="utf-8")
+
+    assert "## 参考リンク" in text
+    assert "https://example.com" in text
+    assert "本文A。" in text and "本文B。" in text
+    # 日付エントリはすべて参考リンクより前に来る。
+    assert text.index("## 2026-09-01") < text.index("## 参考リンク")
+    assert "末尾へ移した" in capsys.readouterr().out
+
+
+def test_sections_that_are_not_entries_stay_put_on_a_second_run(
+    tmp_path: Path, archive_worklog
+):
+    worklog = tmp_path / "WORKLOG.md"
+    worklog.write_text(
+        "# 作業履歴\n\n## 運用メモ\n\nメモ。\n\n"
+        "## 2026-09-19 — 新しい\n\n本文A。\n\n"
+        "## 参考リンク\n\nリンク。\n",
+        encoding="utf-8",
+    )
+
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "20"])
+    first = worklog.read_text(encoding="utf-8")
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "20"])
+
+    assert worklog.read_text(encoding="utf-8") == first
+
+
+def test_sections_survive_an_actual_archiving_run(tmp_path: Path, archive_worklog):
+    worklog = tmp_path / "WORKLOG.md"
+    worklog.write_text(
+        "# 作業履歴\n\n## 運用メモ\n\nメモ。\n\n"
+        "## 2026-09-03 — c\n\n本文C。\n\n"
+        "## 2026-09-02 — b\n\n本文B。\n\n"
+        "## 2026-09-01 — a\n\n本文A。\n\n"
+        "## 参考リンク\n\nリンク。\n",
+        encoding="utf-8",
+    )
+
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "1"])
+    text = worklog.read_text(encoding="utf-8")
+
+    assert "## 運用メモ" in text and "メモ。" in text
+    assert "## 参考リンク" in text and "リンク。" in text
+    assert headings(text) == ["## 2026-09-03 — c"]
+    assert headings((tmp_path / "archive" / "WORKLOG-2026.md").read_text(encoding="utf-8")) == [
+        "## 2026-09-02 — b",
+        "## 2026-09-01 — a",
+    ]
+
+
+def test_a_log_without_any_dated_entry_is_left_alone(tmp_path: Path, archive_worklog):
+    worklog = tmp_path / "WORKLOG.md"
+    original = "# 作業履歴\n\nまだ何も書いていない。\n\n## 運用メモ\n\nメモだけある。\n"
+    worklog.write_text(original, encoding="utf-8")
+
+    assert archive_worklog.main(["--worklog", str(worklog), "--keep", "20"]) == 0
+
+    text = worklog.read_text(encoding="utf-8")
+    assert "## 運用メモ" in text and "メモだけある。" in text
+
+
+def test_the_archive_keeps_its_own_text_when_the_heading_is_repeated(
+    tmp_path: Path, archive_worklog
+):
+    """切り出し済みの記録は、あとから書き換えない(意図した優先順位)。"""
+    worklog = write_worklog(
+        tmp_path / "WORKLOG.md", [("2026-09-02", "b"), ("2026-09-01", "a")]
+    )
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "1"])
+
+    # 切り出し済みと同じ見出しを、本文を変えて書き戻す。
+    worklog.write_text(
+        worklog.read_text(encoding="utf-8").replace(
+            "## 2026-09-02 — b", "## 2026-09-01 — a\nあとから書いた本文。\n\n## 2026-09-02 — b"
+        ),
+        encoding="utf-8",
+    )
+    archive_worklog.main(["--worklog", str(worklog), "--keep", "1"])
+
+    archived = (tmp_path / "archive" / "WORKLOG-2026.md").read_text(encoding="utf-8")
+    assert "a の本文。" in archived
+    assert "あとから書いた本文。" not in archived

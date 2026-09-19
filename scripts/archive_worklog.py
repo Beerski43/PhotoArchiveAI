@@ -20,7 +20,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 DEFAULT_KEEP = 20
 INDEX_HEADING = "## 過去の履歴"
@@ -44,28 +44,44 @@ class Entry:
 
 
 def split_document(text: str) -> Tuple[str, List[Entry], List[str]]:
-    """前書き・エントリ・エントリ以外の節に分ける。
+    """前書き・エントリ・それ以外の節に分ける。
 
-    「過去の履歴」の索引は毎回作り直すので、ここでは捨てる。
+    戻り値の3つ目は「日付エントリでも索引でもない節」。**捨てない。**
+    日付エントリより前にあるものは前書きに含めてそのまま残し、あとにある
+    ものだけをここに入れて末尾へ書き戻す。以前はこれを見出しだけ拾って
+    警告し、本文ごと捨てていたため、WORKLOG.md に日付以外の節を1つ書くと
+    静かに消えていた(このスクリプトは毎コミット実行する)。
+
+    「過去の履歴」の索引だけは毎回作り直すので捨ててよい。
     """
     lines = text.splitlines()
     starts = [i for i, line in enumerate(lines) if line.startswith("## ")]
-    if not starts:
-        return text.rstrip() + "\n", [], []
+    index_starts = [i for i in starts if lines[i].strip() == INDEX_HEADING]
+    dated_starts = [i for i in starts if ENTRY_PATTERN.match(lines[i])]
 
-    preamble = "\n".join(lines[: starts[0]]).rstrip()
+    if not dated_starts:
+        # 日付エントリが無い。索引だけ落として、ほかはそのまま返す。
+        cut = index_starts[0] if index_starts else len(lines)
+        return "\n".join(lines[:cut]).rstrip() + "\n", [], []
+
+    first = dated_starts[0]
+    # 最初の日付エントリより前は、見出しがあっても前書きとして丸ごと残す。
+    preamble = "\n".join(lines[:first]).rstrip() + "\n"
+
     bounds = starts + [len(lines)]
     entries: List[Entry] = []
-    strays: List[str] = []
-    for index, start in enumerate(starts):
+    trailing: List[str] = []
+    for position, start in enumerate(starts):
+        if start < first:
+            continue
         heading = lines[start]
-        body = "\n".join(lines[start + 1 : bounds[index + 1]]).rstrip()
+        body = "\n".join(lines[start + 1 : bounds[position + 1]]).rstrip()
         match = ENTRY_PATTERN.match(heading)
         if match:
             entries.append(Entry(date="-".join(match.groups()), heading=heading, body=body))
         elif heading.strip() != INDEX_HEADING:
-            strays.append(heading)
-    return preamble + "\n", entries, strays
+            trailing.append(f"{heading}\n{body}".rstrip() + "\n")
+    return preamble, entries, trailing
 
 
 def sort_newest_first(entries: List[Entry]) -> List[Entry]:
@@ -73,10 +89,17 @@ def sort_newest_first(entries: List[Entry]) -> List[Entry]:
     return sorted(entries, key=lambda entry: entry.date, reverse=True)
 
 
-def render_worklog(preamble: str, entries: List[Entry], archives: List[str]) -> str:
+def render_worklog(
+    preamble: str,
+    entries: List[Entry],
+    archives: List[str],
+    trailing: Optional[List[str]] = None,
+) -> str:
     parts = [preamble.rstrip() + "\n"]
     for entry in entries:
         parts.append("\n" + entry.render())
+    for section in trailing or []:
+        parts.append("\n" + section)
     if archives:
         parts.append("\n" + INDEX_HEADING + "\n\n")
         for name in archives:
@@ -104,7 +127,12 @@ def load_archive(path: Path) -> List[Entry]:
 
 
 def merge(existing: List[Entry], incoming: List[Entry]) -> List[Entry]:
-    """既にあるエントリは残し、無いものだけ足す。見出し行をキーにする。"""
+    """既にあるエントリは残し、無いものだけ足す。見出し行をキーにする。
+
+    **アーカイブ側が勝つ。** 同じ見出しが WORKLOG 側にあっても、切り出し済みの
+    本文は書き換えない。「一度切り出したものは触らない」という意図で、
+    過去の記録が後から書き換わらないようにしている。
+    """
     by_heading: Dict[str, Entry] = {entry.heading: entry for entry in existing}
     for entry in incoming:
         by_heading.setdefault(entry.heading, entry)
@@ -116,9 +144,10 @@ def archive(worklog_path: Path, keep: int, check_only: bool) -> int:
         print(f"  {worklog_path} が無い")
         return 0
 
-    preamble, entries, strays = split_document(worklog_path.read_text(encoding="utf-8"))
-    for heading in strays:
-        print(f"  警告: エントリとして読めない見出しがある: {heading}")
+    preamble, entries, trailing = split_document(worklog_path.read_text(encoding="utf-8"))
+    for section in trailing:
+        heading = section.splitlines()[0]
+        print(f"  日付エントリでない節を末尾へ移した: {heading}")
 
     ordered = sort_newest_first(entries)
     kept, overflow = ordered[:keep], ordered[keep:]
@@ -150,7 +179,9 @@ def archive(worklog_path: Path, keep: int, check_only: bool) -> int:
     names = sorted(
         (path.name for path in archive_dir.glob("WORKLOG-*.md")), reverse=True
     ) if archive_dir.exists() else []
-    worklog_path.write_text(render_worklog(preamble, kept, names), encoding="utf-8")
+    worklog_path.write_text(
+        render_worklog(preamble, kept, names, trailing), encoding="utf-8"
+    )
     if by_year:
         print(f"  {worklog_path} に直近 {len(kept)} 件を残した")
     else:

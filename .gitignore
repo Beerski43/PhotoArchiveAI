@@ -23,6 +23,7 @@ data/
 output/
 models/
 
-# 利用者ごとの設定（sample のみ管理する）
-config/app_settings.json
-config/rule.json
+# 利用者ごとの設定。sample だけ管理する
+# (Issue #27 でルールを YAML にしても漏れないよう、名指しにしない)
+config/*
+!config/*.sample.json

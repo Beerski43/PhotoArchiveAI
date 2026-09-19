@@ -299,3 +299,67 @@ def test_media_type_is_image_or_video(tmp_path):
     assert scanner.get_media_type(tmp_path / "a.heic") == "image"
     assert scanner.get_media_type(tmp_path / "a.mp4") == "video"
     assert scanner.get_media_type(tmp_path / "a.txt") is None
+
+
+def test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns(
+    tmp_path, connection, monkeypatch
+):
+    """--allow-missing-embeddings で入れた顔が、あとで自動的に拾い直されること。
+
+    detector_version を書いてしまうと、モデルを設置しても差分判定が
+    「版が一致する」と見なして全件スキップし、--force-rescan 以外に回収
+    手段が無くなる。--force-rescan は手動割り当てを巻き添えにするので、
+    A3 が防ごうとした状態が逃げ道側に残ってしまう。
+    """
+    source = tmp_path / "media"
+    write_image(source / "a.jpg")
+
+    monkeypatch.setattr(scanner.face, "embedding_available", lambda: False)
+    monkeypatch.setattr(scanner.face, "compute_embedding", lambda rgb, location: None)
+    summary = scan_directory(
+        str(source), connection, workers=1, allow_missing_embeddings=True
+    )
+
+    assert summary["processed"] == 1
+    media = db.list_media(connection)[0]
+    assert media["face_count"] == 1
+    # 顔は貯まるが、検出は「未完了」として残す。
+    assert media["detector_version"] is None
+    face_id = db.list_faces(connection, unassigned=True)[0]["id"]
+    assert db.get_face(connection, face_id)["embedding"] is None
+
+    # モデルが戻れば、通常の scan が拾い直す。
+    monkeypatch.undo()
+    summary = scan_directory(str(source), connection, workers=1)
+
+    assert summary["processed"] == 1
+    assert summary["skipped"] == 0
+    media = db.list_media(connection)[0]
+    assert media["detector_version"] == scanner.face.DETECTOR_VERSION
+    faces = db.list_faces(connection, unassigned=True)
+    assert len(faces) == 1
+    assert db.get_face(connection, faces[0]["id"])["embedding"] is not None
+
+
+def test_a_photo_whose_faces_are_all_too_small_is_still_marked_scanned(
+    tmp_path, connection, monkeypatch
+):
+    """特徴量が作れなかった理由がモデル不在でないなら、再スキャンしない。
+
+    顔が小さすぎて embedding が NULL になるのは正常な結果。これを
+    「未完了」と扱うと、小さい顔しか写っていない写真を毎回読み直す。
+    """
+    source = tmp_path / "media"
+    write_image(source / "a.jpg")
+    monkeypatch.setattr(scanner.face, "compute_embedding", lambda rgb, location: None)
+
+    scan_directory(str(source), connection, workers=1)
+
+    media = db.list_media(connection)[0]
+    assert media["face_count"] == 1
+    assert media["detector_version"] == scanner.face.DETECTOR_VERSION
+    face_id = db.list_faces(connection, unassigned=True)[0]["id"]
+    assert db.get_face(connection, face_id)["embedding"] is None
+
+    summary = scan_directory(str(source), connection, workers=1)
+    assert summary["skipped"] == 1
