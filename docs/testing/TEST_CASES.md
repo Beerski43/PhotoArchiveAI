@@ -1,11 +1,13 @@
 # テスト項目一覧
 
-全 196 件 / 17 ファイル。実行時間は wall clock で 3 秒程度。
-実行方法は [TESTING.md](TESTING.md)。
+**何がテストで守られているか**の一覧。実行方法は [TESTING.md](TESTING.md)。
 
-`models` マーカーの2件だけが実物の学習済みモデルを必要とし、
+いま何件あるかはここには書かない（数えるたびに更新が要るため）。
+`pytest -q --collect-only | tail -1` で分かる。
+
+`models` マーカーのテストだけが実物の学習済みモデルを必要とし、
 無い環境では自動的にスキップされる。**回帰テスト
-（`./scripts/run_regression.sh`）はこの2件を合否に含めない。**
+（`./scripts/run_regression.sh`）はこれらを合否に含めない。**
 
 ---
 
@@ -239,6 +241,13 @@ Media と Person を温存し Face と AnalysisResult を破棄すること、�
 CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした行。着色された
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
 成功のように見せないこと。
+
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
+
+`CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
+見る。書いてしまうと**関係のない変更のたびに更新が要り**、忘れれば
+いちばんよく読まれる2つの文書が静かに嘘になる。番人自身が働くことも
+確かめている（数字を戻すと落ちること、`N passed / M failed` の書式は通ること）。
 
 ### `test_system.py` — 通し（2件、`system` マーカー）
 
