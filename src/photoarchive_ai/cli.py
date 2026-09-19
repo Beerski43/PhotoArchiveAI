@@ -1,20 +1,23 @@
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .analyzer import analyze_database, get_latest_error
 from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
 from .converter import convert_heic_files
-from .db import ensure_database
-from .scanner import scan_directory
+from .db import SchemaVersionError, ensure_database
+from .face import get_latest_error
+from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
+from .migration import describe_migration, migrate_database, needs_migration
+from .scanner import ScanAborted, scan_directory
 from .selection import copy_selected_media, load_rule, select_media
 
 
 def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") -> logging.Logger:
-    """Set up file logging for the CLI and all analyzer children."""
+    """Set up file logging for the CLI and all photoarchive children."""
     logger = logging.getLogger("photoarchive")
     level = getattr(logging, log_level.upper(), None)
     if not isinstance(level, int):
@@ -63,24 +66,8 @@ def _emit_progress(
         _progress_started = False
 
 
-def main() -> None:
-    global _progress_started
-    parser = argparse.ArgumentParser(prog="photoarchive")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    init_parser = subparsers.add_parser("init-db", help="Initialize SQLite database.")
-    init_parser.add_argument("--db", help="SQLite database path.")
-
-    scan_parser = subparsers.add_parser("scan", help="Scan source media into the database.")
-    scan_parser.add_argument("--source", help="Source directory to scan.")
-    scan_parser.add_argument("--db", help="SQLite database path.")
-
-    convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
-    convert_parser.add_argument("--source", help="Directory to convert recursively.")
-
-    analyze_parser = subparsers.add_parser("analyze", help="Run AI analysis on scanned media.")
-    analyze_parser.add_argument("--db", help="SQLite database path.")
-    analyze_parser.add_argument(
+def _add_log_level(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         type=str.upper,
@@ -88,102 +75,250 @@ def main() -> None:
         help="Log verbosity (default: WARNING).",
     )
 
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="photoarchive")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser("init-db", help="Initialize SQLite database.")
+    init_parser.add_argument("--db", help="SQLite database path.")
+
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="Migrate an existing database to the current schema."
+    )
+    migrate_parser.add_argument("--db", help="SQLite database path.")
+    migrate_parser.add_argument("--backup", help="Backup file path (default: <db>.bak-<timestamp>).")
+    migrate_parser.add_argument(
+        "--no-vacuum", action="store_true", help="Skip VACUUM after the migration."
+    )
+    migrate_parser.add_argument(
+        "--yes", action="store_true", help="Do not ask for confirmation."
+    )
+
+    scan_parser = subparsers.add_parser(
+        "scan", help="Scan source media, detect faces and store them in the database."
+    )
+    scan_parser.add_argument("--source", help="Source directory to scan.")
+    scan_parser.add_argument("--db", help="SQLite database path.")
+    scan_parser.add_argument(
+        "--workers",
+        type=int,
+        default=min(4, max(1, (os.cpu_count() or 2) - 1)),
+        help="Number of worker processes for face detection.",
+    )
+    scan_parser.add_argument(
+        "--no-prune", action="store_true", help="Keep database rows whose files are gone."
+    )
+    scan_parser.add_argument(
+        "--force-prune", action="store_true", help="Delete missing files even if many are gone."
+    )
+    scan_parser.add_argument(
+        "--force-rescan", action="store_true", help="Detect faces again for every media file."
+    )
+    _add_log_level(scan_parser)
+
+    convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
+    convert_parser.add_argument("--source", help="Directory to convert recursively.")
+
+    match_parser = subparsers.add_parser(
+        "match", help="Assign remaining faces automatically using the faces assigned in the GUI."
+    )
+    match_parser.add_argument("--db", help="SQLite database path.")
+    match_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help=f"Maximum face distance to accept (default: {DEFAULT_THRESHOLD}).",
+    )
+    match_parser.add_argument(
+        "--margin",
+        type=float,
+        default=DEFAULT_MARGIN,
+        help=f"Required distance gap to the runner-up person (default: {DEFAULT_MARGIN}).",
+    )
+    match_parser.add_argument(
+        "--no-reset", action="store_true", help="Keep existing automatic assignments."
+    )
+    match_parser.add_argument(
+        "--dry-run", action="store_true", help="Report what would be assigned without writing."
+    )
+    _add_log_level(match_parser)
+
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="JSON or YAML rule file path.")
     select_parser.add_argument("--output", help="Output directory for selected media.")
     select_parser.add_argument("--source", help="Source root directory for relative output paths.")
 
+    return parser
+
+
+def _run_migrate(args, db_path: str) -> None:
+    if not Path(db_path).exists():
+        raise SystemExit(f"Database does not exist: {db_path}")
+    if not needs_migration(db_path):
+        print("スキーマはすでに最新です。移行は不要です。")
+        return
+    info = describe_migration(db_path)
+    print(f"移行対象: {db_path}")
+    print(f"  Media {info['media']} 件 / Person {info['persons']} 件 は保持します。")
+    print(
+        f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
+        " 顔検出をやり直します。"
+    )
+    if not args.yes:
+        answer = input("続行しますか? [y/N]: ")
+        if answer.strip().lower() not in {"y", "yes"}:
+            raise SystemExit("移行を中止しました。")
+    migrate_database(
+        db_path,
+        backup_path=args.backup,
+        vacuum=not args.no_vacuum,
+        log=print,
+    )
+    print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
+
+
+def _run_scan(args, settings) -> None:
+    global _progress_started
+    source_root = getattr(args, "source", None) or get_source_root(settings)
+    if not source_root:
+        raise SystemExit("Source root is required either via --source or application settings.")
+    log_file = Path("data/logs") / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = _setup_logging(log_file, args.log_level)
+    logger.info("Scan started. Log file: %s", log_file)
+    _progress_started = False
+    db_path = getattr(args, "db", None) or get_database_path(settings)
+    try:
+        with ensure_database(db_path) as connection:
+            summary = scan_directory(
+                source_root,
+                connection,
+                progress_callback=lambda current, total, detail: _emit_progress(
+                    current, total, detail, prefix="Scanning", error=get_latest_error()
+                ),
+                workers=max(1, args.workers),
+                prune=not args.no_prune,
+                force_prune=args.force_prune,
+                force_rescan=args.force_rescan,
+            )
+    except ScanAborted as error:
+        raise SystemExit(f"Scan aborted: {error}") from error
+    print(
+        f"Scanned {summary['processed']} media entries "
+        f"(skipped {summary['skipped']}, faces {summary['faces']}, "
+        f"removed {summary['pruned']}, errors {summary['errors']})."
+    )
+
+
+def _run_match(args, db_path: str) -> None:
+    global _progress_started
+    log_file = Path("data/logs") / f"match_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = _setup_logging(log_file, args.log_level)
+    logger.info("Match started. Log file: %s", log_file)
+    _progress_started = False
+    with ensure_database(db_path) as connection:
+        summary = match_faces(
+            connection,
+            threshold=args.threshold,
+            margin=args.margin,
+            reset=not args.no_reset,
+            dry_run=args.dry_run,
+            progress_callback=lambda current, total, detail: _emit_progress(
+                current, total, detail, prefix="Matching"
+            ),
+        )
+    if summary["teachers"] == 0:
+        print(
+            "手本になる顔がありません。photoarchive-gui で顔を人物に割り当ててから"
+            " 再実行してください。"
+        )
+        return
+    label = "(dry-run) " if summary["dry_run"] else ""
+    print(
+        f"{label}Matched {summary['assigned']} faces from {summary['teachers']} assigned faces; "
+        f"{summary['unassigned']} left unassigned."
+    )
+    if summary["histogram"]:
+        print("距離の分布:")
+        for bucket in sorted(summary["histogram"]):
+            print(f"  {bucket:.1f}-{bucket + 0.1:.1f}: {summary['histogram'][bucket]}")
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
     settings = load_settings()
     db_path = getattr(args, "db", None) or get_database_path(settings)
     if not db_path:
         raise SystemExit("Database path is required via application settings or --db.")
 
-    if args.command == "init-db":
-        ensure_database(db_path).close()
-        print(f"Database initialized: {db_path}")
-        return
+    try:
+        if args.command == "migrate":
+            _run_migrate(args, db_path)
+            return
 
-    if args.command == "scan":
-        source_root = getattr(args, "source", None) or get_source_root(settings)
-        if not source_root:
-            raise SystemExit("Source root is required either via --source or application settings.")
-        with ensure_database(db_path) as connection:
-            media_ids = scan_directory(
-                source_root,
-                connection,
-                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Scanning"),
-            )
-        print(f"Scanned {len(media_ids)} media entries.")
-        return
+        if args.command == "init-db":
+            ensure_database(db_path).close()
+            print(f"Database initialized: {db_path}")
+            return
 
-    if args.command == "convert-heic":
-        source_root = getattr(args, "source", None) or get_source_root(settings)
-        if not source_root:
-            raise SystemExit("Source root is required via --source or application settings.")
+        if args.command == "scan":
+            _run_scan(args, settings)
+            return
 
-        def confirm_write_error(path: Path, error: Exception) -> bool:
-            answer = input(f"Write failed for {path}: {error}\nContinue with the next file? [y/N]: ")
-            return answer.strip().lower() in {"y", "yes"}
+        if args.command == "convert-heic":
+            source_root = getattr(args, "source", None) or get_source_root(settings)
+            if not source_root:
+                raise SystemExit("Source root is required via --source or application settings.")
 
-        try:
-            converted, skipped = convert_heic_files(
-                source_root,
-                progress_callback=lambda current, total, detail: _emit_progress(
-                    current, total, detail, prefix="Converting"
-                ),
-                confirm_write_error=confirm_write_error,
-            )
-        except (OSError, PermissionError) as error:
-            raise SystemExit(f"Conversion stopped: {error}") from error
-        print(f"Converted {converted} files; skipped {skipped} existing files.")
-        return
+            def confirm_write_error(path: Path, error: Exception) -> bool:
+                answer = input(
+                    f"Write failed for {path}: {error}\nContinue with the next file? [y/N]: "
+                )
+                return answer.strip().lower() in {"y", "yes"}
 
-    if args.command == "analyze":
-        log_file = Path("data/logs") / f"analyze_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        logger = _setup_logging(log_file, args.log_level)
-        logger.info(f"Analysis started. Log file: {log_file}")
-        _progress_started = False
-        try:
-            with ensure_database(db_path) as connection:
-                analyze_database(
-                    connection,
+            try:
+                converted, skipped = convert_heic_files(
+                    source_root,
                     progress_callback=lambda current, total, detail: _emit_progress(
-                        current,
-                        total,
-                        detail,
-                        prefix="Analyzing",
-                        error=get_latest_error(),
+                        current, total, detail, prefix="Converting"
+                    ),
+                    confirm_write_error=confirm_write_error,
+                )
+            except (OSError, PermissionError) as error:
+                raise SystemExit(f"Conversion stopped: {error}") from error
+            print(f"Converted {converted} files; skipped {skipped} existing files.")
+            return
+
+        if args.command == "match":
+            _run_match(args, db_path)
+            return
+
+        if args.command == "select":
+            source_root = getattr(args, "source", None) or get_source_root(settings)
+            output_root = getattr(args, "output", None) or get_output_root(settings)
+            rule_path = getattr(args, "rule", None) or get_rule_path(settings)
+            if not source_root:
+                raise SystemExit("Source root is required via application settings or --source.")
+            if not output_root:
+                raise SystemExit("Output path is required via application settings or --output.")
+            if not rule_path:
+                raise SystemExit("Rule file path is required via application settings or --rule.")
+            with ensure_database(db_path) as connection:
+                rule = load_rule(rule_path)
+                selected = select_media(connection, rule)
+                copied = copy_selected_media(
+                    selected,
+                    output_root,
+                    source_root,
+                    progress_callback=lambda current, total, detail: _emit_progress(
+                        current, total, detail, prefix="Copying"
                     ),
                 )
-            logger.info("Analysis completed successfully.")
-        except Exception as e:
-            logger.error(f"Analysis failed: {e}", exc_info=True)
-            _emit_progress(0, 1, "aborted", prefix="Analyzing", error=str(e))
-            raise SystemExit(1) from e
-        return
-
-    if args.command == "select":
-        source_root = getattr(args, "source", None) or get_source_root(settings)
-        output_root = getattr(args, "output", None) or get_output_root(settings)
-        rule_path = getattr(args, "rule", None) or get_rule_path(settings)
-        if not source_root:
-            raise SystemExit("Source root is required via application settings or --source.")
-        if not output_root:
-            raise SystemExit("Output path is required via application settings or --output.")
-        if not rule_path:
-            raise SystemExit("Rule file path is required via application settings or --rule.")
-        with ensure_database(db_path) as connection:
-            rule = load_rule(rule_path)
-            selected = select_media(connection, rule)
-            copied = copy_selected_media(
-                selected,
-                output_root,
-                source_root,
-                progress_callback=lambda current, total, detail: _emit_progress(current, total, detail, prefix="Copying"),
-            )
-        print(f"Copied {copied} files to {output_root}.")
-        return
+            print(f"Copied {copied} files to {output_root}.")
+            return
+    except SchemaVersionError as error:
+        raise SystemExit(str(error)) from error
 
     parser.print_help()
