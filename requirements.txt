@@ -1,6 +1,8 @@
 PySide6>=6.7
 Pillow>=10.0
 pillow-heif>=0.18
+dlib>=19.24
+face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models
 mediapipe==0.10.21
 opencv-python>=4.8
 numpy>=1.26
