@@ -132,6 +132,9 @@ def analyze_file(
         "file_hash": None,
         "faces": [],
         "face_count": None,
+        # 特徴量のモデルが無いまま顔を貯めたか。_store_result が
+        # detector_version を書くかどうかの判断に使う。
+        "embedding_model_missing": False,
     }
     try:
         stat = path.stat()
@@ -161,6 +164,10 @@ def analyze_file(
             return result
 
         detections = face.detect_faces_with_scores(rgb)
+        # 「顔が小さすぎて特徴量を作れなかった」のは正常な結果なので、
+        # 出来上がりではなくモデルの有無で判断する。そうしないと、
+        # 小さい顔しか写っていない写真が毎回再スキャンされる。
+        result["embedding_model_missing"] = not face.embedding_available()
         faces: List[Dict[str, Any]] = []
         for location, detection_score in detections:
             embedding = face.compute_embedding(rgb, location)
@@ -238,12 +245,26 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
 
     smile_score, quality_score = scoring.aggregate_media_scores(face_scores)
     db.save_media_scores(connection, media_id, smile_score, quality_score)
+
+    # --allow-missing-embeddings で顔を貯めた場合は detector_version を
+    # 書かない。書いてしまうと、あとでモデルを設置しても _needs_face_scan が
+    # 「版が一致する」と見なして全件スキップし、--force-rescan 以外に回収
+    # 手段が無くなる。そして --force-rescan は手動割り当てを巻き添えにする。
+    # 版を NULL のまま残せば、次の通常の scan が自動で拾い直す。
+    incomplete = bool(result.get("embedding_model_missing")) and result["face_count"] > 0
+    if incomplete:
+        logger.warning(
+            "Stored %d face(s) without embeddings; will be scanned again once the"
+            " model is available: %s",
+            result["face_count"],
+            result["path"],
+        )
     db.update_media_scan_state(
         connection,
         media_id,
         result["face_count"],
         _utc_now(),
-        face.DETECTOR_VERSION,
+        None if incomplete else face.DETECTOR_VERSION,
     )
     return media_id
 

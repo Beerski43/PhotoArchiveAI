@@ -4,11 +4,15 @@
 
 1. 環境変数 ``PHOTOARCHIVE_CONFIG`` が指すファイル
 2. カレントディレクトリの ``config/app_settings.json``
-3. リポジトリ(インストール元)直下の ``config/app_settings.json``
+3. リポジトリ直下の ``config/app_settings.json``
 
 3 があるのは、リポジトリルート以外から ``photoarchive`` を起動しても
 設定が効くようにするため。以前は 2 だけを見ていたので、別の
 ディレクトリから実行すると**例外にもならず空の設定が返っていた**。
+
+3 が効くのは ``pip install -e .`` (editable install) のときだけ。
+通常のインストールでは ``site-packages`` の下に置かれるので、
+リポジトリ直下にあたるものが無く、この候補は使わない。
 """
 
 import json
@@ -21,32 +25,55 @@ logger = logging.getLogger(__name__)
 
 CONFIG_ENV_VAR = "PHOTOARCHIVE_CONFIG"
 CONFIG_RELATIVE_PATH = Path("config/app_settings.json")
-REPO_ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = Path(__file__).resolve()
+# editable install なら src/photoarchive_ai/config.py からリポジトリ直下に戻る。
+REPO_ROOT = MODULE_PATH.parents[2]
+# 通常のインストールでモジュールが置かれるディレクトリの名前。
+INSTALL_MARKERS = {"site-packages", "dist-packages"}
 
 # 後方互換。探索の起点としてではなく、既定の置き場所を示すために残す。
 DEFAULT_CONFIG_PATH = CONFIG_RELATIVE_PATH
 
 
+def _is_installed_copy() -> bool:
+    """このモジュールが site-packages などの下に置かれているか。
+
+    通常のインストールでは ``REPO_ROOT`` が ``lib/python3.x`` を指すので、
+    ``REPO_ROOT`` 自身を見ても判別できない。**モジュールの位置で判断する。**
+    editable install でなければリポジトリ直下という概念が無く、探索先に
+    混ぜても空振りするだけで、「探した場所」のログが誤解を招く。
+    """
+    return any(part in INSTALL_MARKERS for part in MODULE_PATH.parts)
+
+
 def candidate_config_paths() -> Iterator[Path]:
-    """設定ファイルの探索先を、優先順に返す。"""
+    """設定ファイルの探索先を、優先順に返す。同じ場所は1度だけ。
+
+    リポジトリ直下で実行すると 2 と 3 が同じ場所になる。重複したまま
+    返すと「探した場所」のログに同じパスが2度並んで紛らわしい。
+    """
+    candidates = []
     override = os.environ.get(CONFIG_ENV_VAR)
     if override:
-        yield Path(override).expanduser()
-    yield Path.cwd() / CONFIG_RELATIVE_PATH
-    yield REPO_ROOT / CONFIG_RELATIVE_PATH
+        candidates.append(Path(override).expanduser())
+    candidates.append(Path.cwd() / CONFIG_RELATIVE_PATH)
+    if not _is_installed_copy():
+        candidates.append(REPO_ROOT / CONFIG_RELATIVE_PATH)
+
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield candidate
 
 
 def find_settings_path() -> Optional[Path]:
     """実際に読む設定ファイル。見つからなければ None。"""
-    seen = set()
     for candidate in candidate_config_paths():
-        resolved = candidate.expanduser()
-        key = str(resolved)
-        if key in seen:
-            continue
-        seen.add(key)
-        if resolved.is_file():
-            return resolved
+        if candidate.is_file():
+            return candidate
     return None
 
 

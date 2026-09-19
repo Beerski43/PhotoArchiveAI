@@ -56,19 +56,15 @@ else
   echo "  scripts/archive_worklog.py が無い"
 fi
 
-# 1 の結果をまとめる。pytest -q の最終行は
-#   "37 passed, 3 deselected in 1.10s" のような形。
-summary="$(grep -E '^[0-9]+ (passed|failed|error)|[0-9]+ (passed|failed|error)s? ' "$LOG" | tail -1)"
-passed="$(printf '%s' "$summary" | grep -oE '[0-9]+ passed'  | grep -oE '^[0-9]+' || true)"
-failures="$(printf '%s' "$summary" | grep -oE '[0-9]+ failed' | grep -oE '^[0-9]+' || true)"
-errors="$(printf '%s' "$summary" | grep -oE '[0-9]+ error'  | grep -oE '^[0-9]+' || true)"
-elapsed="$(printf '%s' "$summary" | grep -oE 'in [0-9.]+s'  | grep -oE '[0-9.]+' || true)"
-failures=$(( ${failures:-0} + ${errors:-0} ))
-
+# 1 の結果をまとめる。pytest は出力先が端末だと着色するので、
+# 集計はシェルの grep ではなく Python 側で行う(エスケープを剥がしてから
+# 数える)。集計できなければ非ゼロで返るので、0 passed が成功のように
+# 見えることはない。
 echo
 echo "------------------------------------------------------------"
-printf '回帰テスト: %s passed / %s failed (%ss) 実行日: %s\n' \
-  "${passed:-0}" "$failures" "${elapsed:-?}" "$(date +%Y-%m-%d)"
+if ! python scripts/summarize_pytest.py "$LOG"; then
+  failed=1
+fi
 echo "------------------------------------------------------------"
 
 exit "$failed"

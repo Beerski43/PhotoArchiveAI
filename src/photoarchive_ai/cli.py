@@ -135,8 +135,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-missing-embeddings",
         action="store_true",
         help=(
-            "顔特徴量のモデルが読めなくてもスキャンを続ける。"
-            "顔は検出されるが match が効かない状態になる。"
+            "顔特徴量のモデルが読めなくてもスキャンを続ける。顔は検出されるが"
+            " match が効かない状態になる。このとき検出器の版は記録しないので、"
+            "モデルを設置したあと通常の scan を実行すれば自動で作り直される。"
         ),
     )
     scan_parser.add_argument(

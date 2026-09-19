@@ -94,3 +94,49 @@ def test_the_accessors_read_the_expected_keys():
     assert config.get_rule_path(settings) == "rule"
     assert config.get_dlib_model_dir(settings) == "models"
     assert config.get_dlib_model_dir({}) is None
+
+
+def test_the_repository_candidate_is_skipped_for_a_normal_install(tmp_path, monkeypatch):
+    """editable install でなければ、リポジトリ直下の候補を出さない。
+
+    通常のインストールでは REPO_ROOT が site-packages の外側
+    (lib/python3.x) を指すだけで、探しても必ず空振りする。候補に残すと
+    「探した場所」のログが誤解を招く。
+    """
+    # 実際の通常インストールの形。REPO_ROOT は lib/python3.12 を指すので、
+    # REPO_ROOT 自身には site-packages が現れない。
+    module = tmp_path / "venv/lib/python3.12/site-packages/photoarchive_ai/config.py"
+    monkeypatch.setattr(config, "MODULE_PATH", module)
+    monkeypatch.setattr(config, "REPO_ROOT", module.parents[2])
+    monkeypatch.chdir(tmp_path)
+
+    candidates = [str(path) for path in config.candidate_config_paths()]
+
+    assert candidates == [str(tmp_path / "config/app_settings.json")]
+
+
+def test_the_repository_candidate_is_offered_for_an_editable_install(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setattr(config, "MODULE_PATH", repo / "src/photoarchive_ai/config.py")
+    monkeypatch.setattr(config, "REPO_ROOT", repo)
+    monkeypatch.chdir(elsewhere)
+
+    candidates = [str(path) for path in config.candidate_config_paths()]
+
+    assert candidates == [
+        str(elsewhere / "config/app_settings.json"),
+        str(repo / "config/app_settings.json"),
+    ]
+
+
+def test_the_same_place_is_not_listed_twice(tmp_path, monkeypatch):
+    """リポジトリ直下で実行したとき、候補が重複しないこと。"""
+    monkeypatch.setattr(config, "MODULE_PATH", tmp_path / "src/photoarchive_ai/config.py")
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    candidates = [str(path) for path in config.candidate_config_paths()]
+
+    assert candidates == [str(tmp_path / "config/app_settings.json")]

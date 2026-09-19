@@ -1,6 +1,6 @@
 # テスト項目一覧
 
-全 110 件 / 13 ファイル。実行時間は wall clock で 2〜3 秒。
+全 136 件 / 14 ファイル。実行時間は wall clock で 2〜3 秒。
 実行方法は [TESTING.md](TESTING.md)。
 
 `models` マーカーの3件だけが実物の学習済みモデルを必要とし、
@@ -29,6 +29,10 @@
 | `test_scanner_incremental.py::test_an_error_from_one_file_is_not_reported_for_the_next` | 直近のエラーが大域変数に残り、無関係なファイルに付いた |
 | `test_cli_progress.py::test_progress_keeps_the_last_error_instead_of_overwriting_it` | `Error: none` が直近のエラーを塗り潰した（Issue #25） |
 | `test_cli_commands.py::test_convert_heic_does_not_need_a_database` | DB を使わないコマンドが DB パスを要求して落ちた |
+| `test_scanner_incremental.py::test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` で入れた顔が、モデル設置後も回収されなかった |
+| `test_pytest_summary.py::test_the_counts_survive_the_colours_pytest_adds_on_a_terminal` | **回帰テストの集計行が、端末で実行すると必ず `0 passed / 0 failed` になっていた**（しかも成功に見えた） |
+| `test_pytest_summary.py::test_output_that_cannot_be_read_is_not_reported_as_zero` | 集計できないときに 0 を出して成功に見せた |
+| `test_worklog_archive.py::test_a_section_that_is_not_a_dated_entry_survives` | 日付エントリ以外の節を黙って消した（毎コミット実行するスクリプト） |
 | `test_face_real.py::test_model_directory_is_resolved_without_pkg_resources` | `face_recognition_models` を import すると setuptools 81 以降で落ちた（Issue #10） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
@@ -47,7 +51,7 @@
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
 
-### `test_scanner_incremental.py` — 走査と差分判定（15件）
+### `test_scanner_incremental.py` — 走査と差分判定（17件）
 
 | テスト | 内容 |
 |---|---|
@@ -66,6 +70,8 @@
 | `test_a_parallel_rescan_is_still_incremental` | 並列でも差分になり、顔行が重複しない |
 | `test_an_error_from_one_file_is_not_reported_for_the_next` | エラーの持ち越しが起きない |
 | `test_media_type_is_image_or_video` | `Media.type` の値域 |
+| `test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` の顔を、モデル設置後の通常 `scan` が拾い直す |
+| `test_a_photo_whose_faces_are_all_too_small_is_still_marked_scanned` | 顔が小さすぎて特徴量が作れないのは正常な結果。毎回読み直さない |
 
 ### `test_matcher.py` — 自動割り当て（11件）
 
@@ -146,10 +152,13 @@
 | `test_match_arguments_reach_the_matcher` | `match` の全オプションが下へ届く |
 | `test_the_database_path_falls_back_to_the_settings_file` | 設定ファイルへのフォールバック |
 
-### `test_config.py` — 設定の探索（8件）
+### `test_config.py` — 設定の探索（11件）
 
-環境変数 → カレントディレクトリ → リポジトリ直下 の順に探すこと、
-優先順位、壊れたファイルでもコマンドが止まらないこと。
+環境変数 → カレントディレクトリ → リポジトリ直下 の順に探すこと、優先順位、
+壊れたファイルでもコマンドが止まらないこと。リポジトリ直下の候補を
+editable install のときだけ出すこと（通常のインストールでは `REPO_ROOT` が
+`lib/python3.x` を指すので、**`REPO_ROOT` 自身を見ても判別できない。
+モジュールの位置で判断する**）。同じ場所を2度並べないこと。
 
 ### `test_cli_progress.py` — 進捗表示（7件）
 
@@ -160,9 +169,17 @@
 Media と Person を温存し Face と AnalysisResult を破棄すること、冪等性、
 旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
 
-### `test_worklog_archive.py` — 作業履歴の切り出し（10件）
+### `test_worklog_archive.py` — 作業履歴の切り出し（16件）
 
 直近20件を残して年ごとに切り出すこと、索引の作り直し、冪等性、`--check`。
+**日付エントリ以外の節を消さないこと**（前にあるものは前書きとしてその場に残し、
+あとにあるものは末尾へ移す）。切り出し済みの本文を後から書き換えないこと。
+
+### `test_pytest_summary.py` — 回帰テストの集計行（9件）
+
+CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした行。着色された
+pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
+成功のように見せないこと。
 
 ### `test_system.py` — 通し（2件、`system` マーカー）
 

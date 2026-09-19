@@ -98,7 +98,7 @@ cp config/app_settings.sample.json config/app_settings.json
 
 1. 環境変数 `PHOTOARCHIVE_CONFIG` が指すファイル
 2. カレントディレクトリの `config/app_settings.json`
-3. リポジトリ直下の `config/app_settings.json`
+3. リポジトリ直下の `config/app_settings.json`（`pip install -e .` のときだけ）
 
 ### 2. データベース初期化
 
@@ -153,6 +153,8 @@ photoarchive scan --force-rescan
 ```
 
 顔特徴量のモデル (dlib) を読み込めない場合、`scan` は処理を始める前に中断します。そのまま進むと、顔は検出されるのに特徴量が保存されず、`match` が一切効かない状態のまま「スキャン済み」として記録されてしまうためです。承知のうえで進める場合は `--allow-missing-embeddings` を付けます。
+
+このオプションで取り込んだメディアは検出器の版を記録しないので、**モデルを設置したあとに通常の `photoarchive scan` を実行すれば自動でやり直されます。**`--force-rescan` は不要です（`--force-rescan` は手動で割り当てた顔も作り直してしまいます）。
 
 実体が見つからないメディアが登録数の2割を超えた場合は、ソースの指定間違いやNFSの未マウントを疑って処理を中断します。意図した削除であれば `--force-prune` を付けて再実行してください。
 
@@ -245,10 +247,10 @@ source .venv/bin/activate
 ./scripts/run_regression.sh
 ```
 
-全110件がおよそ2〜3秒で終わります。最終行に次の形のまとめが出ます。
+全136件がおよそ2〜3秒で終わります。最終行に次の形のまとめが出ます。
 
 ```
-回帰テスト: 107 passed / 0 failed (2.20s) 実行日: 2026-09-19
+回帰テスト: 133 passed / 0 failed (2.52s) 実行日: 2026-09-19
 ```
 
 個別に動かす場合:
@@ -274,6 +276,7 @@ PhotoArchiveAI/
   requirements.txt
   scripts/
     run_regression.sh          回帰テスト
+    summarize_pytest.py        回帰テストの集計行を作る
     archive_worklog.py         作業履歴の切り出し
   config/
     app_settings.sample.json   アプリ設定のサンプル
