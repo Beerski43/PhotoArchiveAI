@@ -1,11 +1,13 @@
 # テスト項目一覧
 
-全 136 件 / 14 ファイル。実行時間は wall clock で 2〜3 秒。
-実行方法は [TESTING.md](TESTING.md)。
+**何がテストで守られているか**の一覧。実行方法は [TESTING.md](TESTING.md)。
 
-`models` マーカーの3件だけが実物の学習済みモデルを必要とし、
+いま何件あるかはここには書かない（数えるたびに更新が要るため）。
+`pytest -q --collect-only | tail -1` で分かる。
+
+`models` マーカーのテストだけが実物の学習済みモデルを必要とし、
 無い環境では自動的にスキップされる。**回帰テスト
-（`./scripts/run_regression.sh`）はこの3件を合否に含めない。**
+（`./scripts/run_regression.sh`）はこれらを合否に含めない。**
 
 ---
 
@@ -34,6 +36,9 @@
 | `test_pytest_summary.py::test_output_that_cannot_be_read_is_not_reported_as_zero` | 集計できないときに 0 を出して成功に見せた |
 | `test_worklog_archive.py::test_a_section_that_is_not_a_dated_entry_survives` | 日付エントリ以外の節を黙って消した（毎コミット実行するスクリプト） |
 | `test_face_real.py::test_model_directory_is_resolved_without_pkg_resources` | `face_recognition_models` を import すると setuptools 81 以降で落ちた（Issue #10） |
+| `test_face_io.py::test_detection_rectangles_come_back_in_the_original_scale` | 長辺1280pxを超える画像は縮小して検出する。戻し倍率を間違えると矩形がずれ、特徴量まで壊れる |
+| `test_face_io.py::test_embed_version_records_the_padding` | パディングを変えても `EMBED_VERSION` が据え置かれ、古い特徴量と新しい特徴量が同じ版として混ざる |
+| `test_scoring.py::test_smile_score_follows_the_mouth_aspect_ratio` | フェイクの都合で笑顔スコアの式が一度も通っておらず、常に 0.0 を返していても気づけなかった |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
 ---
@@ -73,6 +78,44 @@
 | `test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` の顔を、モデル設置後の通常 `scan` が拾い直す |
 | `test_a_photo_whose_faces_are_all_too_small_is_still_marked_scanned` | 顔が小さすぎて特徴量が作れないのは正常な結果。毎回読み直さない |
 
+### `test_face_io.py` — 顔の入出力（24件）
+
+モデルを必要としない `face.py` の経路。
+
+| テスト | 内容 |
+|---|---|
+| `test_read_rgb_returns_the_image_as_rgb` | 画像を (高さ, 幅, 3) の uint8 で読む |
+| `test_read_rgb_reads_the_first_frame_of_a_video_and_fixes_the_channel_order` | 動画は先頭1フレームだけを読み、BGR を RGB へ直す |
+| `test_read_rgb_returns_none_for_a_missing_file` ほか3件 | 不在・ディレクトリ・画像でないファイル・動画でないファイル |
+| `test_the_latest_error_is_cleared_before_the_next_file` | 大域のエラーを消せる |
+| `test_detection_rectangles_come_back_in_the_original_scale` | **長辺1280pxを超える画像は縮小して検出し、矩形を原寸へ戻す** |
+| `test_small_images_are_not_resized` | 縮小が不要な大きさでは素通し |
+| `test_no_faces_are_reported_for_a_black_image` | 顔なし |
+| `test_detection_returns_nothing_when_the_detector_is_unavailable` | 検出器が読めないときは空とエラー文言 |
+| `test_face_rect_squares_the_rectangle_on_its_longer_side` ほか2件 | 正方形化・パディング率・画像内への収まり |
+| `test_embed_version_records_the_padding` | **パディングを変えたら `EMBED_VERSION` も上がる**という約束の見張り |
+| `test_crop_face_cuts_exactly_the_given_rectangle` | 切り出す矩形と画素 |
+| `test_make_thumbnail_shrinks_the_face_to_the_listing_size` ほか3件 | 一覧用に必ず縮むこと、寸法指定、空矩形は None |
+| `test_load_face_image_bytes_recuts_from_the_original_file` ほか1件 | 元写真からの取り直しと、元が無いときの例外 |
+
+### `test_scoring.py` — スコアの計算式（21件）
+
+**フェイクの FaceMesh が全ランドマークを (0.5, 0.5) で返すため、
+`estimate_smile_score` は 0.0 で早期 return する枝しか通っていなかった。**
+`fake_face_mesh` フィクスチャで座標を与えて式そのものを確かめる。
+
+| テスト | 内容 |
+|---|---|
+| `test_smile_score_follows_the_mouth_aspect_ratio` | 口の縦横比 2.0 → 42.0（`(比 - 1.4) * 70`） |
+| `test_a_round_mouth_scores_zero_instead_of_going_negative` | 負のスコアを出さない |
+| `test_an_extremely_wide_mouth_is_capped_at_100` | 100 で頭打ち |
+| `test_landmarks_on_a_single_point_score_zero` | 既定のフェイクが通る枝。上の3件が長く未検証だった理由 |
+| `test_smile_score_is_zero_when_no_face_mesh_is_found` ほか2件 | 顔なし・モデル不在・空の矩形 |
+| `test_quality_combines_brightness_and_face_size` | 明るさ×60 + 顔の面積比×40 |
+| `test_a_dark_face_only_earns_the_size_part` ほか3件 | 暗い顔、面積比の頭打ち、大小関係、空の矩形 |
+| `test_distance_to_similarity`（5件） | 距離 0.6 を基準にした 0-100 への変換とクリップ |
+| `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
+
 ### `test_matcher.py` — 自動割り当て（11件）
 
 | テスト | 内容 |
@@ -104,6 +147,19 @@
 | `test_assigning_without_an_age_keeps_the_one_already_recorded` | 年齢を指定しない割り当ては年齢を触らない |
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
+
+### `test_gui_person.py` — 人物編集とプレビュー（8件）
+
+| テスト | 内容 |
+|---|---|
+| `test_editing_a_person_saves_the_new_values` | 今の値でダイアログを開き、保存で一覧まで入れ替わる |
+| `test_cancelling_the_edit_changes_nothing` | 取り消しで何も変えない |
+| `test_an_empty_name_is_rejected` | 名前は必須。空で上書きしない |
+| `test_editing_without_a_selection_does_not_open_a_dialog` | 人物未選択ならダイアログを開かない |
+| `test_selecting_a_face_previews_it_from_the_original_photo` | サムネイルではなく元写真から取り直して表示する |
+| `test_the_preview_names_the_file_when_the_original_is_gone` | **元写真が消えていたらパスを出す**（NFS 未マウント時に起きる） |
+| `test_the_preview_does_nothing_without_a_selection` | 未選択なら何もしない |
+| `test_the_preview_uses_the_last_selected_face` | 複数選択では最後の1件 |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
@@ -164,10 +220,15 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — 旧スキーマからの移行（4件）
+### `test_migration.py` — 旧スキーマからの移行（12件）
 
 Media と Person を温存し Face と AnalysisResult を破棄すること、冪等性、
 旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
+
+移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
+指定（親ディレクトリが無くても作る）と既定の日時付きの名前、
+`vacuum=False` / `make_backup=False`、進捗メッセージ、空のファイルへの
+スキーマ作成、存在しないDBを指したときのエラー。
 
 ### `test_worklog_archive.py` — 作業履歴の切り出し（16件）
 
@@ -181,15 +242,26 @@ CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした�
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
 成功のように見せないこと。
 
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
+
+`CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
+見る。書いてしまうと**関係のない変更のたびに更新が要り**、忘れれば
+いちばんよく読まれる2つの文書が静かに嘘になる。番人自身が働くことも
+確かめている（数字を戻すと落ちること、`N passed / M failed` の書式は通ること）。
+
 ### `test_system.py` — 通し（2件、`system` マーカー）
 
 `init-db` → `scan` → GUIでの割り当て → `match` → `select` を一通り流す。
 2回目のスキャンが差分になることも確認する。
 
-### `test_face_real.py` — 実物のモデル（3件、`models` マーカー）
+### `test_face_real.py` — 実物のモデル（2件、`models` マーカー）
 
 `face_recognition_models` を import せずにモデルのパスを取り出せること、
-実物の dlib が128次元を返すこと、矩形の正方形化とパディング。
+実物の dlib が128次元を返すこと。
+
+**矩形の正方形化とパディングの確認はここから `test_face_io.py` へ移した。**
+`face_rect` はモデルを必要としないのに `models` マーカーの下にあったため、
+回帰テスト（`-m "not models"`）では常に除外されていた。
 
 ---
 
@@ -203,6 +275,7 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | 差し替えるもの | 何になるか |
 |---|---|
 | `mediapipe` | 顔検出のフェイク。真っ黒な画像は「顔なし」、それ以外は「顔が1つ」。**実装が先に見る `relative_bounding_box` を返す**ので、実際の検出経路をそのまま通る |
+| FaceMesh | 既定は全ランドマークが (0.5, 0.5)。`fake_face_mesh` フィクスチャで座標を上書きすると、笑顔スコアの式を検証できる。**既定のままでは式が 0.0 の枝しか通らない** |
 | `dlib` | 顔領域の平均色から決まる128次元ベクトル。同じ色の顔は近く、違う色の顔は遠くなるので、`match` の判定を検証できる |
 | `config.REPO_ROOT` | 空のディレクトリ。開発機の `config/app_settings.json` をテストから見えなくする |
 | `cli._progress_started` | 各テストの前後でリセット。進捗表示の大域状態がテストの順序に依存した差を作らないようにする |
@@ -210,5 +283,8 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 
 `tests/helpers.py` の `write_image()` に色を指定すると「同一人物」「別人」を
 作り分けられる。`write_heic()` は HEIC を書き出す（encoder が無い環境ではスキップ）。
+`write_video()` は数フレームの mp4 を書き出す。**色は BGR で与える**ので、
+先頭フレームの色を見れば `read_rgb` が並びを直しているか分かる
+（コーデックが無い環境ではスキップ）。
 
 GUI のテストは `QT_QPA_PLATFORM=offscreen` で動くので、画面が無くても実行できる。

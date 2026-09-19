@@ -247,10 +247,10 @@ source .venv/bin/activate
 ./scripts/run_regression.sh
 ```
 
-全136件がおよそ2〜3秒で終わります。最終行に次の形のまとめが出ます。
+数秒で終わります。最終行に次の形のまとめが出ます。
 
 ```
-回帰テスト: 133 passed / 0 failed (2.52s) 実行日: 2026-09-19
+回帰テスト: N passed / M failed (X.XXs) 実行日: YYYY-MM-DD
 ```
 
 個別に動かす場合:
