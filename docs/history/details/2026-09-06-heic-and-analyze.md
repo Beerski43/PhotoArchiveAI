@@ -111,7 +111,7 @@ GUIの顔画像選択を非ネイティブ `QFileDialog` に変更し、次を�
 
 - `src/photoarchive_ai/db.py`
 - `src/photoarchive_ai/gui.py`
-- `docs/Specification.md`
+- `docs/spec/Specification.md`
 - `docs/operation/GUI_USAGE.md`
 
 ## 現ブランチのHEIC変換機能

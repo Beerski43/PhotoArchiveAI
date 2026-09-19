@@ -37,6 +37,12 @@ test = ["pytest>=8.0"]
 minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# tests/helpers.py を `from tests.helpers import ...` で読むため、
+# リポジトリルートを sys.path に入れる。これが無いと素の `pytest` は
+# 収集時に ModuleNotFoundError: No module named 'tests' で落ちる。
+pythonpath = ["."]
+# 未登録のマーカーを警告ではなく失敗にする(タイポで実行対象から漏れるのを防ぐ)。
+addopts = ["--strict-markers"]
 markers = [
     "system: end-to-end system tests",
     "models: requires the real dlib face models",

@@ -37,6 +37,17 @@ def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") 
 
 
 _progress_started = False
+#: 直近に出たエラー。エラーが出ていない回で "none" に塗り潰さないために持つ。
+_last_error = ""
+#: 2行目に出せる長さ。これ以上は切る。
+ERROR_DISPLAY_LIMIT = 120
+
+
+def _reset_progress_state() -> None:
+    """進捗表示を最初から始める。コマンドの入口で呼ぶ。"""
+    global _progress_started, _last_error
+    _progress_started = False
+    _last_error = ""
 
 
 def _emit_progress(
@@ -46,15 +57,23 @@ def _emit_progress(
     prefix: str = "Progress",
     error: str = "",
 ) -> None:
-    global _progress_started
+    """2行の進捗を書き換える。1行目が進捗、2行目が直近のエラー。
+
+    2行目は **直近のエラーを保持する**。エラーの出なかった回で
+    ``Error: none`` に戻すと、流れていくログの中でエラーが一瞬しか
+    見えず、何が起きたのか分からなくなる(Issue #25)。
+    """
+    global _progress_started, _last_error
     bar_width = 20
     percent = min(100, max(0, int(current * 100 / total))) if total > 0 else 0
     filled = int(bar_width * current / total) if total > 0 else 0
     bar = "#" * filled + "-" * (bar_width - filled)
     progress_detail = str(detail).replace("\r", " ").replace("\n", " ")
-    error_detail = str(error).replace("\r", " ").replace("\n", " ")[:120]
+    error_detail = str(error).replace("\r", " ").replace("\n", " ")[:ERROR_DISPLAY_LIMIT]
+    if error_detail:
+        _last_error = error_detail
     progress_line = f"{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {progress_detail}"
-    error_line = f"Error: {error_detail}" if error_detail else "Error: none"
+    error_line = f"Error: {_last_error}" if _last_error else "Error: none"
     if _progress_started:
         sys.stdout.write(f"\033[2A\r{progress_line}\033[K\n\r{error_line}\033[K")
     else:
@@ -111,6 +130,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scan_parser.add_argument(
         "--force-prune", action="store_true", help="Delete missing files even if many are gone."
+    )
+    scan_parser.add_argument(
+        "--allow-missing-embeddings",
+        action="store_true",
+        help=(
+            "顔特徴量のモデルが読めなくてもスキャンを続ける。顔は検出されるが"
+            " match が効かない状態になる。このとき検出器の版は記録しないので、"
+            "モデルを設置したあと通常の scan を実行すれば自動で作り直される。"
+        ),
     )
     scan_parser.add_argument(
         "--force-rescan", action="store_true", help="Detect faces again for every media file."
@@ -180,14 +208,13 @@ def _run_migrate(args, db_path: str) -> None:
 
 
 def _run_scan(args, settings) -> None:
-    global _progress_started
     source_root = getattr(args, "source", None) or get_source_root(settings)
     if not source_root:
         raise SystemExit("Source root is required either via --source or application settings.")
     log_file = Path("data/logs") / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = _setup_logging(log_file, args.log_level)
     logger.info("Scan started. Log file: %s", log_file)
-    _progress_started = False
+    _reset_progress_state()
     db_path = getattr(args, "db", None) or get_database_path(settings)
     try:
         with ensure_database(db_path) as connection:
@@ -201,6 +228,7 @@ def _run_scan(args, settings) -> None:
                 prune=not args.no_prune,
                 force_prune=args.force_prune,
                 force_rescan=args.force_rescan,
+                allow_missing_embeddings=args.allow_missing_embeddings,
             )
     except ScanAborted as error:
         raise SystemExit(f"Scan aborted: {error}") from error
@@ -212,11 +240,10 @@ def _run_scan(args, settings) -> None:
 
 
 def _run_match(args, db_path: str) -> None:
-    global _progress_started
     log_file = Path("data/logs") / f"match_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = _setup_logging(log_file, args.log_level)
     logger.info("Match started. Log file: %s", log_file)
-    _progress_started = False
+    _reset_progress_state()
     with ensure_database(db_path) as connection:
         summary = match_faces(
             connection,
@@ -245,12 +272,16 @@ def _run_match(args, db_path: str) -> None:
             print(f"  {bucket:.1f}-{bucket + 0.1:.1f}: {summary['histogram'][bucket]}")
 
 
+# データベースを使わないサブコマンド。DBパスの解決を要求しない。
+_COMMANDS_WITHOUT_DATABASE = {"convert-heic"}
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     settings = load_settings()
     db_path = getattr(args, "db", None) or get_database_path(settings)
-    if not db_path:
+    if not db_path and args.command not in _COMMANDS_WITHOUT_DATABASE:
         raise SystemExit("Database path is required via application settings or --db.")
 
     try:
@@ -268,6 +299,7 @@ def main() -> None:
             return
 
         if args.command == "convert-heic":
+            _reset_progress_state()
             source_root = getattr(args, "source", None) or get_source_root(settings)
             if not source_root:
                 raise SystemExit("Source root is required via --source or application settings.")
@@ -296,6 +328,7 @@ def main() -> None:
             return
 
         if args.command == "select":
+            _reset_progress_state()
             source_root = getattr(args, "source", None) or get_source_root(settings)
             output_root = getattr(args, "output", None) or get_output_root(settings)
             rule_path = getattr(args, "rule", None) or get_rule_path(settings)

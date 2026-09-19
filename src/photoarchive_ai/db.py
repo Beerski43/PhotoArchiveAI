@@ -6,7 +6,7 @@
                NULL=未scan / 0=顔なし / N=検出数 を表す。
 - ``Face``   : 写真から検出された顔。人物への紐づけは ``person_id`` と
                ``assign_source`` ('manual' / 'auto' / 'rejected') で表す。
-               手動割当だけが自動紐づけ (match) の教師データになる。
+               手動割当だけが自動紐づけ (match) の手本になる。
 - ``Person`` : 人物。
 - ``AnalysisResult`` : メディア単位のスコア。smile/quality は scan が、
                family は match が書く。
@@ -196,18 +196,22 @@ def decode_embedding(blob: Optional[bytes]) -> Optional[np.ndarray]:
 # Media
 # ---------------------------------------------------------------------------
 
-_MEDIA_WRITE_COLUMNS = (
-    "path",
+# ファイルそのものの属性。中身が同じでも作り直されうる。
+_MEDIA_FILE_COLUMNS = (
     "filename",
     "type",
     "file_hash",
     "file_size",
     "created_time",
     "shooting_date",
+)
+# 顔検出の実施状態。ファイル属性の更新では触らない。
+_MEDIA_SCAN_COLUMNS = (
     "face_count",
     "face_scanned_at",
     "detector_version",
 )
+_MEDIA_WRITE_COLUMNS = ("path",) + _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS
 
 
 def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
@@ -216,14 +220,21 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
     ハッシュが変わっている場合はファイル情報を更新し、顔検出の状態を
     リセットする(``face_count`` を NULL に戻す)。既存の ``Face`` と
     ``AnalysisResult`` は呼び出し側が削除する。
+
+    **ハッシュが同じでもファイル属性は書き戻す。** 中身は同じでも更新時刻
+    だけが変わることがあり(コピーや touch)、書き戻さないと差分スキャンが
+    毎回「変わったかもしれない」と判断して SHA-256 のために全体を読み直す。
+    ハッシュが同じなら再び書き戻されないので、これが恒久的に続く。
+    このときは ``face_count`` などの検出状態を触らない。触ると検出済みの
+    メディアが未スキャンに戻ってしまう。
     """
     cursor = connection.cursor()
     row = cursor.execute(
         "SELECT id, file_hash FROM Media WHERE path = ?",
         (media["path"],),
     ).fetchone()
-    values = tuple(media.get(column) for column in _MEDIA_WRITE_COLUMNS)
     if row is None:
+        values = tuple(media.get(column) for column in _MEDIA_WRITE_COLUMNS)
         placeholders = ",".join("?" for _ in _MEDIA_WRITE_COLUMNS)
         cursor.execute(
             f"INSERT INTO Media ({','.join(_MEDIA_WRITE_COLUMNS)}) VALUES ({placeholders})",
@@ -231,13 +242,17 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
         )
         connection.commit()
         return cursor.lastrowid
+
     if row["file_hash"] != media["file_hash"]:
-        assignments = ",".join(f"{column}=?" for column in _MEDIA_WRITE_COLUMNS[1:])
-        cursor.execute(
-            f"UPDATE Media SET {assignments} WHERE path = ?",
-            values[1:] + (media["path"],),
-        )
-        connection.commit()
+        columns = _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS
+    else:
+        columns = _MEDIA_FILE_COLUMNS
+    assignments = ",".join(f"{column}=?" for column in columns)
+    cursor.execute(
+        f"UPDATE Media SET {assignments} WHERE path = ?",
+        tuple(media.get(column) for column in columns) + (media["path"],),
+    )
+    connection.commit()
     return row["id"]
 
 
@@ -435,8 +450,11 @@ def count_faces(
     assign_source: Optional[str] = None,
     person_id: Optional[int] = None,
     unassigned: bool = False,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
 ) -> int:
-    where, params = _face_filter(assign_source, person_id, unassigned)
+    """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
+    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
 
@@ -445,7 +463,14 @@ def _face_filter(
     assign_source: Optional[str],
     person_id: Optional[int],
     unassigned: bool,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
 ) -> Tuple[str, List[Any]]:
+    """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
+
+    年齢の未設定(NULL)は、範囲を指定しても常に残す。年齢を入れていない顔が
+    一覧から消えてしまうと、そもそも年齢を入れられなくなるため。
+    """
     clauses: List[str] = []
     params: List[Any] = []
     if unassigned:
@@ -456,6 +481,12 @@ def _face_filter(
     if person_id is not None:
         clauses.append("person_id = ?")
         params.append(person_id)
+    if min_age is not None:
+        clauses.append("(age IS NULL OR age >= ?)")
+        params.append(min_age)
+    if max_age is not None:
+        clauses.append("(age IS NULL OR age <= ?)")
+        params.append(max_age)
     if not clauses:
         return "", params
     return " WHERE " + " AND ".join(clauses), params
@@ -481,16 +512,7 @@ def list_faces(
     columns = list(FACE_LIST_COLUMNS)
     if with_thumbnail:
         columns.append("thumbnail")
-    where, params = _face_filter(assign_source, person_id, unassigned)
-    age_clauses = []
-    if min_age is not None:
-        age_clauses.append("(age IS NULL OR age >= ?)")
-        params.append(min_age)
-    if max_age is not None:
-        age_clauses.append("(age IS NULL OR age <= ?)")
-        params.append(max_age)
-    if age_clauses:
-        where = f"{where} AND {' AND '.join(age_clauses)}" if where else " WHERE " + " AND ".join(age_clauses)
+    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
     query = (
         f"SELECT {','.join(columns)} FROM Face{where}"
         " ORDER BY quality_score DESC, id ASC"
@@ -507,19 +529,37 @@ def get_face(connection: sqlite3.Connection, face_id: int) -> Optional[Dict[str,
     return _row_to_dict(row)
 
 
+class _KeepAge:
+    """``assign_faces`` の ``age`` 既定値。「年齢は触らない」を表す。
+
+    ``None`` は「未設定に戻す」という**指示**なので、既定値として使えない。
+    区別しないと、一度入れた年齢を未設定へ戻せなくなる。
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - 表示用
+        return "KEEP_AGE"
+
+
+KEEP_AGE = _KeepAge()
+
+
 def assign_faces(
     connection: sqlite3.Connection,
     face_ids: Sequence[int],
     person_id: int,
     assign_source: str = ASSIGN_MANUAL,
     assign_score: Optional[float] = None,
-    age: Optional[int] = None,
+    age: Any = KEEP_AGE,
 ) -> int:
+    """顔を人物へ割り当てる。
+
+    ``age`` を省くと年齢は触らない。``None`` を明示すると未設定へ戻す。
+    """
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
-    if age is None:
+    if isinstance(age, _KeepAge):
         cursor.executemany(
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
             " assigned_at = ? WHERE id = ?",
@@ -571,7 +611,7 @@ def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int
 def load_manual_embeddings(
     connection: sqlite3.Connection,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """自動紐づけの教師データを読み出す。
+    """自動紐づけの手本を読み出す。
 
     自動紐づけの結果 (``assign_source='auto'``) は教師に含めない。混ぜると
     誤った紐づけが次回以降の基準として増幅されるため。
@@ -594,17 +634,44 @@ def load_manual_embeddings(
     return matrix, person_ids
 
 
+#: match が一度に読み出す顔の件数。matcher と二重に持たない。
+MATCH_CHUNK_SIZE = 5000
+
+
+def _match_candidate_filter(include_auto: bool) -> str:
+    """match が対象にする顔の条件。
+
+    ``include_auto`` は dry-run 用。本番実行は先に自動割り当てを取り消して
+    から候補を数えるので、取り消しを行わない dry-run で ``auto`` を除くと、
+    2回目以降の件数と距離の分布が実際より小さく出てしまう。
+    """
+    assigned = "(assign_source IS NULL OR assign_source = 'auto')" if include_auto else "assign_source IS NULL"
+    return f" WHERE {assigned} AND embedding IS NOT NULL"
+
+
+def count_match_candidates(
+    connection: sqlite3.Connection, include_auto: bool = False
+) -> int:
+    """``iter_unassigned_embeddings`` が返すのと同じ集合の件数。
+
+    進捗の分母に使う。``count_faces`` だと埋め込みを持たない顔まで数えて
+    しまい、100% に届かないまま終わる。
+    """
+    where = _match_candidate_filter(include_auto)
+    return int(connection.execute(f"SELECT COUNT(*) FROM Face{where}").fetchone()[0])
+
+
 def iter_unassigned_embeddings(
     connection: sqlite3.Connection,
-    chunk_size: int = 5000,
+    chunk_size: int = MATCH_CHUNK_SIZE,
+    include_auto: bool = False,
 ) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
     """未割当かつ埋め込みを持つ顔を (id配列, 埋め込み行列) の塊で返す。"""
+    where = _match_candidate_filter(include_auto)
     offset = 0
     while True:
         rows = connection.execute(
-            "SELECT id, embedding FROM Face"
-            " WHERE assign_source IS NULL AND embedding IS NOT NULL"
-            " ORDER BY id LIMIT ? OFFSET ?",
+            f"SELECT id, embedding FROM Face{where} ORDER BY id LIMIT ? OFFSET ?",
             (chunk_size, offset),
         ).fetchall()
         if not rows:

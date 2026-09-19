@@ -123,12 +123,18 @@ def analyze_file(
     ``known_hash`` と食い違ったとき(＝中身が変わったとき)だけ。
     """
     path = Path(path_str)
+    # 前のファイルのエラーを引きずらない。並列実行では fork 時の値が
+    # 全ワーカーに複製されるので、消さないと無関係なファイルに付く。
+    face.clear_latest_error()
     result: Dict[str, Any] = {
         "path": str(path),
         "error": None,
         "file_hash": None,
         "faces": [],
         "face_count": None,
+        # 特徴量のモデルが無いまま顔を貯めたか。_store_result が
+        # detector_version を書くかどうかの判断に使う。
+        "embedding_model_missing": False,
     }
     try:
         stat = path.stat()
@@ -157,14 +163,19 @@ def analyze_file(
             result["error"] = face.get_latest_error()
             return result
 
-        locations = face.detect_faces(rgb)
+        detections = face.detect_faces_with_scores(rgb)
+        # 「顔が小さすぎて特徴量を作れなかった」のは正常な結果なので、
+        # 出来上がりではなくモデルの有無で判断する。そうしないと、
+        # 小さい顔しか写っていない写真が毎回再スキャンされる。
+        result["embedding_model_missing"] = not face.embedding_available()
         faces: List[Dict[str, Any]] = []
-        for location in locations:
+        for location, detection_score in detections:
             embedding = face.compute_embedding(rgb, location)
             smile_score, quality_score = scoring.score_face(rgb, location)
             faces.append(
                 {
                     "bbox": location,
+                    "detection_score": detection_score,
                     "embedding": face.embedding_to_list(embedding),
                     "thumbnail": face.make_thumbnail(rgb, location),
                     "smile_score": smile_score,
@@ -223,6 +234,7 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
             connection,
             media_id=media_id,
             bbox=entry["bbox"],
+            detection_score=entry.get("detection_score"),
             embedding=entry["embedding"],
             embed_version=face.EMBED_VERSION,
             thumbnail=entry["thumbnail"],
@@ -233,12 +245,26 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
 
     smile_score, quality_score = scoring.aggregate_media_scores(face_scores)
     db.save_media_scores(connection, media_id, smile_score, quality_score)
+
+    # --allow-missing-embeddings で顔を貯めた場合は detector_version を
+    # 書かない。書いてしまうと、あとでモデルを設置しても _needs_face_scan が
+    # 「版が一致する」と見なして全件スキップし、--force-rescan 以外に回収
+    # 手段が無くなる。そして --force-rescan は手動割り当てを巻き添えにする。
+    # 版を NULL のまま残せば、次の通常の scan が自動で拾い直す。
+    incomplete = bool(result.get("embedding_model_missing")) and result["face_count"] > 0
+    if incomplete:
+        logger.warning(
+            "Stored %d face(s) without embeddings; will be scanned again once the"
+            " model is available: %s",
+            result["face_count"],
+            result["path"],
+        )
     db.update_media_scan_state(
         connection,
         media_id,
         result["face_count"],
         _utc_now(),
-        face.DETECTOR_VERSION,
+        None if incomplete else face.DETECTOR_VERSION,
     )
     return media_id
 
@@ -290,6 +316,7 @@ def scan_directory(
     prune: bool = True,
     force_prune: bool = False,
     force_rescan: bool = False,
+    allow_missing_embeddings: bool = False,
 ) -> Dict[str, Any]:
     """ディレクトリを走査し、メディアの登録と顔検出を行う。"""
     root = Path(source_dir).resolve()
@@ -328,6 +355,20 @@ def scan_directory(
             continue
         known_hash = record.get("file_hash") if record else None
         tasks.append((key, not unchanged, known_hash, need_faces))
+
+    needs_embeddings = any(need_faces for _, _, _, need_faces in tasks)
+    if needs_embeddings and not allow_missing_embeddings and not face.embedding_available():
+        # モデルが読めないまま進むと、顔は検出されるが特徴量が全件 NULL に
+        # なる。face_count は記録されるので「スキャン済み」と見なされ、
+        # --force-rescan を手で付けない限り二度と回収されない。
+        # 警告もエラーも出ないまま全損するので、ここで止める。
+        raise ScanAborted(
+            "顔特徴量のモデルを読み込めません。このまま続けると、顔は検出されても"
+            " 特徴量が保存されず、match が一切効かない状態のまま"
+            " 「スキャン済み」として記録されます。\n"
+            f"{face.get_latest_error() or 'モデルの所在を確認してください。'}\n"
+            "特徴量なしで構わない場合は --allow-missing-embeddings を付けてください。"
+        )
 
     total = len(tasks)
     summary: Dict[str, Any] = {

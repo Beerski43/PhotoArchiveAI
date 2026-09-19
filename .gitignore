@@ -1,14 +1,29 @@
+# Python 実行環境
 .venv/
+env/
+venv/
+ENV/
+
+# Python ビルド成果物
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-ENV/
-.build/
+build/
+dist/
+*.egg-info/
+
+# テストのキャッシュ
 .pytest_cache/
+
+# 実データと生成物
 mediaFiles/
-config/app_settings.json
 data/
+output/
+models/
+
+# 利用者ごとの設定。sample だけ管理する
+# (Issue #27 でルールを YAML にしても漏れないよう、名指しにしない)
+config/*
+!config/*.sample.json
