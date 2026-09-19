@@ -40,7 +40,12 @@ def _install_fake_mediapipe_modules():
                     ),
                     bounding_box=types.SimpleNamespace(xmin=0.1, ymin=0.1, width=0.4, height=0.5),
                 )
-                detections.append(types.SimpleNamespace(location_data=location_data))
+                # 実物の MediaPipe は score を繰り返し型で返す。
+                # detection_score の取り出しがその形に耐えるか確かめたいので、
+                # フェイクも同じ形にしておく。
+                detections.append(
+                    types.SimpleNamespace(location_data=location_data, score=[0.93])
+                )
             return types.SimpleNamespace(detections=detections)
 
     class FakeFaceMesh:
@@ -112,6 +117,39 @@ def fake_face_models(monkeypatch):
     yield
     face.reset_model_cache()
     scoring.reset_model_cache()
+
+
+@pytest.fixture(autouse=True)
+def isolate_app_settings(tmp_path, monkeypatch):
+    """開発機の config/app_settings.json をテストから見えなくする。
+
+    設定の探索は 環境変数 → カレントディレクトリ → リポジトリ直下 の順。
+    最後の一段があるせいで、素のテストが実機の設定(NFS 上の source_root
+    など)を読んでしまいうる。テストの結果が開発機の状態で変わらないよう、
+    リポジトリ直下の探索先を空のディレクトリへ向ける。
+    設定を使うテストは、自分でカレントディレクトリに置く。
+    """
+    from photoarchive_ai import config
+
+    monkeypatch.delenv(config.CONFIG_ENV_VAR, raising=False)
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path / "no-such-repo")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def reset_cli_progress_state():
+    """cli._progress_started をテストごとに戻す。
+
+    進捗表示は ANSI のカーソル移動で2行を書き換えるため、
+    「1行目を出したか」をモジュール変数で持っている。テストが途中で
+    終わると True のまま残り、次のテストの標準出力に \033[2A が
+    混ざる。テストの実行順に依存した差が出るので、毎回戻す。
+    """
+    from photoarchive_ai import cli
+
+    cli._reset_progress_state()
+    yield
+    cli._reset_progress_state()
 
 
 # Make QMessageBox non-interactive in tests to avoid modal dialogs blocking execution.

@@ -45,6 +45,17 @@ def get_latest_error() -> str:
     return _latest_error_message
 
 
+def clear_latest_error() -> None:
+    """直近のエラーを消す。1ファイルの処理を始めるときに呼ぶ。
+
+    これを呼ばないと、前のファイルで出たエラーが次のファイルの結果として
+    報告される。並列スキャンでは fork 時の値が全ワーカーへ複製されるため、
+    無関係なファイルにエラーが付く。
+    """
+    global _latest_error_message
+    _latest_error_message = ""
+
+
 def _set_latest_error(msg: str) -> None:
     """Set the latest error message."""
     global _latest_error_message
@@ -161,10 +172,13 @@ def _load_mediapipe_face_detection():
         return None
 
 
-def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
-    """RGB 画像から顔を検出し (top, right, bottom, left) の一覧を返す。
+def detect_faces_with_scores(
+    rgb: np.ndarray,
+) -> List[Tuple[Tuple[int, int, int, int], Optional[float]]]:
+    """顔の矩形と、検出器の確信度を返す。
 
-    検出は長辺 1280px に縮小して行い、座標は元解像度へ戻す。
+    ``detect_faces`` は矩形だけを返す薄い包み。確信度は ``Face.detection_score``
+    に保存し、GUI で怪しい検出を見分けるのに使う。
     """
     detector = _load_mediapipe_face_detection()
     if detector is None:
@@ -203,12 +217,34 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
             bottom = min(original_height, int((bbox.ymin + bbox.height) * h * y_scale))
             if right <= left or bottom <= top:
                 continue
-            faces.append((top, right, bottom, left))
+            faces.append(((top, right, bottom, left), _detection_score(detection)))
         return faces
     except Exception as error:
         logger.exception("MediaPipe face detection failed: %s", error)
         _set_latest_error(f"Face detection failed: {error}")
         return []
+
+
+def _detection_score(detection) -> Optional[float]:
+    """MediaPipe の ``score`` は繰り返し型。先頭の値を float で返す。"""
+    score = getattr(detection, "score", None)
+    if score is None:
+        return None
+    try:
+        values = list(score)
+    except TypeError:
+        values = [score]
+    if not values:
+        return None
+    try:
+        return float(values[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
+    """RGB 画像から顔を検出し (top, right, bottom, left) の一覧を返す。"""
+    return [location for location, _ in detect_faces_with_scores(rgb)]
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +301,15 @@ def has_dlib_models() -> bool:
         return True
     except Exception:
         return False
+
+
+def embedding_available() -> bool:
+    """顔特徴量を実際に生成できるか。
+
+    ``has_dlib_models`` はファイルの所在しか見ないので、dlib の読み込み
+    そのものが失敗する場合を捕まえられない。``scan`` はこちらを使う。
+    """
+    return _load_dlib_models() is not None
 
 
 def _load_dlib_models():
