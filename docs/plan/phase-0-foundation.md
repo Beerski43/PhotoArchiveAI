@@ -75,7 +75,8 @@ CLI リファレンス・スキーマバージョンと移行・特徴量の生�
   [phase-1-known-defects.md](phase-1-known-defects.md) に記録する
 - DBスキーマの変更。実データが 70,297件あるため、`migrate` と
   `PRAGMA user_version` を伴わない変更はしない
-- Issue のクローズ。クローズ候補は ROADMAP に書くだけ
+- Issue の直接クローズ。解消した Issue（#9 / #22 / #23 / #25）は PR 本文の
+  `Closes #N` に任せ、ROADMAP にも根拠を書く
 - `data/` の掃除（`photoarchive.db.bak-pre28` 773MB、廃止済み `analyze_*.log` 13件）。
   実データのバックアップなので削除は利用者判断
 

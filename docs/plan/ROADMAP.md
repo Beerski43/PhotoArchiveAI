@@ -22,7 +22,7 @@
 | [Phase 1 既知の欠陥修正](phase-1-known-defects.md) | 実施中 | 実データ運用を壊す欠陥を潰す。全件スキャンの前提 | #30（#25 を含む） |
 | Phase 2 テストの穴埋め | 未着手 | 並列スキャン・face・scoring・cli・gui の未検証パス | 未起票 |
 | Phase 3 実データでの精度確立 | 未着手 | 全件スキャン → 手動割り当て → `match` の取りこぼし率の実測と閾値の確定 | 未起票 |
-| Phase 4 GUI の作り込み | 未着手 | 顔の削除、人物ごとの枚数表示ほか | #18, #23 |
+| Phase 4 GUI の作り込み | 未着手 | 人物ごとの枚数表示、顔候補の推薦ほか | #18 |
 | Phase 5 設定と入力の整理 | 未着手 | 設定の YAML 化、ソースディレクトリの複数指定、HEIC の扱いの決着 | #27, #24, #26 |
 | Phase 6 選択エンジンの完成 | 未着手 | 画質評価の拡充、類似・連写の重複検出、用途プリセット、出力構造 | 未起票 |
 | Phase 7 性能 | 未着手 | GPU 対応 | #8 |
@@ -75,10 +75,14 @@ Phase 1 までで守られていない主要パスを埋める。全体の実行
    なっている
 6. `Person.name` の UNIQUE 制約の要否（入れるなら既存DBの移行が必要）
 
-### Phase 4 — GUI の作り込み（#18, #23）
+### Phase 4 — GUI の作り込み（#18）
 
-**#23 の要求の大部分は #28 で実装済み**（「割り当て済みを確認」で解除・年齢変更・
-自動割り当ての確定ができる）。残りを洗い直してから着手する。
+**#23（顔登録の削除機能）は #28 と #30 で解消済み。** 「割り当て済みを確認」で
+解除・除外・年齢変更（未設定へ戻すことも含む）・自動割り当ての確定ができ、
+ページャも入った。
+
+残るのは #18（GUI改善）。仕様書 §10.7 の将来拡張（顔候補の自動推薦、
+類似人物の統合、人物ごとの写真枚数表示など）から、必要なものを選んで着手する。
 
 ### Phase 5 — 設定と入力の整理（#27, #24, #26）
 
@@ -110,12 +114,20 @@ GPU 優先・CPU フォールバック。顔検出だけ GPU 対応、特徴量�
 
 自然言語からのルール生成。抽出エンジン自体は自然言語に依存させない。
 
-## クローズ候補の Issue
+## 解消済みの Issue
 
-**クローズは利用者が判断する。** エージェントは閉じない。
+PR #31（Issue #30）のマージで、次の Issue がクローズされる。
 
-| Issue | 状態 |
-|---|---|
-| #9 photoarchive scan が差分検索になっていない | #28 で解消。回帰テストは `tests/test_scanner_incremental.py` の `test_scan_skips_hash_and_faces_on_second_run` |
-| #22 analyze 実行で FaceEmbedding に person_id が入る | #28 で解消。`scan` は紐づけを一切行わない。回帰テストは `tests/test_matcher.py` の `test_assign_faces_leaves_distant_faces_unassigned` |
-| #23 GUI に顔登録削除機能追加 | 要求の大部分が #28 で実装済み。残件の確認が必要 |
+| Issue | 何で解消したか | 回帰テスト |
+|---|---|---|
+| #9 scan が差分検索になっていない | #28 と #30 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run`、`::test_touching_a_file_does_not_make_every_later_scan_read_it_again` |
+| #22 scan が勝手に person_id を入れる | #28 | `test_matcher.py::test_match_leaves_distant_faces_unassigned` |
+| #23 GUI に顔登録削除機能追加 | #28 と #30 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset`、`::test_registered_faces_dialog_pages_through_every_assigned_face` |
+| #25 `Error: none` 表示削除 | #30 | `test_cli_progress.py::test_progress_keeps_the_last_error_instead_of_overwriting_it` |
+
+**#23 は解釈が入っている。** 「削除」を「人物への登録を外す」と読んだ。`Face` の行
+そのものを消す機能という意図なら、再オープンして Phase 4 で扱う。
+
+**Issue のクローズは、PR 本文の `Closes #N` に任せる。** エージェントが直接
+閉じない（このリポジトリは `develop` が既定ブランチなので、`develop` への
+マージで発火する）。
