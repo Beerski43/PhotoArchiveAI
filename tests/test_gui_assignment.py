@@ -125,3 +125,85 @@ def test_face_age_dialog_keeps_zero_distinct_from_unset():
     assert dialog.age() == 0
     dialog.age_input.setValue(12)
     assert dialog.age() == 12
+
+
+def test_registered_faces_dialog_pages_through_every_assigned_face(window, monkeypatch):
+    """割り当て済みの顔にページャがあること。
+
+    以前は先頭の1ページぶんしか読まず、201件目以降の顔に手が届かなかった。
+    確定(auto→manual への昇格)で手本を増やしていくと簡単に超える。
+    """
+    monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.assign_faces(face_ids, person_id)
+
+    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
+
+    assert dialog.total == 5
+    assert dialog.face_list.count() == 2
+    assert dialog.prev_button.isEnabled() is False
+
+    seen = []
+    for _ in range(3):
+        seen.extend(item.data(photoarchive_gui.Qt.UserRole)["id"] for item in
+                    [dialog.face_list.item(i) for i in range(dialog.face_list.count())])
+        dialog._next_page()
+
+    assert sorted(seen) == sorted(face_ids)
+    assert dialog.next_button.isEnabled() is False
+
+    dialog._previous_page()
+    assert dialog.face_list.count() == 2
+
+
+def test_the_age_filter_returns_to_the_first_page(window, monkeypatch):
+    monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.assign_faces(face_ids, person_id)
+    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
+
+    dialog._next_page()
+    assert dialog.page == 1
+
+    dialog.min_age.setValue(3)
+    assert dialog.page == 0
+
+
+def test_assigning_without_an_age_keeps_the_one_already_recorded(window):
+    person_id = db.add_person(window.connection, "父")
+    face_id = db.list_faces(window.connection, unassigned=True)[0]["id"]
+
+    window.assign_faces([face_id], person_id, age=7)
+    assert db.get_face(window.connection, face_id)["age"] == 7
+
+    # 年齢を指定しない割り当ては年齢を触らない。
+    window.assign_faces([face_id], person_id)
+    assert db.get_face(window.connection, face_id)["age"] == 7
+
+
+def test_an_age_can_be_cleared_back_to_unset(window):
+    """一度入れた年齢を「未設定」へ戻せること。
+
+    仕様上、未設定と0歳は別の状態。戻せないと間違えて入れた年齢を
+    直せず、0歳として扱うしかなくなる。
+    """
+    person_id = db.add_person(window.connection, "父")
+    face_id = db.list_faces(window.connection, unassigned=True)[0]["id"]
+    window.assign_faces([face_id], person_id, age=7)
+
+    window.assign_faces([face_id], person_id, age=None)
+
+    assert db.get_face(window.connection, face_id)["age"] is None
+
+
+def test_zero_is_stored_as_zero_and_not_as_unset(window):
+    person_id = db.add_person(window.connection, "父")
+    face_id = db.list_faces(window.connection, unassigned=True)[0]["id"]
+
+    window.assign_faces([face_id], person_id, age=0)
+
+    assert db.get_face(window.connection, face_id)["age"] == 0

@@ -128,6 +128,22 @@ class RegisteredFacesDialog(QDialog):
         self.unassign_button.clicked.connect(self._unassign_selected)
         self.age_button.clicked.connect(self._set_age_selected)
 
+        # 割り当て済みの顔も数百件になりうる。ページ単位で読まないと、
+        # 1ページ目より後ろの顔に手が届かなくなる。
+        self.page = 0
+        self.total = 0
+        self.prev_button = QPushButton("< 前")
+        self.next_button = QPushButton("次 >")
+        self.prev_button.clicked.connect(self._previous_page)
+        self.next_button.clicked.connect(self._next_page)
+        self.page_label = QLabel("-")
+
+        pager = QHBoxLayout()
+        pager.addStretch(1)
+        pager.addWidget(self.prev_button)
+        pager.addWidget(self.page_label)
+        pager.addWidget(self.next_button)
+
         age_filter = QHBoxLayout()
         age_filter.addWidget(QLabel("年齢"))
         age_filter.addWidget(self.min_age)
@@ -135,8 +151,8 @@ class RegisteredFacesDialog(QDialog):
         age_filter.addWidget(self.max_age)
         age_filter.addWidget(QLabel("歳"))
         age_filter.addStretch(1)
-        self.min_age.valueChanged.connect(self.reload)
-        self.max_age.valueChanged.connect(self.reload)
+        self.min_age.valueChanged.connect(self._reset_page)
+        self.max_age.valueChanged.connect(self._reset_page)
 
         actions = QHBoxLayout()
         actions.addWidget(self.confirm_button)
@@ -146,22 +162,51 @@ class RegisteredFacesDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(age_filter)
+        layout.addLayout(pager)
         layout.addWidget(self.face_list)
         layout.addLayout(actions)
         self.reload()
 
+    def _age_range(self):
+        return (self.min_age.value() or None, self.max_age.value() or None)
+
+    def _reset_page(self) -> None:
+        self.page = 0
+        self.reload()
+
+    def _previous_page(self) -> None:
+        if self.page > 0:
+            self.page -= 1
+            self.reload()
+
+    def _next_page(self) -> None:
+        if (self.page + 1) * PAGE_SIZE < self.total:
+            self.page += 1
+            self.reload()
+
     def reload(self) -> None:
-        minimum = self.min_age.value() or None
-        maximum = self.max_age.value() or None
+        minimum, maximum = self._age_range()
+        self.total = db.count_faces(
+            self.connection,
+            person_id=self.person["id"],
+            min_age=minimum,
+            max_age=maximum,
+        )
+        pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page = min(self.page, pages - 1)
         records = db.list_faces(
             self.connection,
             person_id=self.person["id"],
             with_thumbnail=True,
             limit=PAGE_SIZE,
+            offset=self.page * PAGE_SIZE,
             min_age=minimum,
             max_age=maximum,
         )
         _fill_face_list(self.face_list, records)
+        self.page_label.setText(f"{self.page + 1} / {pages} ページ（全 {self.total} 件）")
+        self.prev_button.setEnabled(self.page > 0)
+        self.next_button.setEnabled(self.page + 1 < pages)
 
     def _selected_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
@@ -479,8 +524,11 @@ class MainWindow(QWidget):
             )
         )
 
-    def assign_faces(self, face_ids: List[int], person_id: int, age: Optional[int] = None) -> int:
-        """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。"""
+    def assign_faces(self, face_ids: List[int], person_id: int, age=db.KEEP_AGE) -> int:
+        """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。
+
+        ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。
+        """
         return db.assign_faces(self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age)
 
     def _assign_selected(self):
@@ -511,8 +559,23 @@ def main() -> None:
     import sys
 
     parser = argparse.ArgumentParser(prog="photoarchive-gui")
-    parser.add_argument("--db", required=True, help="SQLite database path.")
+    parser.add_argument(
+        "--db",
+        help="SQLite database path. 省略すると config/app_settings.json の database_path を使う。",
+    )
     args = parser.parse_args()
+
+    # CLI と同じ解決順にする。GUI だけ設定ファイルを読まないと、
+    # 「アプリケーション内にDBパスをハードコードしない」という方針から外れる。
+    from .config import get_database_path, load_settings
+
+    db_path = args.db or get_database_path(load_settings())
+    if not db_path:
+        raise SystemExit(
+            "データベースのパスが必要です。--db で指定するか、"
+            "config/app_settings.json の database_path を設定してください。"
+        )
+
     from PySide6.QtCore import QLibraryInfo
 
     # OpenCV may register its own Qt plugins first; use the PySide6 plugins for this GUI.
@@ -520,6 +583,6 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    window = MainWindow(args.db)
+    window = MainWindow(db_path)
     window.show()
     sys.exit(app.exec())

@@ -123,6 +123,9 @@ def analyze_file(
     ``known_hash`` と食い違ったとき(＝中身が変わったとき)だけ。
     """
     path = Path(path_str)
+    # 前のファイルのエラーを引きずらない。並列実行では fork 時の値が
+    # 全ワーカーに複製されるので、消さないと無関係なファイルに付く。
+    face.clear_latest_error()
     result: Dict[str, Any] = {
         "path": str(path),
         "error": None,
@@ -157,14 +160,15 @@ def analyze_file(
             result["error"] = face.get_latest_error()
             return result
 
-        locations = face.detect_faces(rgb)
+        detections = face.detect_faces_with_scores(rgb)
         faces: List[Dict[str, Any]] = []
-        for location in locations:
+        for location, detection_score in detections:
             embedding = face.compute_embedding(rgb, location)
             smile_score, quality_score = scoring.score_face(rgb, location)
             faces.append(
                 {
                     "bbox": location,
+                    "detection_score": detection_score,
                     "embedding": face.embedding_to_list(embedding),
                     "thumbnail": face.make_thumbnail(rgb, location),
                     "smile_score": smile_score,
@@ -223,6 +227,7 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
             connection,
             media_id=media_id,
             bbox=entry["bbox"],
+            detection_score=entry.get("detection_score"),
             embedding=entry["embedding"],
             embed_version=face.EMBED_VERSION,
             thumbnail=entry["thumbnail"],
@@ -290,6 +295,7 @@ def scan_directory(
     prune: bool = True,
     force_prune: bool = False,
     force_rescan: bool = False,
+    allow_missing_embeddings: bool = False,
 ) -> Dict[str, Any]:
     """ディレクトリを走査し、メディアの登録と顔検出を行う。"""
     root = Path(source_dir).resolve()
@@ -328,6 +334,20 @@ def scan_directory(
             continue
         known_hash = record.get("file_hash") if record else None
         tasks.append((key, not unchanged, known_hash, need_faces))
+
+    needs_embeddings = any(need_faces for _, _, _, need_faces in tasks)
+    if needs_embeddings and not allow_missing_embeddings and not face.embedding_available():
+        # モデルが読めないまま進むと、顔は検出されるが特徴量が全件 NULL に
+        # なる。face_count は記録されるので「スキャン済み」と見なされ、
+        # --force-rescan を手で付けない限り二度と回収されない。
+        # 警告もエラーも出ないまま全損するので、ここで止める。
+        raise ScanAborted(
+            "顔特徴量のモデルを読み込めません。このまま続けると、顔は検出されても"
+            " 特徴量が保存されず、match が一切効かない状態のまま"
+            " 「スキャン済み」として記録されます。\n"
+            f"{face.get_latest_error() or 'モデルの所在を確認してください。'}\n"
+            "特徴量なしで構わない場合は --allow-missing-embeddings を付けてください。"
+        )
 
     total = len(tasks)
     summary: Dict[str, Any] = {
