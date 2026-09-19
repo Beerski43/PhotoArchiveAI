@@ -20,7 +20,11 @@ from .scoring import distance_to_similarity
 
 logger = logging.getLogger("photoarchive.matcher")
 
-DEFAULT_THRESHOLD = 0.5
+#: 顔特徴量の距離の上限。実データでの誤一致率(同一写真に写る別人同士が
+#: この距離を下回る割合)は 0.4 で 0.5〜1.0%、0.45 で 2.8〜5.7%、
+#: 0.5 で 9.0〜22.7%、dlib 標準の 0.6 では 40〜63% だった。
+#: 誤った紐づけは手作業でのやり直しが高くつくため、取りこぼす側に倒す。
+DEFAULT_THRESHOLD = 0.4
 DEFAULT_MARGIN = 0.05
 CHUNK_SIZE = 5000
 
