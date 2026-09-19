@@ -1,21 +1,40 @@
+"""顔の検出と特徴量生成。
+
+役割を2つに絞っている。
+
+1. MediaPipe による顔検出 (``detect_faces``)
+2. dlib の ResNet による128次元の顔特徴量生成 (``compute_embedding``)
+
+人物への紐づけはここでは行わない。``scan`` が顔を貯め、GUI が人物へ割り当て、
+``match`` が残りを自動で紐づける、という順序を守るため。
+
+**重要**: 検出した矩形をそのまま dlib に渡すと、パディングの取り方の違いだけで
+特徴量の距離が別人判定の閾値と同じオーダー(実測 0.03〜0.57)で動く。矩形の正規化
+は必ず :func:`face_rect` に集約し、規約を変えるときは :data:`EMBED_VERSION` を
+上げて再スキャン対象にすること。
+"""
+
+import importlib.util
 import io
 import logging
 import os
 import sys
 from contextlib import contextmanager, redirect_stderr
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from .db import (
-    add_face_embedding,
-    get_person_embeddings,
-    save_analysis_result,
-)
+try:  # HEIC/HEIF を Pillow で開けるようにする
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except Exception:  # pragma: no cover - 依存が無い環境でも検出処理は続行する
+    pass
+
+logger = logging.getLogger("photoarchive.face")
 
 # Global state for tracking latest error message
 _latest_error_message = ""
@@ -23,7 +42,6 @@ _latest_error_message = ""
 
 def get_latest_error() -> str:
     """Get the latest error message for display."""
-    global _latest_error_message
     return _latest_error_message
 
 
@@ -33,14 +51,26 @@ def _set_latest_error(msg: str) -> None:
     _latest_error_message = msg[:80]  # Truncate to 80 chars for display
 
 
-logger = logging.getLogger("photoarchive.analyzer")
-
-ANALYZER_VERSION = "1.4"
 FACE_DETECTION_MAX_SIZE = 1280
+VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
+
+# 埋め込み用の矩形正規化パラメータ。変更したら EMBED_VERSION も上げること。
+EMBED_PADDING = 0.25
+EMBED_MIN_FACE_PX = 60
+EMBED_VERSION = "dlib_resnet_v1/sp5/pad0.25/full"
+DETECTOR_VERSION = f"mediapipe_fd1/{EMBED_VERSION}"
+
+THUMBNAIL_MAX_SIZE = 160
+THUMBNAIL_QUALITY = 85
+
+DLIB_MODEL_DIR_ENV = "PHOTOARCHIVE_DLIB_MODEL_DIR"
+SHAPE_PREDICTOR_FILE = "shape_predictor_5_face_landmarks.dat"
+FACE_RECOGNITION_FILE = "dlib_face_recognition_resnet_model_v1.dat"
+
 _face_detection = None
 _face_detection_initialized = False
-_face_mesh = None
-_face_mesh_initialized = False
+_dlib_models = None
+_dlib_models_initialized = False
 
 
 @contextmanager
@@ -59,8 +89,8 @@ def _suppress_mediapipe_output():
         os.close(saved_stderr)
 
 
-def _read_image(path: Path) -> Optional[np.ndarray]:
-    """Read image or video file. Returns None if file cannot be read, with warning logged."""
+def read_rgb(path: Path) -> Optional[np.ndarray]:
+    """画像または動画(先頭フレーム)を RGB 配列として読む。失敗時は None。"""
     exists = path.exists()
     is_file = path.is_file() if exists else False
     readable = bool(path.stat().st_mode & 0o444) if is_file else False
@@ -71,7 +101,7 @@ def _read_image(path: Path) -> Optional[np.ndarray]:
         _set_latest_error(msg)
         return None
     suffix = path.suffix.lower().lstrip(".")
-    if suffix in {"mp4", "avi", "mov", "mkv"}:
+    if suffix in VIDEO_EXTENSIONS:
         capture = cv2.VideoCapture(str(path))
         try:
             if not capture.isOpened():
@@ -86,22 +116,26 @@ def _read_image(path: Path) -> Optional[np.ndarray]:
                 _set_latest_error(msg)
                 return None
             return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        except Exception as e:
+        except Exception as error:
             msg = f"Error reading video: {path.name}"
-            logger.warning(f"{msg}: {e}")
+            logger.warning("%s: %s", msg, error)
             _set_latest_error(msg)
             return None
         finally:
             capture.release()
     try:
         with Image.open(path) as image:
-            rgb = np.asarray(image.convert("RGB"))
-            return rgb
-    except Exception as e:
+            return np.asarray(image.convert("RGB"))
+    except Exception as error:
         msg = f"Cannot read image: {path.name}"
-        logger.warning(f"{msg}: {e}")
+        logger.warning("%s: %s", msg, error)
         _set_latest_error(msg)
         return None
+
+
+# ---------------------------------------------------------------------------
+# 顔検出 (MediaPipe)
+# ---------------------------------------------------------------------------
 
 
 def _load_mediapipe_face_detection():
@@ -111,10 +145,11 @@ def _load_mediapipe_face_detection():
         return _face_detection
     try:
         import mediapipe as mp  # type: ignore
+
         with _suppress_mediapipe_output():
             _face_detection = mp.solutions.face_detection.FaceDetection(
                 model_selection=1,
-                min_detection_confidence=0.5
+                min_detection_confidence=0.5,
             )
         _face_detection_initialized = True
         return _face_detection
@@ -125,8 +160,9 @@ def _load_mediapipe_face_detection():
 
 
 def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
-    """Detect faces in RGB image using mediapipe.
-    Returns list of (top, right, bottom, left) tuples compatible with face_recognition format.
+    """RGB 画像から顔を検出し (top, right, bottom, left) の一覧を返す。
+
+    検出は長辺 1280px に縮小して行い、座標は元解像度へ戻す。
     """
     detector = _load_mediapipe_face_detection()
     if detector is None:
@@ -146,7 +182,7 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
         else:
             detection_rgb = rgb
         with _suppress_mediapipe_output():
-            results = detector.process(detection_rgb)
+            results = detector.process(np.ascontiguousarray(detection_rgb))
         detections = results.detections or []
         if not detections:
             return []
@@ -154,7 +190,7 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
         h, w = detection_rgb.shape[:2]
         x_scale = original_width / w
         y_scale = original_height / h
-        for index, detection in enumerate(detections, start=1):
+        for detection in detections:
             location_data = detection.location_data
             bbox = getattr(location_data, "relative_bounding_box", None)
             if bbox is None or (bbox.width == 0 and bbox.height == 0):
@@ -163,6 +199,8 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
             top = max(0, int(bbox.ymin * h * y_scale))
             right = min(original_width, int((bbox.xmin + bbox.width) * w * x_scale))
             bottom = min(original_height, int((bbox.ymin + bbox.height) * h * y_scale))
+            if right <= left or bottom <= top:
+                continue
             faces.append((top, right, bottom, left))
         return faces
     except Exception as error:
@@ -171,258 +209,189 @@ def detect_faces(rgb: np.ndarray) -> List[Tuple[int, int, int, int]]:
         return []
 
 
-def _load_mediapipe_face_mesh():
-    """Load mediapipe face mesh with fallback."""
-    global _face_mesh, _face_mesh_initialized
-    if _face_mesh_initialized:
-        return _face_mesh
+# ---------------------------------------------------------------------------
+# 顔特徴量 (dlib)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_model_dir() -> Path:
+    """dlib のモデルファイルがあるディレクトリを探す。
+
+    ``face_recognition`` パッケージは import しない。``face_recognition_models``
+    の ``__init__`` が ``pkg_resources`` に依存しており、新しい setuptools では
+    ImportError になるため。``importlib.util.find_spec`` はモジュールを実行
+    しないので、この問題を踏まずにパスだけ取り出せる。
+    """
+    candidates = []
+    env_dir = os.environ.get(DLIB_MODEL_DIR_ENV)
+    if env_dir:
+        candidates.append(Path(env_dir))
     try:
-        import mediapipe as mp  # type: ignore
-        with _suppress_mediapipe_output():
-            _face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=True,
-                max_num_faces=1,
-                min_detection_confidence=0.5
-            )
-        _face_mesh_initialized = True
-        return _face_mesh
-    except Exception as error:
-        _face_mesh_initialized = True
-        logger.exception("MediaPipe face mesh initialization failed: %s", error)
-        return None
+        from .config import get_dlib_model_dir, load_settings
 
-
-def _get_landmarks_embedding(landmarks) -> Optional[List[float]]:
-    """Convert 468 face landmarks to 128-dim embedding via PCA-like compression."""
-    if not landmarks:
-        return None
-    # Flatten 468 landmarks (x, y, z) into 1404-dim vector
-    flat = np.array([[lm.x, lm.y, lm.z] for lm in landmarks]).flatten()
-    # Simple dimensionality reduction: take key landmark groups
-    # Eyes: 0-10, 160-180
-    # Nose: 6, 19-50
-    # Mouth: 61-100
-    # Jaw: 200-250
-    indices = list(range(0, 30, 2)) + list(range(60, 100, 2)) + list(range(200, 250, 2))
-    selected = flat[[i * 3 for i in indices if i * 3 < len(flat)]][:128]
-    # Pad to 128 dimensions if needed
-    if len(selected) < 128:
-        selected = np.pad(selected, (0, 128 - len(selected)), mode='constant')
-    return selected[:128].tolist()
-
-
-def compute_face_embedding(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Optional[List[float]]:
-    """Compute face embedding using mediapipe landmarks."""
-    mesh = _load_mediapipe_face_mesh()
-    if mesh is None:
-        logger.error("MediaPipe face mesh is unavailable")
-        return None
+        configured = get_dlib_model_dir(load_settings())
+        if configured:
+            candidates.append(Path(configured))
+    except Exception:  # pragma: no cover - 設定ファイルが壊れていても続行する
+        pass
     try:
-        top, right, bottom, left = face_location
-        face_rgb = np.ascontiguousarray(rgb[top:bottom, left:right])
-        if face_rgb.size == 0:
-            logger.warning("Face crop is empty: location=%s", face_location)
-            return None
-        with _suppress_mediapipe_output():
-            results = mesh.process(face_rgb)
-        landmarks_results = results.multi_face_landmarks or []
-        if not landmarks_results:
-            return None
-        landmarks = landmarks_results[0]
-        embedding = _get_landmarks_embedding(landmarks.landmark)
-        return embedding
+        spec = importlib.util.find_spec("face_recognition_models")
+    except Exception:  # pragma: no cover - 環境依存
+        spec = None
+    if spec is not None and spec.submodule_search_locations:
+        candidates.append(Path(list(spec.submodule_search_locations)[0]) / "models")
+    candidates.append(Path(__file__).resolve().parents[2] / "models")
+
+    for candidate in candidates:
+        if (candidate / SHAPE_PREDICTOR_FILE).is_file() and (
+            candidate / FACE_RECOGNITION_FILE
+        ).is_file():
+            return candidate
+    raise FileNotFoundError(
+        "dlib の顔特徴量モデルが見つかりません。"
+        f" {SHAPE_PREDICTOR_FILE} と {FACE_RECOGNITION_FILE} を用意してください。"
+        f" 環境変数 {DLIB_MODEL_DIR_ENV} でディレクトリを指定するか、"
+        " `pip install git+https://github.com/ageitgey/face_recognition_models`"
+        " を実行してください。"
+    )
+
+
+def has_dlib_models() -> bool:
+    """モデルファイルが利用できるか。テストのスキップ判定に使う。"""
+    try:
+        _resolve_model_dir()
+        return True
+    except Exception:
+        return False
+
+
+def _load_dlib_models():
+    """(shape_predictor, face_recognition_model) を返す。失敗時は None。"""
+    global _dlib_models, _dlib_models_initialized
+    if _dlib_models_initialized:
+        return _dlib_models
+    _dlib_models_initialized = True
+    try:
+        import dlib  # type: ignore
+
+        model_dir = _resolve_model_dir()
+        _dlib_models = (
+            dlib.shape_predictor(str(model_dir / SHAPE_PREDICTOR_FILE)),
+            dlib.face_recognition_model_v1(str(model_dir / FACE_RECOGNITION_FILE)),
+        )
+        return _dlib_models
     except Exception as error:
-        logger.exception("MediaPipe face mesh failed: %s", error)
+        logger.exception("dlib face recognition model initialization failed: %s", error)
+        _set_latest_error(f"dlib model unavailable: {error}")
+        _dlib_models = None
         return None
 
 
-def _face_crop(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Image.Image:
+def reset_model_cache() -> None:
+    """テストからモデルを差し替えるためにキャッシュを捨てる。"""
+    global _dlib_models, _dlib_models_initialized, _face_detection, _face_detection_initialized
+    _dlib_models = None
+    _dlib_models_initialized = False
+    _face_detection = None
+    _face_detection_initialized = False
+
+
+def face_rect(
+    face_location: Tuple[int, int, int, int],
+    width: int,
+    height: int,
+) -> Tuple[int, int, int, int]:
+    """検出矩形を正方形化し、一定率のパディングを付けて画像内に収める。
+
+    戻り値は (left, top, right, bottom)。``scan`` も GUI も必ずこの関数を通し、
+    特徴量の入力矩形の規約を1つに保つこと。
+    """
     top, right, bottom, left = face_location
-    crop = rgb[top:bottom, left:right]
-    return Image.fromarray(crop)
+    center_x = (left + right) / 2.0
+    center_y = (top + bottom) / 2.0
+    size = max(right - left, bottom - top) * (1.0 + EMBED_PADDING * 2.0)
+    half = size / 2.0
+    new_left = int(round(max(0, center_x - half)))
+    new_top = int(round(max(0, center_y - half)))
+    new_right = int(round(min(width, center_x + half)))
+    new_bottom = int(round(min(height, center_y + half)))
+    return new_left, new_top, new_right, new_bottom
 
 
-def _face_to_bytes(face_image: Image.Image) -> bytes:
+def compute_embedding(
+    rgb: np.ndarray,
+    face_location: Tuple[int, int, int, int],
+) -> Optional[np.ndarray]:
+    """顔の128次元特徴量を返す。小さすぎる顔やモデル不在の場合は None。"""
+    models = _load_dlib_models()
+    if models is None:
+        return None
+    height, width = rgb.shape[:2]
+    left, top, right, bottom = face_rect(face_location, width, height)
+    if min(right - left, bottom - top) < EMBED_MIN_FACE_PX:
+        logger.debug("Face too small for embedding: %s", face_location)
+        return None
+    try:
+        import dlib  # type: ignore
+
+        shape_predictor, recognition_model = models
+        image = np.ascontiguousarray(rgb)
+        rectangle = dlib.rectangle(left, top, right, bottom)
+        shape = shape_predictor(image, rectangle)
+        descriptor = recognition_model.compute_face_descriptor(image, shape, 0)
+        return np.asarray(descriptor, dtype=np.float32)
+    except Exception as error:
+        logger.exception("dlib embedding failed: %s", error)
+        _set_latest_error(f"Embedding failed: {error}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 顔画像の切り出し
+# ---------------------------------------------------------------------------
+
+
+def crop_face(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> Image.Image:
+    top, right, bottom, left = face_location
+    return Image.fromarray(rgb[top:bottom, left:right])
+
+
+def face_to_bytes(face_image: Image.Image, quality: int = 90) -> bytes:
     output = io.BytesIO()
-    face_image.save(output, format="JPEG", quality=90)
+    face_image.convert("RGB").save(output, format="JPEG", quality=quality)
     return output.getvalue()
 
 
-def _distance_to_similarity(distance: float) -> float:
-    normalized = max(0.0, min(1.0, 1.0 - distance / 0.6))
-    return normalized * 100.0
+def make_thumbnail(
+    rgb: np.ndarray,
+    face_location: Tuple[int, int, int, int],
+    max_size: int = THUMBNAIL_MAX_SIZE,
+) -> Optional[bytes]:
+    """一覧表示用の小さな顔画像を作る。原寸のまま貯めるとDBが数GBになる。"""
+    crop = crop_face(rgb, face_location)
+    if crop.width == 0 or crop.height == 0:
+        return None
+    crop.thumbnail((max_size, max_size))
+    return face_to_bytes(crop, quality=THUMBNAIL_QUALITY)
 
 
-def _estimate_smile_score(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> float:
-    """Estimate smile score from face landmarks using mediapipe."""
-    mesh = _load_mediapipe_face_mesh()
-    if mesh is None:
-        return 0.0
-    try:
-        top, right, bottom, left = face_location
-        face_rgb = np.ascontiguousarray(rgb[top:bottom, left:right])
-        if face_rgb.size == 0:
-            return 0.0
-        with _suppress_mediapipe_output():
-            results = mesh.process(face_rgb)
-        if not results.multi_face_landmarks or len(results.multi_face_landmarks) == 0:
-            return 0.0
-        landmarks = results.multi_face_landmarks[0].landmark
-        # Mouth landmarks: 61-100 (especially 61, 291 for corners, 78, 308 for center)
-        h, w = rgb.shape[:2]
-        mouth_corners = [landmarks[61], landmarks[291]]  # Left and right corners
-        mouth_center_upper = [landmarks[78], landmarks[308]]  # Upper center points
-        xs = [lm.x * w for lm in mouth_corners + mouth_center_upper]
-        ys = [lm.y * h for lm in mouth_corners + mouth_center_upper]
-        width = max(xs) - min(xs)
-        height = max(ys) - min(ys)
-        if height <= 0:
-            return 0.0
-        ratio = width / height
-        return min(100.0, max(0.0, (ratio - 1.4) * 70.0))
-    except Exception:
-        return 0.0
-
-
-def _estimate_quality(rgb: np.ndarray, face_location: Tuple[int, int, int, int]) -> float:
-    top, right, bottom, left = face_location
-    face_region = rgb[top:bottom, left:right]
-    if face_region.size == 0:
-        return 0.0
-    gray = cv2.cvtColor(face_region, cv2.COLOR_RGB2GRAY)
-    brightness = float(np.mean(gray)) / 255.0
-    image_area = float(rgb.shape[0] * rgb.shape[1])
-    face_area = float(max(1, (bottom - top) * (right - left)))
-    size_ratio = min(1.0, face_area / (image_area * 0.12))
-    return min(100.0, brightness * 60.0 + size_ratio * 40.0)
-
-
-def analyze_media(db_connection, media: Dict[str, any]) -> None:
-    path = Path(media["path"])
-    _set_latest_error("")
-    try:
-        rgb = _read_image(path)
-        if rgb is None:
-            logger.error(
-                "DB save skipped MediaPipe: path=%s face_count=0 reason=image_read_failed",
-                path,
-            )
-            save_analysis_result(db_connection, media["id"], 0, 0.0, 0.0, 0.0)
-            logger.info(
-                "DB save completed: media_id=%s face_count=0 family_score=0.0 smile_score=0.0 quality_score=0.0",
-                media["id"],
-            )
-            return
-        face_locations = detect_faces(rgb)
-        face_count = len(face_locations)
-        mediapipe_error = get_latest_error()
-        if face_count == 0 and mediapipe_error.startswith("MediaPipe"):
-            logger.error(
-                "MediaPipe did not produce a detection; face_count=0 is an unavailable/error result: %s",
-                mediapipe_error,
-            )
-        elif face_count == 0:
-            msg = f"No face detected: {path}"
-            logger.info(msg)
-            _set_latest_error(msg)
-        best_family_score = 0.0
-        best_smile_score = 0.0
-        best_quality_score = 0.0
-        all_person_embeddings = []
-        person_ids = []
-        for person in db_connection.execute("SELECT id FROM Person").fetchall():
-            person_ids.append(person["id"])
-            all_person_embeddings.extend(get_person_embeddings(db_connection, person["id"]))
-        for location in face_locations:
-            embedding = compute_face_embedding(rgb, location)
-            if embedding is None:
-                continue
-            similarity = 0.0
-            matched_person_id = None
-            if all_person_embeddings:
-                try:
-                    # Compute euclidean distances between embedding and all registered embeddings
-                    embedding_arr = np.array(embedding)
-                    distances = np.array([np.linalg.norm(embedding_arr - np.array(e)) for e in all_person_embeddings])
-                    best_index = int(np.argmin(distances))
-                    distance = float(distances[best_index])
-                    similarity = _distance_to_similarity(distance)
-                    matched_person_id = person_ids[best_index % len(person_ids)] if person_ids else None
-                except Exception:
-                    pass
-            cropped = _face_crop(rgb, location)
-            face_image_bytes = _face_to_bytes(cropped)
-            add_face_embedding(
-                db_connection,
-                matched_person_id,
-                embedding,
-                similarity,
-                face_image_bytes,
-                media_id=media["id"],
-            )
-            best_family_score = max(best_family_score, similarity)
-            best_smile_score = max(best_smile_score, _estimate_smile_score(rgb, location))
-            best_quality_score = max(best_quality_score, _estimate_quality(rgb, location))
-        save_analysis_result(
-            db_connection,
-            media["id"],
-            face_count,
-            best_family_score,
-            best_smile_score,
-            best_quality_score,
-            duplicate_group=None,
-            event_category=None,
-        )
-        db_connection.execute(
-            "UPDATE Media SET analyzed_date = ?, analyzer_version = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), ANALYZER_VERSION, media["id"]),
-        )
-        db_connection.commit()
-        logger.debug(f"Analysis succeeded: {path} (faces={face_count}, family={best_family_score:.1f}, smile={best_smile_score:.1f}, quality={best_quality_score:.1f})")
-    except Exception as e:
-        logger.exception("Analysis failed for %s: %s", path, e)
-        _set_latest_error(f"Analysis failed: {e}")
-        save_analysis_result(db_connection, media["id"], 0, 0.0, 0.0, 0.0)
-        raise
-
-
-def analyze_database(
-    db_connection,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
-) -> None:
-    global _latest_error_message
-    _latest_error_message = ""  # Reset at start
-    cursor = db_connection.cursor()
-    rows = cursor.execute(
-        "SELECT * FROM Media WHERE analyzed_date IS NULL OR analyzer_version != ? ORDER BY path",
-        (ANALYZER_VERSION,),
-    ).fetchall()
-    total = len(rows)
-    if total == 0:
-        if progress_callback is not None:
-            progress_callback(0, 0, "no media to analyze")
-        return
-    for index, row in enumerate(rows, start=1):
-        try:
-            analyze_media(db_connection, dict(row))
-        except Exception:
-            logger.error("Continuing after analysis failure: %s", row["path"])
-        if progress_callback is not None:
-            detail = f"{Path(row['path']).name}"
-            progress_callback(index, total, detail)
+def load_face_image_bytes(path: Path, face_location: Tuple[int, int, int, int]) -> bytes:
+    """元画像から顔を切り出し直す。拡大プレビュー用。"""
+    rgb = read_rgb(path)
+    if rgb is None:
+        raise FileNotFoundError(f"Cannot load image: {path}")
+    return face_to_bytes(crop_face(rgb, face_location))
 
 
 def detect_faces_in_file(path: str) -> List[Tuple[int, int, int, int]]:
     image_path = Path(path)
-    rgb = _read_image(image_path)
+    rgb = read_rgb(image_path)
     if rgb is None:
         return []
     return detect_faces(rgb)
 
 
-def load_face_image_bytes(path: Path, face_location: Tuple[int, int, int, int]) -> bytes:
-    rgb = _read_image(path)
-    if rgb is None:
-        raise FileNotFoundError(f"Cannot load image: {path}")
-    cropped = _face_crop(rgb, face_location)
-    return _face_to_bytes(cropped)
+def embedding_to_list(embedding: Optional[Sequence[float]]) -> Optional[List[float]]:
+    if embedding is None:
+        return None
+    return [float(value) for value in embedding]
