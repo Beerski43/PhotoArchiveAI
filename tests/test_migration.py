@@ -3,7 +3,12 @@ import sqlite3
 import pytest
 
 from photoarchive_ai import db
-from photoarchive_ai.migration import migrate_database, needs_migration
+from photoarchive_ai.migration import (
+    backup_database,
+    describe_migration,
+    migrate_database,
+    needs_migration,
+)
 
 LEGACY_SCHEMA = [
     "CREATE TABLE Media (id INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT UNIQUE NOT NULL,"
@@ -115,6 +120,110 @@ def test_ensure_database_refuses_legacy_schema(tmp_path):
     _build_legacy_database(database)
     with pytest.raises(db.SchemaVersionError):
         db.ensure_database(str(database))
+
+
+def test_describe_migration_counts_what_will_be_dropped(tmp_path):
+    """移行の前に「何が消えるか」を数えられること。
+
+    実データは 70,000 件規模で作り直しが利かない。実行前に件数を見せられ
+    ないと、利用者が移行してよいか判断できない。
+    """
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+
+    summary = describe_migration(str(database))
+
+    assert summary["schema_version"] == 0
+    assert summary["media"] == 3
+    assert summary["persons"] == 2
+    # 顔と解析結果は移行で作り直す(特徴量の規約が変わったため)
+    assert summary["faces_to_drop"] == 1
+    assert summary["analysis_to_drop"] == 1
+    assert "FaceEmbedding" in summary["tables"]
+
+
+def test_describe_migration_on_a_current_database_has_nothing_to_drop(tmp_path):
+    database = tmp_path / "current.db"
+    connection = db.ensure_database(str(database))
+    db.add_person(connection, "父")
+    connection.commit()
+    connection.close()
+
+    summary = describe_migration(str(database))
+
+    assert summary["schema_version"] == db.SCHEMA_VERSION
+    assert summary["persons"] == 1
+    assert summary["faces_to_drop"] == 0
+
+
+def test_backup_database_writes_to_an_explicit_path(tmp_path):
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+    target = tmp_path / "backups" / "2026" / "before-migration.db"
+
+    created = backup_database(str(database), str(target))
+
+    # 親ディレクトリが無くても作る
+    assert created == target
+    assert target.is_file()
+    assert target.read_bytes() == database.read_bytes()
+
+
+def test_backup_database_defaults_to_a_timestamped_sibling(tmp_path):
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+
+    created = backup_database(str(database))
+
+    assert created.parent == database.parent
+    assert created.name.startswith("legacy.db.bak-")
+    assert created.read_bytes() == database.read_bytes()
+
+
+def test_migrate_can_skip_the_backup_and_the_vacuum(tmp_path):
+    """VACUUM は 773MB 級のDBで時間がかかるので、外せること。"""
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+
+    result = migrate_database(str(database), vacuum=False, make_backup=False)
+
+    assert result["migrated"] is True
+    assert result["backup"] is None
+    assert list(tmp_path.glob("legacy.db.bak-*")) == []
+    # 中身は通常の移行と同じ
+    assert result["after"] == {"media": 3, "persons": 2, "faces": 0, "unscanned": 3}
+
+
+def test_migrate_reports_its_progress(tmp_path):
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+    messages = []
+
+    migrate_database(str(database), log=messages.append)
+
+    assert any("バックアップ" in message for message in messages)
+    assert any("VACUUM" in message for message in messages)
+    assert any("移行が完了" in message for message in messages)
+
+
+def test_migrate_creates_the_schema_for_an_empty_file(tmp_path):
+    database = tmp_path / "empty.db"
+    sqlite3.connect(str(database)).close()
+
+    result = migrate_database(str(database))
+
+    assert result["migrated"] is True
+    assert result["schema_version"] == db.SCHEMA_VERSION
+    connection = db.connect(str(database))
+    try:
+        assert db.list_media(connection) == []
+    finally:
+        connection.close()
+
+
+def test_migrate_refuses_a_database_that_does_not_exist(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        migrate_database(str(tmp_path / "missing.db"))
 
 
 def test_embedding_blob_roundtrip():
