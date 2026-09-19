@@ -1,14 +1,16 @@
 import argparse
 import logging
+import math
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
 from .converter import convert_heic_files
 from .db import SchemaVersionError, ensure_database
+from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
 from .face import get_latest_error
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
 from .migration import describe_migration, migrate_database, needs_migration
@@ -172,6 +174,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_log_level(match_parser)
 
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Measure how often match would miss or mis-assign a face, using assigned faces.",
+    )
+    evaluate_parser.add_argument("--db", help="SQLite database path.")
+    evaluate_parser.add_argument(
+        "--thresholds",
+        default=",".join(f"{value:g}" for value in DEFAULT_THRESHOLDS),
+        help=(
+            "試す閾値をカンマ区切りで指定する"
+            f" (default: {','.join(f'{value:g}' for value in DEFAULT_THRESHOLDS)})。"
+        ),
+    )
+    evaluate_parser.add_argument(
+        "--margin",
+        type=float,
+        default=DEFAULT_MARGIN,
+        help=f"Required distance gap to the runner-up person (default: {DEFAULT_MARGIN}).",
+    )
+    evaluate_parser.add_argument(
+        "--keep-same-media",
+        action="store_true",
+        help=(
+            "同じ写真に写る同一人物の顔も手本に残す。既定では外す"
+            "（抜いた顔とほぼ同じ手本が残ると、必ず当たって数字が甘くなるため）。"
+        ),
+    )
+    _add_log_level(evaluate_parser)
+
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="JSON or YAML rule file path.")
@@ -272,6 +303,55 @@ def _run_match(args, db_path: str) -> None:
             print(f"  {bucket:.1f}-{bucket + 0.1:.1f}: {summary['histogram'][bucket]}")
 
 
+def _parse_thresholds(raw: str) -> List[float]:
+    """カンマ区切りの閾値を読む。読めない値は握り潰さずに止める。
+
+    **同じ閾値を2度数えない。** 集計先は閾値の値で引くので、重複すると
+    片方が0件、もう片方が2倍になり、正解率が 200% になる。表に
+    「0.40 で正解 0.0%」という行が並ぶと、閾値を緩める方向に判断が傾く。
+
+    **`nan` や `inf` も弾く。** `float("nan")` は読めてしまうが、
+    `best_distance > nan` が常に False なので**閾値を掛けていないのと同じ**
+    判定になる。0 以下も、何も割り当たらない表が出るだけで意味がない。
+    """
+    values: List[float] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = float(part)
+        except ValueError:
+            raise SystemExit(f"閾値として読めない値です: {part}") from None
+        if not math.isfinite(value) or value <= 0:
+            raise SystemExit(f"閾値は正の有限の数で指定してください: {part}")
+        if value in values:
+            continue
+        values.append(value)
+    if not values:
+        raise SystemExit("閾値が1つも指定されていません。")
+    return values
+
+
+def _run_evaluate(args, db_path: str) -> None:
+    log_file = Path("data/logs") / f"evaluate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = _setup_logging(log_file, args.log_level)
+    logger.info("Evaluate started. Log file: %s", log_file)
+    _reset_progress_state()
+    thresholds = _parse_thresholds(args.thresholds)
+    with ensure_database(db_path) as connection:
+        summary = evaluate_match(
+            connection,
+            thresholds=thresholds,
+            margin=args.margin,
+            keep_same_media=args.keep_same_media,
+            progress_callback=lambda current, total, detail: _emit_progress(
+                current, total, detail, prefix="Evaluating"
+            ),
+        )
+    print(format_report(summary))
+
+
 # データベースを使わないサブコマンド。DBパスの解決を要求しない。
 _COMMANDS_WITHOUT_DATABASE = {"convert-heic"}
 
@@ -325,6 +405,10 @@ def main() -> None:
 
         if args.command == "match":
             _run_match(args, db_path)
+            return
+
+        if args.command == "evaluate":
+            _run_evaluate(args, db_path)
             return
 
         if args.command == "select":

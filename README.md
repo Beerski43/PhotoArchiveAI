@@ -20,7 +20,8 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
 5. `photoarchive-gui` で人物を登録し、検出された顔を人物へ割り当てます。
 6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。
-7. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+7. `photoarchive evaluate` で、`match` の取りこぼしと誤りの割合を確かめます（任意）。
+8. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
 
 設計・仕様の詳細は [仕様書](docs/spec/Specification.md)、開発の道筋は [実装プラン](docs/plan/ROADMAP.md)、これまでの経緯は [作業履歴](docs/history/WORKLOG.md) にあります。文書の索引は [docs/README.md](docs/README.md)。
 
@@ -199,7 +200,30 @@ photoarchive match --margin 0.1
 
 `--dry-run` は顔の距離の分布を表示するので、`--threshold` を決める目安になります。**`match` を実行したあとでも同じ結果が出ます**（自動割り当てを取り消したあとの状態を再現して数えるため）。ログは `data/logs/match_*.log` に出力されます。
 
-### 7. 抽出ルールに基づく選択とコピー
+### 7. 紐づけの精度を測る（任意）
+
+```bash
+photoarchive evaluate
+```
+
+手動で割り当てた顔を正解とみなし、**閾値ごとの取りこぼし率と誤り（誤一致）率**を表にします。データベースには書き込みません。
+
+- **取りこぼし**: 未割当のまま残った顔。閾値を緩めれば拾えます
+- **誤り**: 別の人物に割り当てられた顔。閾値を緩めるほど増えます
+
+```bash
+# 試す閾値を指定する
+photoarchive evaluate --thresholds 0.4,0.45,0.5
+
+# 同じ写真に写る同一人物の顔も手本に残す(既定は外す)
+photoarchive evaluate --keep-same-media
+```
+
+手本の顔を1件ずつ抜き、残りを手本にして元の人物へ戻るかを見ています（1件抜き交差検証）。**同じ写真に写る同一人物の顔は既定で手本から外します。** 抜いた顔とほぼ同じ手本が残っていると必ず当たり、取りこぼしが0に見えてしまうためです。
+
+**1人につき、別の写真から2枚以上**割り当てていないと測れません（その顔を抜くと手本が残らないため、評価から外れます）。測り方の詳細は [仕様書 §8.5](docs/spec/Specification.md)。
+
+### 8. 抽出ルールに基づく選択とコピー
 
 `config/rule.sample.json` をコピーして `config/rule.json` とし、必要に応じて編集します。
 
@@ -299,6 +323,7 @@ PhotoArchiveAI/
       face.py                  顔検出(MediaPipe)と顔特徴量(dlib)
       scoring.py               笑顔・画質のスコア
       matcher.py               自動紐づけ
+      evaluation.py            自動紐づけの精度の実測
       converter.py             HEIC/HEIF → JPEG 変換
       selection.py             ルールに基づく抽出とコピー
       cli.py                   サブコマンド定義

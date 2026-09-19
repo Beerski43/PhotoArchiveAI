@@ -38,6 +38,7 @@
 | `test_face_real.py::test_model_directory_is_resolved_without_pkg_resources` | `face_recognition_models` を import すると setuptools 81 以降で落ちた（Issue #10） |
 | `test_face_io.py::test_detection_rectangles_come_back_in_the_original_scale` | 長辺1280pxを超える画像は縮小して検出する。戻し倍率を間違えると矩形がずれ、特徴量まで壊れる |
 | `test_face_io.py::test_embed_version_records_the_padding` | パディングを変えても `EMBED_VERSION` が据え置かれ、古い特徴量と新しい特徴量が同じ版として混ざる |
+| `test_evaluation.py::test_a_teacher_in_the_same_photo_is_not_allowed_to_answer_for_the_face` | 交差検証で、抜いた顔とほぼ同じ手本が残っていると取りこぼし率が0に見え、閾値の判断を誤る |
 | `test_scoring.py::test_smile_score_follows_the_mouth_aspect_ratio` | フェイクの都合で笑顔スコアの式が一度も通っておらず、常に 0.0 を返していても気づけなかった |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
@@ -132,6 +133,25 @@
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
 
+### `test_evaluation.py` — 精度の実測（11件）
+
+手動割り当てを正解とみなし、手本を1件ずつ抜いて `match` の判定を通す
+（1件抜き交差検証）。**この測定が甘く出ると、閾値の判断ごと間違える。**
+
+| テスト | 内容 |
+|---|---|
+| `test_a_face_returns_to_its_own_person_when_the_teachers_are_close` | 近い手本があれば正解になる |
+| `test_lowering_the_threshold_turns_correct_answers_into_missed_ones` | **閾値を絞るほど取りこぼしが増える**（測定として成立しているか） |
+| `test_a_face_that_lands_on_another_person_is_counted_as_wrong_not_missed` | 誤りと取りこぼしを混ぜない（直し方が逆） |
+| `test_a_teacher_in_the_same_photo_is_not_allowed_to_answer_for_the_face` | **同じ写真の同一人物を手本から外す。** 残すと必ず当たって取りこぼしが0に見える |
+| `test_a_person_with_a_single_teacher_is_left_out_instead_of_counted_as_missed` | 手本1件の人物は構造上かならず取りこぼすので、率に混ぜない |
+| `test_the_margin_leaves_a_face_between_two_people_unassigned` | マージンの判定が `match` と同じ |
+| `test_automatic_assignments_are_not_used_as_the_answer_key` | 自動の結果を正解として数えない |
+| `test_a_database_without_any_assigned_face_says_what_to_do` | 手本0件なら率ではなく次の手順を出す |
+| `test_the_report_shows_each_threshold_and_each_person` | 閾値ごと・人物ごとの内訳が出る |
+| `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
+| `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
+
 ### `test_gui_assignment.py` — GUI での割り当て（11件）
 
 | テスト | 内容 |
@@ -196,7 +216,7 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
-### `test_cli_commands.py` — サブコマンドの配線（7件）
+### `test_cli_commands.py` — サブコマンドの配線（10件）
 
 | テスト | 内容 |
 |---|---|
@@ -207,6 +227,9 @@
 | `test_scan_arguments_reach_the_scanner` | `scan` の全オプションが下へ届く |
 | `test_match_arguments_reach_the_matcher` | `match` の全オプションが下へ届く |
 | `test_the_database_path_falls_back_to_the_settings_file` | 設定ファイルへのフォールバック |
+| `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
+| `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
+| `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 
 ### `test_config.py` — 設定の探索（11件）
 

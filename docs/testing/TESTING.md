@@ -118,7 +118,15 @@ photoarchive match --dry-run
 photoarchive match
 photoarchive match --dry-run   # 2回目も同じ件数・分布が出ること
 sqlite3 data/photoarchive.db "select assign_source, count(*) from Face group by assign_source;"
+
+# 閾値を決める前に、取りこぼし率と誤一致率を測る(DBには書き込まない)
+photoarchive evaluate
+photoarchive evaluate --thresholds 0.4,0.45,0.5
 ```
+
+`evaluate` は **1人につき別の写真から2枚以上** 割り当てていないと測れない。
+その顔を抜くと手本が残らない顔は、取りこぼしに数えず評価から外れる
+（外さないと、手本の少ない人物のぶんだけ取りこぼし率が悪く出る）。
 
 顔の位置や大きさの扱いを変えた場合（`face.EMBED_PADDING` など）は、
 **必ず `face.EMBED_VERSION` を上げて再スキャンする。** 切り出し方が変わると
