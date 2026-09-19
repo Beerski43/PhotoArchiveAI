@@ -21,10 +21,10 @@ AIエージェント向けに整理した同じ内容が、リポジトリ直下
 
 作業を始める前に、現在のブランチと作業ツリーを確認し、次の文書を読むこと。
 
-1. `docs/Specification.md`
+1. `docs/spec/Specification.md`
 2. `README.md`
 3. `docs/` 配下の今回の作業に関連する現行ドキュメント
-4. `docs/handoff/` 配下に申し送りがある場合は、最新の申し送り
+4. `docs/history/WORKLOG.md` の先頭と、`docs/history/details/` の最新の申し送り
 5. 対象機能に対応する既存テスト
 
 対象ファイルが存在しない場合は、存在しないことを確認したうえで、利用可能な文書だけを読むこと。ブランチによって文書の配置や内容が異なるため、別ブランチの記憶を現在のファイルの代わりに使わないこと。
@@ -53,8 +53,8 @@ AIエージェント向けに整理した同じ内容が、リポジトリ直下
 ## このリポジトリの文書構成
 
 - `README.md`: セットアップ、依存関係、基本操作、CLI利用方法
-- `docs/Specification.md`: 要件・仕様・DB設計
-- `docs/TESTING.md`: テスト環境と実行手順
+- `docs/spec/Specification.md`: 要件・仕様・DB設計
+- `docs/testing/TESTING.md`: テスト環境と実行手順
 - `docs/operation/`: GUIなどの操作手順
-- `docs/handoff/`: セッション間の申し送り
+- `docs/history/`: 作業履歴と、セッション間の申し送り
 - `CLAUDE.md`: AIエージェント向けに整理した作業ルールと、コードベースの要点
