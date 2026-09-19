@@ -2,6 +2,7 @@ import pytest
 
 from photoarchive_ai import db, scanner
 from photoarchive_ai.scanner import ScanAborted, scan_directory
+from tests.fakes import install_fake_backends
 from tests.helpers import write_black_image, write_image
 
 
@@ -242,13 +243,19 @@ def test_scanning_with_several_workers_gives_the_same_result(tmp_path, connectio
 
     実運用の既定は --workers = min(4, CPU数 - 1) なので、既定の経路が
     一度も検査されていない状態だった。
+
+    ワーカーは spawn で起こすため、フェイクの検出器を子プロセスへ
+    自分で入れる必要がある(`worker_initializer`)。入れないと子が実物の
+    mediapipe / dlib を読みに行く。
     """
     source = tmp_path / "media"
     for index in range(6):
         write_image(source / f"{index}.jpg", color=(20 + index * 10, 100, 150))
     write_black_image(source / "dark.jpg")
 
-    summary = scan_directory(str(source), connection, workers=2)
+    summary = scan_directory(
+        str(source), connection, workers=2, worker_initializer=install_fake_backends
+    )
 
     assert summary["processed"] == 7
     assert summary["errors"] == 0
@@ -262,9 +269,13 @@ def test_a_parallel_rescan_is_still_incremental(tmp_path, connection):
     source = tmp_path / "media"
     for index in range(4):
         write_image(source / f"{index}.jpg", color=(20 + index * 10, 100, 150))
-    scan_directory(str(source), connection, workers=2)
+    scan_directory(
+        str(source), connection, workers=2, worker_initializer=install_fake_backends
+    )
 
-    summary = scan_directory(str(source), connection, workers=2)
+    summary = scan_directory(
+        str(source), connection, workers=2, worker_initializer=install_fake_backends
+    )
 
     assert summary["processed"] == 0
     assert summary["skipped"] == 4
@@ -276,8 +287,8 @@ def test_an_error_from_one_file_is_not_reported_for_the_next(tmp_path, connectio
     """直近のエラーが次のファイルに付かないこと。
 
     エラーはモジュール変数で持つため、消さないと前のファイルの
-    メッセージが次のファイルの結果として報告される。並列実行では
-    fork 時の値が全ワーカーへ複製されるので、特に紛れ込みやすい。
+    メッセージが次のファイルの結果として報告される。1つのワーカーが
+    続けて何件も処理するので、並列でも同じことが起きる。
     """
     source = tmp_path / "media"
     write_black_image(source / "dark.jpg")
@@ -363,3 +374,84 @@ def test_a_photo_whose_faces_are_all_too_small_is_still_marked_scanned(
 
     summary = scan_directory(str(source), connection, workers=1)
     assert summary["skipped"] == 1
+
+
+def test_the_workers_are_not_started_by_forking(tmp_path, connection, monkeypatch):
+    """ワーカーを fork で起こさないこと。**実データを壊した不具合**（Issue #35）。
+
+    scan は DB 接続を開いたままプールを作る。fork だと全ワーカーが親の
+    SQLite 接続と WAL の共有メモリを複製して持ち、子の終了時の後始末が
+    親の書き込みと競合して `database disk image is malformed` になる。
+    実データ 64,974 件のスキャンで2回とも
+    `row N missing from index idx_media_hash` が出た。
+
+    **数万件規模でしか再現しないので、壊れないことは試験できない。**
+    代わりに「fork で起こしていないこと」を固定する。
+    """
+    captured = {}
+    real_executor = scanner.ProcessPoolExecutor
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_executor(*args, **kwargs)
+
+    monkeypatch.setattr(scanner, "ProcessPoolExecutor", spy)
+    source = tmp_path / "media"
+    write_image(source / "a.jpg")
+
+    scan_directory(
+        str(source), connection, workers=2, worker_initializer=install_fake_backends
+    )
+
+    assert captured["mp_context"].get_start_method() == scanner.WORKER_START_METHOD
+    assert scanner.WORKER_START_METHOD != "fork"
+
+
+def test_a_worker_does_not_inherit_what_the_parent_put_in_memory(
+    tmp_path, connection, monkeypatch
+):
+    """子プロセスが親のメモリ状態を引き継がないこと。
+
+    引き継ぐなら fork で起きているということで、**SQLite 接続も一緒に
+    引き継がれている**（Issue #35 の原因そのもの）。ここでは親だけで
+    `get_media_type` を差し替える。この関数は**子プロセスの中**で呼ばれる
+    ので、fork なら差し替えが効いて "video" が記録され、spawn なら
+    子は白紙で始まるので本来の "image" が記録される。
+    """
+    monkeypatch.setattr(scanner, "get_media_type", lambda path: "video")
+    source = tmp_path / "media"
+    write_image(source / "a.jpg")
+
+    scan_directory(
+        str(source), connection, workers=2, worker_initializer=install_fake_backends
+    )
+
+    assert [row["type"] for row in db.list_media(connection)] == ["image"]
+
+
+def test_a_worker_writes_its_errors_to_the_log_file(tmp_path, connection):
+    """ワーカーが出したエラーがログファイルに残ること。
+
+    `spawn` の子は白紙で始まるので、親が付けたログのハンドラを持っていない。
+    張り直さないと、子の警告は `logging` の lastResort 経由で書式なしの
+    stderr へ漏れ、**ログファイルには1行も残らない。** 消えるのは
+    「どのファイルがなぜ読めなかったか」という記録そのもので、
+    **`--workers` の既定は2以上**なので実運用の経路で起きる。
+    """
+    source = tmp_path / "media"
+    source.mkdir()
+    (source / "broken.jpg").write_bytes(b"\xff\xd8\xff\xe0 not really a jpeg")
+    log_file = tmp_path / "scan.log"
+
+    summary = scan_directory(
+        str(source),
+        connection,
+        workers=2,
+        log_file=str(log_file),
+        log_level="WARNING",
+        worker_initializer=install_fake_backends,
+    )
+
+    assert summary["errors"] == 1
+    assert log_file.exists(), "ワーカーのログが1行も残っていない"
+    assert "Cannot read image" in log_file.read_text(encoding="utf-8")
