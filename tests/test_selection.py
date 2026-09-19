@@ -18,8 +18,6 @@ def test_select_media_filters_by_rule(tmp_path: Path):
         "file_size": 100,
         "created_time": "2025-01-01T12:00:00",
         "shooting_date": "2025-01-02",
-        "analyzed_date": None,
-        "analyzer_version": None,
     }
     media_record_video = {
         "path": "2025/video.mp4",
@@ -29,8 +27,6 @@ def test_select_media_filters_by_rule(tmp_path: Path):
         "file_size": 200,
         "created_time": "2025-01-03T12:00:00",
         "shooting_date": "2025-01-03",
-        "analyzed_date": None,
-        "analyzer_version": None,
     }
 
     save_media(connection, media_record_photo)
