@@ -2,6 +2,11 @@
 
 `WORKLOG.md` から切り出したもの。新しいものが上。
 
+## 2026-08-02 — #4 テスト環境
+
+PR [#6](https://github.com/Beerski43/PhotoArchiveAI/pull/6)（merged）。
+pytest を導入し、システムテストを追加した。
+
 ## 2026-08-01 — #1 仕様設計、#2 初版実装
 
 PR [#3](https://github.com/Beerski43/PhotoArchiveAI/pull/3) と

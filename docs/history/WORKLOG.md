@@ -11,7 +11,6 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
-
 ## 2026-09-20 — #53 顔一覧の並び順を、画面の目的に合わせる
 
 | 画面 | いままで | これから |
@@ -730,11 +729,6 @@ PR [#11](https://github.com/Beerski43/PhotoArchiveAI/pull/11) と
 CLI に進捗バーを追加した。ANSI のカーソル移動で2行を書き換える方式。
 読み込めないファイルで処理全体が止まらないようにし、`--log-level` を足した。
 顔検出を `face_recognition` から MediaPipe へ置き換えた。
-
-## 2026-08-02 — #4 テスト環境
-
-PR [#6](https://github.com/Beerski43/PhotoArchiveAI/pull/6)（merged）。
-pytest を導入し、システムテストを追加した。
 
 ## 過去の履歴
 
