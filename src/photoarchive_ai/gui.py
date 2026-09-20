@@ -84,6 +84,36 @@ FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "除外済み"
 
 
+def _select_on_focus(spin: QSpinBox) -> QSpinBox:
+    """特別な文字（「未設定」など）が入った QSpinBox を、打鍵で置き換えられるようにする。
+
+    `setSpecialValueText` を使うと、入力欄には数字ではなく「未設定」という
+    **文字**が入っている。その状態で数字を打つと "未設定5" という文字列になり、
+    検証に落ちて**何も起きない。** 利用者からは「▲を押さないと入力できない」
+    ように見える。
+
+    開いた時点で全選択しておけば、打った数字がそのまま置き換わる。
+    """
+    spin.setFocus()
+    spin.selectAll()
+    return spin
+
+
+def _make_select_all_on_focus(spin: QSpinBox):
+    """フォーカスが入ったら全選択する `focusInEvent` を作る。
+
+    常時フォーカスしてよい入力（ダイアログの主役）と違い、画面に並ぶ入力欄は
+    **触られたときだけ**選択したい。
+    """
+    original = spin.__class__.focusInEvent
+
+    def focus_in(event):
+        original(spin, event)
+        spin.selectAll()
+
+    return focus_in
+
+
 class PersonDialog(QDialog):
     def __init__(self, parent=None, name="", relation="", memo=""):
         super().__init__(parent)
@@ -121,6 +151,9 @@ class FaceAgeDialog(QDialog):
         self.age_input.setRange(-1, 150)
         self.age_input.setSpecialValueText("未設定")
         self.age_input.setValue(-1)
+        # 「未設定」の文字が入ったままなので、全選択しておかないと
+        # キーボードから数字を入れられない（▲を押すしかなくなる）。
+        _select_on_focus(self.age_input)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -129,6 +162,15 @@ class FaceAgeDialog(QDialog):
         layout = QFormLayout(self)
         layout.addRow("撮影時の年齢", self.age_input)
         layout.addRow(buttons)
+
+    def showEvent(self, event):
+        """開くたびに入力欄を選択しておく。
+
+        `__init__` での選択は、ダイアログが表示されるときに解除されることが
+        ある。**開いた直後に数字を打てる**ことが大事なので、ここでもやり直す。
+        """
+        super().showEvent(event)
+        _select_on_focus(self.age_input)
 
     def age(self) -> Optional[int]:
         value = self.age_input.value()
@@ -152,6 +194,10 @@ class RegisteredFacesDialog(QDialog):
         self.max_age.setRange(0, 150)
         self.max_age.setSpecialValueText("指定なし")
         self.max_age.setValue(150)
+        # 年齢の絞り込みも「指定なし」の文字が入っている。年齢の入力と
+        # 同じ理由で、触ったときに打鍵で置き換えられるようにする。
+        for spin in (self.min_age, self.max_age):
+            spin.focusInEvent = _make_select_all_on_focus(spin)
 
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
