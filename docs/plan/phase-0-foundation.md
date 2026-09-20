@@ -73,7 +73,7 @@ CLI リファレンス・スキーマバージョンと移行・特徴量の生�
 
 - Phase 1 以降の欠陥修正。場所は特定済みなので
   [phase-1-known-defects.md](phase-1-known-defects.md) に記録する
-- DBスキーマの変更。実データが 70,297件あるため、`migrate` と
+- DBスキーマの変更。実データが7万件規模あるため、`migrate` と
   `PRAGMA user_version` を伴わない変更はしない
 - Issue の直接クローズ。解消した Issue（#9 / #22 / #23 / #25）は PR 本文の
   `Closes #N` に任せ、ROADMAP にも根拠を書く

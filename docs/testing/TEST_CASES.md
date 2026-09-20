@@ -287,6 +287,50 @@ CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした�
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
 成功のように見せないこと。
 
+### `test_check_handoff.py` — 引き継ぎの点検が自分の故障を隠さない（10件）
+
+**点検が働かなかったことを「異常なし」と報告すると、壊れた番人に守られている
+つもりになる。** 最初の版は `gh` が標準エラーに1行出すだけで壊れ、PR の無い
+ブランチの警告が黙って消えていた（PR #50 のレビュー指摘1）。
+
+| テスト | 内容 |
+|---|---|
+| `test_a_noisy_gh_does_not_turn_the_check_into_an_all_clear` | **stderr の雑音で判定が消えない** |
+| `test_a_gh_that_cannot_run_is_reported_instead_of_being_ignored` | 確認できなかったことを警告に出す |
+| `test_a_branch_with_an_open_pull_request_is_not_a_warning` | PR があれば鳴らさない |
+| `test_a_documented_branch_without_a_pull_request_is_not_a_warning` | 申し送りに書いてあれば鳴らさない |
+| `test_an_undocumented_branch_without_a_pull_request_is_a_warning` | PR も申し送りも無いものだけ鳴らす（#48 の形） |
+| `test_a_slow_command_does_not_block_the_check` | **繋がらない環境で止まらない**（10秒で打ち切る） |
+| `test_the_output_streams_are_not_mixed` | stdout と stderr を分ける |
+| `test_offline_does_not_touch_the_remote` | `--offline` は `git fetch` を呼ばない |
+| `test_a_failed_fetch_says_the_judgement_used_stale_information` | **黙って古い情報で判定しない** |
+| `test_the_working_tree_is_shown_but_not_warned_about` | コミット前の汚れは鳴らさない |
+
+### `test_plan_stays_true.py` — 実装プランが実態からずれない（プラン文書の本数ぶんを含む）
+
+**プランは黙って古くなる。** 誰かが嘘を書くのではなく、実装だけ進んで文書が
+置き去りになる。読んで矛盾に気づくには実態を知っている必要があるので、
+レビューでも落ちる。形だけでも機械で見張る。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_worklog_entries_are_newest_first` | **日をまたぐ逆転が無い**（`CLAUDE.md` §1 の前提）。同じ日の中の順序は見張れない |
+| `test_every_phase_document_linked_from_the_roadmap_exists` | ROADMAP のリンク切れ |
+| `test_a_phase_document_is_linked_from_the_roadmap` | 書いたのに張り忘れた文書 |
+| `test_a_phase_that_has_started_names_its_issue` | 着手済みのフェーズに Issue 番号がある |
+| `test_a_real_data_count_in_a_plan_document_is_dated_or_recountable` | **実データの件数に日付か数え直す手段がある**（4件、文書ごと） |
+| `test_every_handoff_note_is_linked_from_the_worklog` | 迷子の申し送りを作らない |
+| `test_the_checks_would_catch_a_plan_that_drifted` | **番人自身が働く**（本物の検査を、崩した文書に向けて呼ぶ） |
+| `test_entries_on_the_same_day_are_not_ordered` | 同日内は見張らない（**意図した限界**） |
+| `test_a_dated_count_in_another_section_does_not_excuse_this_one` | **節をまたいだ免除をしない**（守りたい文書ほど先に免除される） |
+| `test_a_recount_command_excuses_only_its_own_section` | 数え直すコマンドも同じ節の中だけ |
+| `test_a_rounded_number_is_not_treated_as_a_count` | 丸めた表現は引っかからない（逃げ道） |
+
+git と GitHub の状態（PR の無いブランチなど）は `scripts/check_handoff.py`。
+`run_regression.sh` の 5/5 で**実行する**が、**合否には含めない**
+（ネットワークが要るため）。**そのスクリプト自体のテストは
+`test_check_handoff.py`。**
+
 ### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
 
 `CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
