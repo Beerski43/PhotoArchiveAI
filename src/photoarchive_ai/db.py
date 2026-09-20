@@ -15,11 +15,21 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 EMBEDDING_DIM = 128
 EMBEDDING_DTYPE = np.float32
@@ -27,6 +37,25 @@ EMBEDDING_DTYPE = np.float32
 ASSIGN_MANUAL = "manual"
 ASSIGN_AUTO = "auto"
 ASSIGN_REJECTED = "rejected"
+
+#: 「日付として読める撮影日時」だけを取り出す式。読めなければ NULL。
+#:
+#: **壊れた EXIF を「いちばん新しい」として先頭に出さないため。** カメラが
+#: `TTTT-TT-TTTTT:TT:TT` を書くことがあり（実データで Media 67件・顔123件）、
+#: 文字の大小で並べると `T` は数字より大きいので、**新しい順の1ページ目を
+#: まるごと占領する。** `0000-00-00` も同じ理由で外す（こちらは最後に来る）。
+#:
+#: `gui._format_timestamp` が画面で行う判断と同じもの。**片方だけ直さない。**
+#: 並びと表示で「読める」の意味がずれると、日時が出ていない写真が日付の
+#: あるところに紛れる。
+#:
+#: **索引もこの式で張る**（式インデックス）。`ORDER BY` に同じ式を書けば
+#: 索引を順に歩ける。文字列を2か所に書くと綴りがずれて索引が使われなくなるので、
+#: 必ずこの定数を使うこと。
+SHOOTING_DATE_SORT_KEY = (
+    "CASE WHEN shooting_date GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]*'"
+    " AND shooting_date NOT LIKE '0000%' THEN shooting_date END"
+)
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS Media ("
@@ -48,7 +77,10 @@ SCHEMA = [
     "relation TEXT,"
     "memo TEXT,"
     # 生年月日 YYYY-MM-DD。未設定は NULL。撮影時の年齢の計算に使う。
-    "birth_date TEXT"
+    "birth_date TEXT,"
+    # 一覧に並べる順。**利用者が画面で入れ替えた順序**を持つ。
+    # 未設定(NULL)は名前順の位置に置く（並べ替えたことのない人物）。
+    "display_order INTEGER"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -86,6 +118,9 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_face_person ON Face(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_face_manual ON Face(person_id) WHERE assign_source = 'manual'",
     "CREATE INDEX IF NOT EXISTS idx_face_unassigned ON Face(quality_score DESC, id) WHERE assign_source IS NULL",
+    # 撮影日時の新しい順に顔を並べるため（§10.4）。**この索引が無いと、ページを
+    # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
+    f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
 ]
 
 KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult")
@@ -175,6 +210,21 @@ def describe_missing_columns(gaps: Dict[str, List[str]]) -> str:
     return ", ".join(
         f"{table}.{column}" for table, columns in sorted(gaps.items()) for column in columns
     )
+
+
+#: `ALTER TABLE ... ADD COLUMN` で足せる列と、その型。
+#:
+#: **移行のたびにコードを足さないため。** 版を上げて列を1本増やすたびに
+#: `migration.py` へ `if "..." not in columns` を書き足していくと、
+#: 足し忘れが「版だけ進んで列が無い」状態を生む（それ自体が #48 の事故）。
+#: ここに1行足せば、移行は `db.missing_columns` が見つけたものを埋める。
+#:
+#: **既存行に入るのは NULL** なので、NOT NULL の列はここへ書けない。
+#: 既定値が要るなら、読み出し側で NULL を解釈すること。
+ADDABLE_COLUMNS = {
+    ("Person", "birth_date"): "TEXT",
+    ("Person", "display_order"): "INTEGER",
+}
 
 
 MIGRATE_HINT = "`photoarchive migrate --db <データベース>` を実行してください。"
@@ -417,8 +467,9 @@ def add_person(
     """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。"""
     cursor = connection.cursor()
     cursor.execute(
-        "INSERT INTO Person (name, relation, memo, birth_date) VALUES (?, ?, ?, ?)",
-        (name, relation, memo, birth_date),
+        "INSERT INTO Person (name, relation, memo, birth_date, display_order)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (name, relation, memo, birth_date, _next_display_order(connection)),
     )
     connection.commit()
     return cursor.lastrowid
@@ -464,13 +515,61 @@ def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
 
 
 def list_persons(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
-    rows = connection.execute("SELECT * FROM Person ORDER BY name").fetchall()
+    """人物を、画面に並べる順で返す。
+
+    **利用者が入れ替えた順（`display_order`）が先。** 並べ替えたことのない
+    人物（NULL）は、そのあとに名前順で続く。名前順だけだと、よく使う人物を
+    上に置けない。
+    """
+    rows = connection.execute(
+        "SELECT * FROM Person"
+        " ORDER BY display_order IS NULL ASC, display_order ASC, name ASC"
+    ).fetchall()
     return [dict(row) for row in rows]
+
+
+def set_person_order(connection: sqlite3.Connection, person_ids: Sequence[int]) -> None:
+    """渡された並びを `display_order` に書く。**渡された順がそのまま画面の順。**
+
+    一覧に出ている人物**全員**を渡すこと。一部だけ渡すと、渡さなかった人物の
+    `display_order` が古いままになり、並びが混ざる。
+    """
+    connection.executemany(
+        "UPDATE Person SET display_order = ? WHERE id = ?",
+        [(order, person_id) for order, person_id in enumerate(person_ids)],
+    )
+    connection.commit()
+
+
+def _next_display_order(connection: sqlite3.Connection) -> int:
+    """新しい人物を**末尾**に置くための順序値。
+
+    先頭に入れると、利用者が並べ替えた結果を勝手に崩すことになる。
+
+    **`display_order` が NULL の行が残っていると、末尾にならない。**
+    `list_persons` は値を持つ行を先に出すので、`MAX` が NULL のときに 0 を
+    返すと、**その人物だけが全員より前に出る**（`migrate` 直後のDBがこの状態。
+    実データもそうだった）。**足す前に、いま画面に出ている順をそのまま
+    書き戻す。** 見た目は変わらないまま、全員が値を持つ状態になる。
+    """
+    unordered = connection.execute(
+        "SELECT COUNT(*) FROM Person WHERE display_order IS NULL"
+    ).fetchone()[0]
+    if unordered:
+        set_person_order(connection, [person["id"] for person in list_persons(connection)])
+    row = connection.execute("SELECT MAX(display_order) FROM Person").fetchone()
+    return 0 if row[0] is None else int(row[0]) + 1
 
 
 # ---------------------------------------------------------------------------
 # Face
 # ---------------------------------------------------------------------------
+
+#: `list_faces` の並び順。**画面ごとに見たい順序が違う。**
+#: 既定を変えないこと（`match` と `evaluate` もこの関数を通る）。
+ORDER_QUALITY = "quality"
+ORDER_SHOT_DESC = "shooting_desc"
+ORDER_AGE = "age"
 
 FACE_LIST_COLUMNS = (
     "id",
@@ -565,27 +664,31 @@ def _face_filter(
     unassigned: bool,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    prefix: str = "",
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
     年齢の未設定(NULL)は、範囲を指定しても常に残す。年齢を入れていない顔が
     一覧から消えてしまうと、そもそも年齢を入れられなくなるため。
+
+    ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
+    書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
     """
     clauses: List[str] = []
     params: List[Any] = []
     if unassigned:
-        clauses.append("assign_source IS NULL")
+        clauses.append(f"{prefix}assign_source IS NULL")
     elif assign_source is not None:
-        clauses.append("assign_source = ?")
+        clauses.append(f"{prefix}assign_source = ?")
         params.append(assign_source)
     if person_id is not None:
-        clauses.append("person_id = ?")
+        clauses.append(f"{prefix}person_id = ?")
         params.append(person_id)
     if min_age is not None:
-        clauses.append("(age IS NULL OR age >= ?)")
+        clauses.append(f"({prefix}age IS NULL OR {prefix}age >= ?)")
         params.append(min_age)
     if max_age is not None:
-        clauses.append("(age IS NULL OR age <= ?)")
+        clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
         params.append(max_age)
     if not clauses:
         return "", params
@@ -631,21 +734,38 @@ def list_faces(
     with_thumbnail: bool = False,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    order: str = ORDER_QUALITY,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
     サムネイルBLOBは件数が増えると重いので、``with_thumbnail`` を指定した
-    ときだけ読み出す。並び順は品質スコアの高い順で、割り当てやすい顔が
-    先に出るようにしている。
+    ときだけ読み出す。
+
+    ``order`` で並びを選ぶ。**既定は品質スコアの高い順**（`match` と
+    `evaluate` もこの関数を通るので、既定を変えない）。
+
+    - ``ORDER_QUALITY``: 品質スコアの高い順
+    - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
+    - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
     """
     columns = list(FACE_LIST_COLUMNS)
     if with_thumbnail:
         columns.append("thumbnail")
-    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
-    query = (
-        f"SELECT {','.join(columns)} FROM Face{where}"
-        " ORDER BY quality_score DESC, id ASC"
-    )
+
+    if order == ORDER_SHOT_DESC:
+        query, params = _shooting_date_query(
+            columns, assign_source, person_id, unassigned, min_age, max_age
+        )
+    else:
+        where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+        if order == ORDER_AGE:
+            # **未設定を最後に置く。** SQLite の NULL は最小なので、
+            # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
+            order_by = "age IS NULL ASC, age ASC, id ASC"
+        else:
+            order_by = "quality_score DESC, id ASC"
+        query = f"SELECT {','.join(columns)} FROM Face{where} ORDER BY {order_by}"
+
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
         params = params + [limit, offset]
@@ -653,9 +773,75 @@ def list_faces(
     return [dict(row) for row in rows]
 
 
+def _shooting_date_query(
+    columns: List[str],
+    assign_source: Optional[str],
+    person_id: Optional[int],
+    unassigned: bool,
+    min_age: Optional[int],
+    max_age: Optional[int],
+) -> Tuple[str, List[Any]]:
+    """撮影日時の新しい順に並べる問い合わせ。
+
+    **`CROSS JOIN` は結合の順序を固定するためのもの**で、直積を作るわけでは
+    ない。SQLite は左の表を外側に固定するので、`idx_media_shooting` を
+    順に歩いて `LIMIT` の分だけ取れる。
+
+    **外すと、ページを送るたびに未割当の顔を全件並べ直す**（実データ
+    58,547 件で 220〜435ms。固定すると1ページ目 0.6ms）。`EXPLAIN QUERY PLAN`
+    に `USE TEMP B-TREE FOR ORDER BY` が出たら、その状態に戻っている。
+    """
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, prefix="f."
+    )
+    selected = ",".join(f"f.{column}" for column in columns)
+    sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
+    query = (
+        f"SELECT {selected} FROM Media m CROSS JOIN Face f ON f.media_id = m.id"
+        f"{where} ORDER BY {sort_key} DESC, f.id ASC"
+    )
+    return query, params
+
+
 def get_face(connection: sqlite3.Connection, face_id: int) -> Optional[Dict[str, Any]]:
     row = connection.execute("SELECT * FROM Face WHERE id = ?", (face_id,)).fetchone()
     return _row_to_dict(row)
+
+
+#: 進み具合を知らせるときの単位。**小さすぎると通知そのものが重い。**
+PROGRESS_CHUNK = 50
+
+#: 進み具合の通知口。``(終わった件数, 全体の件数)`` を受け取る。
+ProgressCallback = Optional[Callable[[int, int], None]]
+
+
+def _executemany_with_progress(
+    cursor: sqlite3.Cursor,
+    statement: str,
+    rows: List[tuple],
+    progress: ProgressCallback,
+) -> int:
+    """``executemany`` を、進み具合を知らせながら流す。**触れた行数を返す。**
+
+    **1つのトランザクションのまま分ける。** 分割してコミットすると、
+    途中で失敗したときに半分だけ適用された状態が残る。ここで分けるのは
+    **知らせる回数**だけで、確定するのは呼び出し側の1回の ``commit``。
+
+    **件数は塊ごとに足す。** ``cursor.rowcount`` は**最後の
+    ``executemany`` のぶんしか持たない**ので、呼び出し側がそれを返すと
+    「割り当てた件数」が最大でも `PROGRESS_CHUNK` になってしまう。
+    """
+    total = len(rows)
+    if progress is None:
+        cursor.executemany(statement, rows)
+        return cursor.rowcount
+    affected = 0
+    progress(0, total)
+    for start in range(0, total, PROGRESS_CHUNK):
+        cursor.executemany(statement, rows[start : start + PROGRESS_CHUNK])
+        affected += cursor.rowcount
+        progress(min(start + PROGRESS_CHUNK, total), total)
+    return affected
 
 
 class _KeepAge:
@@ -679,62 +865,103 @@ def assign_faces(
     assign_source: str = ASSIGN_MANUAL,
     assign_score: Optional[float] = None,
     age: Any = KEEP_AGE,
+    progress: ProgressCallback = None,
 ) -> int:
     """顔を人物へ割り当てる。
 
     ``age`` を省くと年齢は触らない。``None`` を明示すると未設定へ戻す。
+    ``progress`` を渡すと ``(終わった件数, 全体の件数)`` を知らせる。
     """
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
     if isinstance(age, _KeepAge):
-        cursor.executemany(
+        statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ? WHERE id = ?",
-            [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids],
+            " assigned_at = ? WHERE id = ?"
         )
+        rows = [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids]
     else:
-        cursor.executemany(
+        statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ?, age = ? WHERE id = ?",
-            [(person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids],
+            " assigned_at = ?, age = ? WHERE id = ?"
         )
+        rows = [
+            (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
+        ]
+    affected = _executemany_with_progress(cursor, statement, rows, progress)
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
-def unassign_faces(connection: sqlite3.Connection, face_ids: Sequence[int]) -> int:
+def unassign_faces(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    progress: ProgressCallback = None,
+) -> int:
     if not face_ids:
         return 0
     cursor = connection.cursor()
-    cursor.executemany(
+    affected = _executemany_with_progress(
+        cursor,
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
         " assigned_at = NULL WHERE id = ?",
         [(face_id,) for face_id in face_ids],
+        progress,
     )
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
-def reject_faces(connection: sqlite3.Connection, face_ids: Sequence[int]) -> int:
+def reject_faces(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    progress: ProgressCallback = None,
+) -> int:
     """「誰でもない顔」として、未割当一覧からも自動紐づけからも外す。"""
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
-    cursor.executemany(
+    affected = _executemany_with_progress(
+        cursor,
         "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL,"
         " assigned_at = ? WHERE id = ?",
         [(ASSIGN_REJECTED, now, face_id) for face_id in face_ids],
+        progress,
     )
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
 def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int]) -> None:
     connection.execute("UPDATE Face SET age = ? WHERE id = ?", (age, face_id))
     connection.commit()
+
+
+def set_faces_age(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    age: Optional[int],
+    progress: ProgressCallback = None,
+) -> int:
+    """選んだ顔にまとめて年齢を入れる。``None`` は未設定へ戻す指示。
+
+    **1件ずつ `set_face_age` を呼ばない。** 呼ぶたびにコミットするので、
+    200件なら 200 回の書き込み確定になる。ここは1回で確定する。
+    """
+    if not face_ids:
+        return 0
+    cursor = connection.cursor()
+    affected = _executemany_with_progress(
+        cursor,
+        "UPDATE Face SET age = ? WHERE id = ?",
+        [(age, face_id) for face_id in face_ids],
+        progress,
+    )
+    connection.commit()
+    return affected
 
 
 def load_manual_embeddings(

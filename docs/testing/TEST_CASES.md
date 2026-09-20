@@ -22,6 +22,9 @@
 | `test_matcher.py::test_match_leaves_distant_faces_unassigned` | 閾値判定が無く、どんなに遠い顔も必ず誰かに割り当てられた（Issue #22） |
 | `test_matcher.py::test_dry_run_is_not_blinded_by_a_previous_match` | `--dry-run` が2回目以降ほぼ空振りし、閾値を決める目安にならなかった |
 | `test_gui_person.py::test_a_broken_exif_date_is_treated_as_missing` | EXIF が `0000:00:00` の写真で、撮影日時を持っているように見え、ファイル日時のフォールバックまで消えた |
+| `test_gui_person.py::test_another_shape_of_broken_exif_is_also_treated_as_missing` | **`0000` で始まるかだけを見ていた。** 別の壊れ方（`TTTT-TT-TTTTT:TT:TT`、実データ Media 67件）が素通りし、撮影日時としてそのまま画面に出ていた |
+| `test_gui_assignment.py::test_rebuilding_the_list_does_not_reload_the_preview` | **一覧を作り直すたびにプレビューが再描画され、元写真を NFS から読み直していた。** 200件を選んで割り当てると100回読み直し、1回の操作に17秒かかった（実測。止めると92ms） |
+| `test_db.py::test_a_broken_exif_date_does_not_take_over_the_newest_page` | **撮影日時の新しい順にすると、壊れた EXIF が1ページ目をまるごと占領する**（`T` は数字より大きい。実データで顔123件） |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
@@ -58,7 +61,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（8件）
+### `test_db.py` — スキーマと永続化（18件）
 
 | テスト | 内容 |
 |---|---|
@@ -69,9 +72,17 @@
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
 | `test_shooting_dates_come_back_one_per_face` | **顔1件につき1件返す。** `DISTINCT` で潰さず、日時の無い顔も落とさない |
+| `test_the_number_of_affected_faces_is_right_even_with_progress` | **進み具合を知らせても戻り値が壊れない**（塊ごとに足す） |
 | `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
 | `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
 | `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
+| `test_faces_can_be_listed_newest_shot_first` | 撮影日時の新しい順。**日時の無い顔は最後** |
+| `test_faces_can_be_listed_youngest_age_first` | 年齢の若い順。**未設定は最後**（SQLite の NULL は最小） |
+| `test_the_default_order_is_still_the_quality_score` | **既定を変えない**（`match` と `evaluate` も通る） |
+| `test_every_order_honours_the_same_filters` | 絞り込みを2通り書かない。どの並びでも同じ条件が効く |
+| `test_pagination_does_not_repeat_or_skip_a_face` | 撮影日時が同じ顔が並んでも、ページをまたいで重複・欠落しない |
+| `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
+| `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
@@ -152,7 +163,7 @@
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
 
-### `test_evaluation.py` — 精度の実測（11件）
+### `test_evaluation.py` — 精度の実測（12件）
 
 手動割り当てを正解とみなし、手本を1件ずつ抜いて `match` の判定を通す
 （1件抜き交差検証）。**この測定が甘く出ると、閾値の判断ごと間違える。**
@@ -183,7 +194,7 @@
 | `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
-### `test_gui_assignment.py` — GUI での割り当て（18件）
+### `test_gui_assignment.py` — GUI での割り当て（29件）
 
 | テスト | 内容 |
 |---|---|
@@ -199,8 +210,19 @@
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 | `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
+| `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
+| `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
+| `test_rebuilding_the_list_does_not_reload_the_preview` | **一覧の作り直しで元写真を読み直さない**（200件の割り当てに17秒かかっていた） |
+| `test_the_progress_is_reported_for_every_face` | 進み具合が件数で出る |
+| `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
+| `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
+| `test_a_rejected_face_can_be_put_back_to_unassigned` | **除外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
+| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる |
+| `test_the_unassign_button_is_disabled_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
+| `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
+| `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（40件）
+### `test_gui_person.py` — 人物編集とプレビュー（59件）
 
 | テスト | 内容 |
 |---|---|
@@ -220,6 +242,7 @@
 | `test_selecting_a_face_fills_the_information_under_the_preview` | 顔を選ぶと情報欄が埋まる |
 | `test_the_information_is_still_shown_when_the_original_is_gone` | **元写真が開けないときこそ出す**（出どころはDB） |
 | `test_a_broken_exif_date_is_treated_as_missing` | `0000:00:00` を書くカメラがある（実データ55件）。持っていない扱いにしてファイル日時へ落とす |
+| `test_another_shape_of_broken_exif_is_also_treated_as_missing` | **先頭の文字だけを見て弾かない。** `TTTT-TT-TTTTT:TT:TT` が素通りして画面に出ていた（実データ67件） |
 | `test_a_photo_directly_under_the_source_root_says_so` | `フォルダ: .` では読めない |
 | `test_a_relative_source_root_is_anchored_to_the_settings_file` | **起動した場所で表示が変わらない**（相対の起点は設定ファイル） |
 | `test_an_absolute_source_root_is_left_alone` | 絶対パスと未設定は触らない |
@@ -251,6 +274,17 @@
 | `test_the_age_line_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
 | `test_dropping_the_person_selection_also_drops_the_age_line` | 前の人物の年齢を残さない |
 | `test_a_new_person_is_selected_so_the_age_shows_immediately` | 追加した人物も選ばれた状態になる |
+| `test_the_person_order_can_be_changed_and_is_remembered` | **並べ替えた順が開き直しても残る**（`Person.display_order`） |
+| `test_the_person_list_accepts_a_drag` | ドラッグで動かせる設定になっている |
+| `test_a_new_person_goes_to_the_end_of_the_order` | 追加した人物を先頭に割り込ませない |
+| `test_a_person_who_was_never_reordered_keeps_the_name_order` | 並べ替えたことのない人物は名前順のまま |
+| `test_a_new_person_goes_to_the_end_even_before_anyone_was_reordered` | **移行直後（全員 NULL）でも末尾に来る。** 0 を振ると先頭に割り込む |
+| `test_persons_added_to_a_new_database_keep_their_registration_order` | 新しいDBでは登録順 |
+| `test_the_preview_says_done_and_fades_after_an_assignment` | **割り当てた顔が濃いまま残らない。** 「完了」を出して薄くする |
+| `test_the_done_label_sits_on_top_of_the_photo` | 札は顔写真に重ねて中央 |
+| `test_choosing_another_face_clears_the_done_label` | 次の顔を選んだら消す |
+| `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
+| `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
@@ -287,7 +321,7 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
-### `test_cli_commands.py` — サブコマンドの配線（10件）
+### `test_cli_commands.py` — サブコマンドの配線（15件）
 
 | テスト | 内容 |
 |---|---|
@@ -314,7 +348,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（21件）
+### `test_migration.py` — スキーマの移行（23件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -323,9 +357,14 @@ editable install のときだけ出すこと（通常のインストールでは
 1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
 案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
 
+**v3 → v4**: `Person.display_order` を足すだけ。**実データが通る唯一の経路**なので、
+顔・手本・誕生日が減らないことと、移行直後の並び（全員未設定＝名前順、追加は末尾）を
+固定している。
+
 **版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
 すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
-導かれていること。
+導かれていること。**足す列は `db.ADDABLE_COLUMNS` の1行で決まり**、移行コードに
+書き足さない（書き忘れがその事故を生む）。v1 の再構築経路も最後に同じ処理を通す。
 
 移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
 移行でしか効かない。黙って効かない引数を作らない）。
@@ -341,7 +380,7 @@ editable install のときだけ出すこと（通常のインストールでは
 **日付エントリ以外の節を消さないこと**（前にあるものは前書きとしてその場に残し、
 あとにあるものは末尾へ移す）。切り出し済みの本文を後から書き換えないこと。
 
-### `test_pytest_summary.py` — 回帰テストの集計行（9件）
+### `test_pytest_summary.py` — 回帰テストの集計行（15件）
 
 CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした行。着色された
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
@@ -391,12 +430,22 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
 
-### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
+
+`TEST_CASES.md` の**見出しと表がずれていないこと**も見る。見出しが自分の表の
+下に落ちると表が前の節にぶら下がり、**表の途中の空行はそれ以降を表でなくする**
+（GitHub の描画器の仕様。実際に11行が表から外れた）。
 
 `CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
 見る。書いてしまうと**関係のない変更のたびに更新が要り**、忘れれば
 いちばんよく読まれる2つの文書が静かに嘘になる。番人自身が働くことも
 確かめている（数字を戻すと落ちること、`N passed / M failed` の書式は通ること）。
+
+**スキルや文書が指す `CLAUDE.md` の節が実在すること**も見る
+（`test_a_skill_does_not_point_at_a_section_that_does_not_exist`）。節を足したり
+番号を振り直したりすると指し先が黙ってずれ、読み手は**そんな節が無いことにも
+気づけない**。フェーズ文書のリンクを見張っているのと同じ理由
+（`test_plan_stays_true.py`）。
 
 ### `test_system.py` — 通し（2件、`system` マーカー）
 

@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
@@ -14,6 +15,22 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def qt_app():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+def _always_accepts_age(age):
+    """年齢を入れて OK を押す `FaceAgeDialog` の代わり。"""
+
+    class _Dialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def age(self):
+            return age
+
+    return _Dialog
 
 
 def _seed(connection, count: int) -> None:
@@ -297,3 +314,253 @@ def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypa
     # 取り消したので、年齢は未設定のまま
     assert all(row["age"] is None for row in db.list_faces(connection, person_id=person_id))
     dialog.close()
+
+
+def _media_with_date(connection, path, shooting_date, file_hash):
+    return db.save_media(
+        connection,
+        {
+            "path": path,
+            "filename": path.rsplit("/", 1)[-1],
+            "type": "image",
+            "file_hash": file_hash,
+            "file_size": 100,
+            "created_time": "2026-01-01T00:00:00",
+            "shooting_date": shooting_date,
+        },
+    )
+
+
+def test_the_unassigned_list_starts_with_the_newest_photo(window):
+    """割り当てる画面は**撮影日時の新しい順**（#53）。
+
+    品質スコア順だと、同じ人の同じ日の写真がページをまたいで散らばる。
+    日付順なら**同じ行事の写真が固まる**ので、まとめて選んで一度に割り当てられる。
+    """
+    connection = window.connection
+    # _seed のメディアは撮影日時を持たない。持たない顔は最後に来るはず
+    for index, date in enumerate(("2012-01-01T00:00:00", "2021-12-31T00:00:00")):
+        media_id = _media_with_date(connection, f"/photos/d{index}.jpg", date, f"h{index}")
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * 128,
+            embed_version="test",
+            thumbnail=b"",
+            # 品質スコアは日付と逆に振る。品質順のままなら並びが変わらない
+            quality_score=100.0 if index == 0 else 1.0,
+        )
+    connection.commit()
+    window._reset_page()
+
+    listed = [
+        db.get_media_by_id(connection, window.face_list.item(row).data(Qt.UserRole)["media_id"])[
+            "shooting_date"
+        ]
+        for row in range(window.face_list.count())
+    ]
+
+    assert listed[0] == "2021-12-31T00:00:00"
+    assert listed[1] == "2012-01-01T00:00:00"
+    # 撮影日時の無い顔は最後にまとまる
+    assert set(listed[2:]) == {None}
+
+
+def test_the_assigned_list_is_ordered_by_age(window):
+    """「割り当て済みを確認」は**年齢順**（#53）。
+
+    成長の順に並ぶので、年齢の入れ間違いや、別人が混ざっているのに気づきやすい。
+    """
+    connection = window.connection
+    person_id = db.add_person(connection, "なつ")
+    face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
+    for face_id, age in zip(face_ids, (8, 2, 5, None, 0)):
+        window.assign_faces([face_id], person_id, age=age)
+
+    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, connection, person)
+
+    ages = [
+        dialog.face_list.item(row).data(Qt.UserRole)["age"]
+        for row in range(dialog.face_list.count())
+    ]
+
+    assert ages[:4] == [0, 2, 5, 8]
+    # **未設定は最後。** 先頭に来ると、年齢順に見ていく邪魔になる
+    assert ages[-1] is None
+    dialog.close()
+
+
+def test_rebuilding_the_list_does_not_reload_the_preview(window, monkeypatch):
+    """**一覧を作り直すたびに元写真を読み直さない。**
+
+    `clear()` は項目を1つずつ外すので、そのたびに `itemSelectionChanged` が
+    出る。プレビューがそれに繋がっていたため、**200件を選んで割り当てると
+    元写真を NFS から100回読み直し、1回の操作に17秒かかっていた**
+    （実データで実測。1枚あたり 220ms）。
+    """
+    reads = []
+    monkeypatch.setattr(
+        photoarchive_gui.face,
+        "load_face_image_bytes",
+        lambda path, bbox: reads.append(path) or b"",
+    )
+    db.add_person(window.connection, "父")
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.selectAll()
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
+    # 選んだときの1回は正しい読み出し。数えるのは**作り直しのぶん**だけ
+    reads.clear()
+
+    window._assign_selected()
+
+    assert reads == []
+
+
+def test_the_progress_is_reported_for_every_face(window, monkeypatch):
+    """**進み具合が件数で出ること。** 複数枚を一度に処理するときの手がかり。"""
+    reported = []
+
+    class _Spy(photoarchive_gui.WorkProgress):
+        def __call__(self, done, total):
+            reported.append((done, total))
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(photoarchive_gui, "WorkProgress", _Spy)
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
+    db.add_person(window.connection, "父")
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.selectAll()
+
+    window._assign_selected()
+
+    # 最初に 0、最後に全件。件数は選んだ顔の数と一致する
+    assert reported[0] == (0, 5)
+    assert reported[-1] == (5, 5)
+
+
+def test_the_cursor_is_restored_even_when_the_work_fails():
+    """**砂時計を戻し忘れない。** 戻し損ねると、以後ずっと砂時計のままになる。"""
+    before = QApplication.overrideCursor()
+
+    with pytest.raises(RuntimeError):
+        with photoarchive_gui.busy_cursor():
+            raise RuntimeError("途中で失敗した")
+
+    assert QApplication.overrideCursor() is before
+
+
+def test_setting_the_age_of_many_faces_commits_once(window, monkeypatch):
+    """**1件ずつコミットしない。** 200件なら 200 回の書き込み確定になる。"""
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.assign_faces(face_ids, person_id)
+    statements = []
+    window.connection.set_trace_callback(statements.append)
+    try:
+        db.set_faces_age(window.connection, face_ids, 7)
+    finally:
+        window.connection.set_trace_callback(None)
+
+    assert sum("COMMIT" in s.upper() for s in statements) == 1
+    assert all(row["age"] == 7 for row in db.list_faces(window.connection, person_id=person_id))
+
+
+# ---------------------------------------------------------------------------
+# 除外の取り消し
+# ---------------------------------------------------------------------------
+
+
+def test_a_rejected_face_can_be_put_back_to_unassigned(window):
+    """**除外を取り消せること。**
+
+    除外した顔は「割り当て済みを確認」に出てこない（あちらは人物で絞るが、
+    除外した顔は `person_id` を持たない）。そのため、いったん除外すると
+    **誰かに割り当てる以外に戻す手段が無かった。** 「決めきれないので保留に
+    戻す」ができない。
+    """
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.face_list.selectAll()
+    window._reject_selected()
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == len(face_ids)
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+    window._unassign_selected()
+
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == 0
+    assert db.count_faces(window.connection, unassigned=True) == len(face_ids)
+    assert all(
+        db.get_face(window.connection, face_id)["assign_source"] is None
+        for face_id in face_ids
+    )
+
+
+def test_an_auto_assignment_can_also_be_put_back(window):
+    """自動で付いた割り当ても、同じボタンで外せる。"""
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    db.assign_faces(window.connection, face_ids, person_id, db.ASSIGN_AUTO, assign_score=50.0)
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_AUTO)
+    window._reset_page()
+    window.face_list.selectAll()
+    window._unassign_selected()
+
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_AUTO) == 0
+    assert db.count_faces(window.connection, unassigned=True) == len(face_ids)
+
+
+def test_the_unassign_button_is_disabled_while_showing_unassigned_faces(window):
+    """**隠さずに押せなくする。** 隠すと「そんな操作は無い」と思われる。
+
+    戻す先が無いときに押せると、何も起きない操作を押させることになる。
+    """
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_UNASSIGNED)
+    window._reset_page()
+    assert window.unassign_button.isEnabled() is False
+    assert "戻す先がありません" in window.unassign_button.toolTip()
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    assert window.unassign_button.isEnabled() is True
+    assert "未割当に戻します" in window.unassign_button.toolTip()
+
+
+def test_putting_a_face_back_says_done(window):
+    """戻したあとも、プレビューに「完了」を出して薄くする（他の操作と同じ）。"""
+    window.face_list.selectAll()
+    window._reject_selected()
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+
+    window._unassign_selected()
+
+    assert "未割当に戻しました" in window.preview_status.text()
+
+
+def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
+    """戻すときも、一覧の作り直しで元写真を読み直さない（割り当てと同じ）。"""
+    reads = []
+    monkeypatch.setattr(
+        photoarchive_gui.face,
+        "load_face_image_bytes",
+        lambda path, bbox: reads.append(path) or b"",
+    )
+    window.face_list.selectAll()
+    window._reject_selected()
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+    reads.clear()
+
+    window._unassign_selected()
+
+    assert reads == []

@@ -288,3 +288,306 @@ def test_updating_a_person_without_a_birth_date_keeps_it(tmp_path: Path):
         assert db.list_persons(connection)[0]["birth_date"] is None
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# 一覧の並び順（#53）
+# ---------------------------------------------------------------------------
+
+
+def _seed_for_ordering(connection):
+    """撮影日時の違う写真と、年齢の違う顔を用意する。
+
+    **品質スコアと撮影日時と年齢を、わざと逆の順に振る。** 同じ順に振ると、
+    どの並び順を指定しても同じ結果になり、テストが何も確かめられない。
+    """
+    person_id = db.add_person(connection, "なつ")
+    faces = {}
+    plan = [
+        # (キー, 撮影日時, 品質スコア, 年齢)
+        ("古い", "2012-01-01T00:00:00", 90.0, 8),
+        ("中間", "2017-06-01T00:00:00", 50.0, 2),
+        ("新しい", "2021-12-31T00:00:00", 10.0, 5),
+        ("日時なし", None, 70.0, None),
+    ]
+    for index, (key, shooting_date, quality, age) in enumerate(plan):
+        media_id = db.save_media(
+            connection,
+            {
+                "path": f"/photos/{index}.jpg",
+                "filename": f"{index}.jpg",
+                "type": "image",
+                "file_hash": f"hash{index}",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+                "shooting_date": shooting_date,
+            },
+        )
+        faces[key] = db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * 128,
+            embed_version="test",
+            thumbnail=b"",
+            quality_score=quality,
+        )
+    connection.commit()
+    return person_id, faces
+
+
+def test_faces_can_be_listed_newest_shot_first(tmp_path: Path):
+    """未割当の一覧は撮影日時の新しい順。**同じ行事の写真が固まる。**
+
+    まとめて選んで一度に割り当てられる。撮影年をまたがないので、
+    年齢の初期値も1つに定まる。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        _, faces = _seed_for_ordering(connection)
+
+        listed = [
+            row["id"]
+            for row in db.list_faces(connection, unassigned=True, order=db.ORDER_SHOT_DESC)
+        ]
+
+        assert listed[:3] == [faces["新しい"], faces["中間"], faces["古い"]]
+        # **撮影日時の無い顔は最後。** 先頭に来ると、日付順に見ていく邪魔になる
+        assert listed[-1] == faces["日時なし"]
+    finally:
+        connection.close()
+
+
+def test_faces_can_be_listed_youngest_age_first(tmp_path: Path):
+    """割り当て済みの一覧は年齢順。**成長の順に並ぶ。**
+
+    年齢の入れ間違いや、別人が混ざっているのに気づきやすい。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        for key, age in (("古い", 8), ("中間", 2), ("新しい", 5), ("日時なし", None)):
+            db.assign_faces(connection, [faces[key]], person_id, db.ASSIGN_MANUAL, age=age)
+
+        listed = [
+            row["id"]
+            for row in db.list_faces(connection, person_id=person_id, order=db.ORDER_AGE)
+        ]
+
+        assert listed[:3] == [faces["中間"], faces["新しい"], faces["古い"]]
+        # **年齢が未設定の顔は最後。** SQLite の NULL は最小なので、
+        # そのまま昇順にすると先頭を埋めてしまう
+        assert listed[-1] == faces["日時なし"]
+    finally:
+        connection.close()
+
+
+def test_the_default_order_is_still_the_quality_score(tmp_path: Path):
+    """**既定を変えない。** `match` と `evaluate` も `list_faces` を通る。"""
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        _, faces = _seed_for_ordering(connection)
+
+        listed = [row["id"] for row in db.list_faces(connection, unassigned=True)]
+
+        assert listed == [
+            faces["古い"],      # 90.0
+            faces["日時なし"],   # 70.0
+            faces["中間"],      # 50.0
+            faces["新しい"],    # 10.0
+        ]
+    finally:
+        connection.close()
+
+
+def test_every_order_honours_the_same_filters(tmp_path: Path):
+    """**絞り込みを2通り書かない。** 書き分けると片方にだけ条件が足される。"""
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        db.assign_faces(connection, [faces["新しい"]], person_id, db.ASSIGN_MANUAL, age=5)
+        db.assign_faces(connection, [faces["日時なし"]], person_id, db.ASSIGN_MANUAL, age=None)
+
+        for order in (db.ORDER_QUALITY, db.ORDER_SHOT_DESC, db.ORDER_AGE):
+            unassigned = db.list_faces(connection, unassigned=True, order=order)
+            assert {row["id"] for row in unassigned} == {faces["古い"], faces["中間"]}, order
+            # 件数は並び順に左右されない
+            assert db.count_faces(connection, unassigned=True) == len(unassigned)
+
+        # 年齢の絞り込みも同じように効く。**未設定は範囲から外れても残る**
+        for order in (db.ORDER_QUALITY, db.ORDER_SHOT_DESC, db.ORDER_AGE):
+            assigned = db.list_faces(
+                connection, person_id=person_id, min_age=10, order=order
+            )
+            assert [row["id"] for row in assigned] == [faces["日時なし"]], order
+    finally:
+        connection.close()
+
+
+def test_pagination_does_not_repeat_or_skip_a_face(tmp_path: Path):
+    """ページをまたいでも、同じ顔が二度出たり抜けたりしないこと。
+
+    並びが一意でないと（撮影日時が同じ顔が並ぶと）起きる。`id` を
+    第2キーに入れてある。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        media_id = db.save_media(
+            connection,
+            {
+                "path": "/photos/same.jpg",
+                "filename": "same.jpg",
+                "type": "image",
+                "file_hash": "same",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+                # 同じ写真に写った顔は、撮影日時が完全に同じ
+                "shooting_date": "2019-08-15T12:00:00",
+            },
+        )
+        expected = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=[0.0] * 128,
+                embed_version="test",
+                quality_score=1.0,
+            )
+            for _ in range(5)
+        ]
+        connection.commit()
+
+        pages = []
+        for offset in (0, 2, 4):
+            pages += [
+                row["id"]
+                for row in db.list_faces(
+                    connection,
+                    unassigned=True,
+                    order=db.ORDER_SHOT_DESC,
+                    limit=2,
+                    offset=offset,
+                )
+            ]
+
+        assert pages == expected
+    finally:
+        connection.close()
+
+
+def test_a_broken_exif_date_does_not_take_over_the_newest_page(tmp_path: Path):
+    """**壊れた EXIF を「いちばん新しい」として先頭に出さない。**
+
+    カメラが `TTTT-TT-TTTTT:TT:TT` を書くことがある（実データで Media 67件・
+    顔 123件）。文字の大小で並べると `T` は数字より大きいので、そのままだと
+    **新しい順の1ページ目をまるごと占領する。**
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        _, faces = _seed_for_ordering(connection)
+        broken = {}
+        for index, value in enumerate(("TTTT-TT-TTTTT:TT:TT", "0000-00-00T00:00:00", "いつか")):
+            media_id = db.save_media(
+                connection,
+                {
+                    "path": f"/photos/broken{index}.jpg",
+                    "filename": f"broken{index}.jpg",
+                    "type": "image",
+                    "file_hash": f"broken{index}",
+                    "file_size": 100,
+                    "created_time": "2026-01-01T00:00:00",
+                    "shooting_date": value,
+                },
+            )
+            broken[value] = db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=[0.0] * 128,
+                embed_version="test",
+                quality_score=1.0,
+            )
+        connection.commit()
+
+        listed = [
+            row["id"]
+            for row in db.list_faces(connection, unassigned=True, order=db.ORDER_SHOT_DESC)
+        ]
+
+        # 読める日付が先。壊れた値は「日時なし」と同じ扱いで最後
+        assert listed[:3] == [faces["新しい"], faces["中間"], faces["古い"]]
+        assert set(listed[3:]) == {faces["日時なし"]} | set(broken.values())
+    finally:
+        connection.close()
+
+
+def test_the_shooting_date_order_does_not_fall_back_to_a_full_sort(tmp_path: Path):
+    """**索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る。
+
+    実データ（未割当 58,547 件）では、全件並べ直すと 1ページの読み出しが
+    220〜435ms かかる。索引を順に歩けば 1ページ目は 0.6ms。
+    `CROSS JOIN` を外すと、この検査が落ちる。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        _seed_for_ordering(connection)
+        query, params = db._shooting_date_query(
+            list(db.FACE_LIST_COLUMNS), None, None, True, None, None
+        )
+        plan = "\n".join(
+            row[-1] for row in connection.execute(f"EXPLAIN QUERY PLAN {query}", params)
+        )
+
+        assert "idx_media_shooting" in plan
+        # 並べ直しが残っていたら、索引を歩けていない
+        assert "USE TEMP B-TREE FOR ORDER BY" not in plan
+    finally:
+        connection.close()
+
+
+def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path):
+    """**進み具合を知らせても、戻り値が壊れないこと。**
+
+    `executemany` を塊に分けたので、`cursor.rowcount` は**最後の塊のぶん**しか
+    持たない。それを返していたため、120件を割り当てても 20 が返っていた。
+    """
+    connection = db.ensure_database(str(tmp_path / "count.db"))
+    try:
+        person_id = db.add_person(connection, "なつ")
+        media_id = db.save_media(
+            connection,
+            {
+                "path": "/photos/a.jpg",
+                "filename": "a.jpg",
+                "type": "image",
+                "file_hash": "hash",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+            },
+        )
+        # **塊の境目をまたぐ件数**にする。ちょうど割り切れると穴に気づけない
+        count = db.PROGRESS_CHUNK * 2 + 20
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=[0.0] * 128,
+                embed_version="test",
+            )
+            for _ in range(count)
+        ]
+        connection.commit()
+        noop = lambda done, total: None  # noqa: E731
+
+        assert db.assign_faces(
+            connection, face_ids, person_id, db.ASSIGN_MANUAL, progress=noop
+        ) == count
+        assert db.set_faces_age(connection, face_ids, 5, progress=noop) == count
+        assert db.unassign_faces(connection, face_ids, progress=noop) == count
+        assert db.reject_faces(connection, face_ids, progress=noop) == count
+        # 知らせない場合も同じ
+        assert db.unassign_faces(connection, face_ids) == count
+    finally:
+        connection.close()
