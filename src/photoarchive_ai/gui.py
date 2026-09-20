@@ -35,15 +35,51 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, face
+from .config import find_settings_path
 
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
+FILTER_UNASSIGNED = "未割当"
+FILTER_AUTO = "自動割当"
+FILTER_REJECTED = "除外済み"
+
+
 def _format_timestamp(value: Optional[str]) -> Optional[str]:
-    """DB の ISO 文字列を "YYYY-MM-DD HH:MM:SS" にする。読めなければそのまま。"""
+    """DB の ISO 文字列を "YYYY-MM-DD HH:MM:SS" にする。読めなければ ``None``。
+
+    **カメラが `0000:00:00 00:00:00` を書くことがある**（実データで Media 55件・
+    顔 33件）。`scanner.extract_exif_datetime` は EXIF を機械的に整形するだけなので、
+    これが `0000-00-00T00:00:00` として保存される。日付として読めないものを
+    そのまま出すと、**撮影日時を持っているように見えてファイル日時の
+    フォールバックも消える**。いちばん手がかりが要る写真で手がかりが減るので、
+    持っていないのと同じ扱いにする。
+    """
     if not value:
         return None
-    return str(value).replace("T", " ")[:19]
+    text = str(value).replace("T", " ")[:19]
+    return None if text.startswith("0000") else text
+
+
+def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
+    """設定に書かれた相対パスを、**設定ファイルの置き場所**を起点に解く。
+
+    カレントディレクトリを起点にすると、リポジトリ直下以外から起動したときに
+    相対化が静かに外れ、`GUI_USAGE.md` が約束している「`source_root` からの
+    相対」ではなく、読めない NFS の絶対パスに戻る。`config` は設定ファイル
+    自体を複数の場所から探しているのに、**その中の値だけ cwd 依存**という
+    食い違いだった。
+
+    `database_path` など他の相対値はここでは扱わない。設定の解釈を全体で
+    変えるのは、明示的な指示が要る（CLAUDE.md §4）。
+    """
+    if not source_root or Path(source_root).is_absolute():
+        return source_root
+    settings_path = find_settings_path()
+    if settings_path is None:
+        return source_root
+    # config/app_settings.json → リポジトリ直下
+    return str(settings_path.parent.parent / source_root)
 
 
 def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
@@ -74,14 +110,12 @@ def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
         except ValueError:
             # source_root の外にあるメディア。絶対パスのまま出す。
             pass
+    if str(folder) == ".":
+        # source_root 直下。"." では何のことか読めない。
+        folder = "（source_root 直下）"
     lines.append(f"フォルダ: {folder}")
     lines.append(f"ファイル: {path.name}")
     return "\n".join(lines)
-
-
-FILTER_UNASSIGNED = "未割当"
-FILTER_AUTO = "自動割当"
-FILTER_REJECTED = "除外済み"
 
 
 def _select_on_focus(spin: QSpinBox) -> QSpinBox:
@@ -114,6 +148,7 @@ def _make_select_all_on_focus(spin: QSpinBox):
     return focus_in
 
 
+
 class PersonDialog(QDialog):
     def __init__(self, parent=None, name="", relation="", memo=""):
         super().__init__(parent)
@@ -139,12 +174,36 @@ class PersonDialog(QDialog):
         )
 
 
+def summarize_selection(face_count: int, shooting_dates: List[str]) -> str:
+    """年齢ダイアログに出す「何に入れるのか」の1行。
+
+    **1回の入力が選択中の全件に入る**のに、プレビューに出ているのは最後に
+    選んだ1枚の撮影日時だけ。撮影年をまたいで選ぶと、画面の日時を見て入れた
+    年齢が別の年の顔にも入る。件数と、撮影日時の範囲を見せて気づけるようにする。
+
+    1件だけの選択なら、プレビューと食い違わないので出さない。
+    """
+    if face_count <= 1:
+        return ""
+    if not shooting_dates:
+        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時は不明）。"
+    first, last = shooting_dates[0][:10], shooting_dates[-1][:10]
+    if first == last:
+        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"
+    # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
+    return (
+        f"{face_count} 件すべてに同じ年齢を入れます。"
+        f"\n撮影日時が {first} 〜 {last} にまたがっています。"
+    )
+
+
 class FaceAgeDialog(QDialog):
     """撮影時の年齢を任意で入力する。未設定と0歳は区別する。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, summary: str = ""):
         super().__init__(parent)
         self.setWindowTitle("撮影時の年齢")
+        self.summary = summary
         self.age_input = QSpinBox()
         # 最小値を -1 にして「未設定」に割り当てる。0 を特別扱いにすると
         # 0歳の顔を登録できなくなる。
@@ -160,6 +219,10 @@ class FaceAgeDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QFormLayout(self)
+        if summary:
+            summary_label = QLabel(summary)
+            summary_label.setWordWrap(True)
+            layout.addRow(summary_label)
         layout.addRow("撮影時の年齢", self.age_input)
         layout.addRow(buttons)
 
@@ -315,7 +378,12 @@ class RegisteredFacesDialog(QDialog):
         face_ids = self._selected_ids()
         if not face_ids:
             return
-        dialog = FaceAgeDialog(self)
+        dialog = FaceAgeDialog(
+            self,
+            summary=summarize_selection(
+                len(face_ids), db.shooting_dates_for_faces(self.connection, face_ids)
+            ),
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         age = dialog.age()
@@ -621,6 +689,10 @@ class MainWindow(QWidget):
         pixmap = QPixmap()
         pixmap.loadFromData(data)
         if pixmap.isNull():
+            # **前の写真の画像を残さない。** 情報欄は先に新しい写真で
+            # 上書きしているので、残すと上下で別の写真になる。
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText(f"画像を表示できません:\n{media['path']}")
             return
         self.preview_label.setText("")
         self.preview_label.setPixmap(
@@ -677,7 +749,7 @@ def main() -> None:
     settings = load_settings()
     db_path = args.db or get_database_path(settings)
     # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く。
-    source_root = get_source_root(settings)
+    source_root = resolve_source_root(get_source_root(settings))
     if not db_path:
         raise SystemExit(
             "データベースのパスが必要です。--db で指定するか、"

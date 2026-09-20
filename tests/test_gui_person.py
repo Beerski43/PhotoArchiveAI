@@ -58,6 +58,9 @@ def window(tmp_path):
             "file_hash": "hash",
             "file_size": photo.stat().st_size,
             "created_time": "2026-01-01T00:00:00",
+            # 撮影日時を持たせておかないと、情報欄のテストが
+            # 「不明（EXIFなし）」でも通ってしまう。
+            "shooting_date": "2017-12-16T18:46:32",
         },
     )
     db.add_face(
@@ -279,7 +282,7 @@ def test_selecting_a_face_fills_the_information_under_the_preview(window, tmp_pa
     info = window.preview_info.text()
     assert "フォルダ: photos" in info
     assert "ファイル: family.jpg" in info
-    assert "撮影日時" in info
+    assert "撮影日時: 2017-12-16 18:46:32" in info
 
 
 def test_the_information_is_still_shown_when_the_original_is_gone(window, tmp_path):
@@ -295,3 +298,121 @@ def test_the_information_is_still_shown_when_the_original_is_gone(window, tmp_pa
 
     assert "ファイル: family.jpg" in window.preview_info.text()
     assert "元写真を開けません" in window.preview_label.text()
+
+
+# ---------------------------------------------------------------------------
+# レビュー（PR #38）で見つかった経路
+# ---------------------------------------------------------------------------
+
+
+def test_a_broken_exif_date_is_treated_as_missing():
+    """`0000:00:00` を書くカメラがある（実データで Media 55件・顔 33件）。
+
+    そのまま出すと**撮影日時を持っているように見え、ファイル日時の
+    フォールバックまで消える。** いちばん手がかりが要る写真で手がかりが減る。
+    """
+    info = photoarchive_gui.format_media_info(
+        {
+            "path": "/photo/2019/190815-17大島キャンプ/P1015698.jpg",
+            "shooting_date": "0000-00-00T00:00:00",
+            "created_time": "2019-08-15T12:00:00",
+        },
+        source_root="/photo",
+    )
+
+    assert "撮影日時: 不明（EXIFなし）" in info
+    assert "ファイル日時: 2019-08-15 12:00:00" in info
+    assert "0000" not in info
+
+
+def test_a_photo_directly_under_the_source_root_says_so():
+    """`フォルダ: .` では何のことか読めない。"""
+    info = photoarchive_gui.format_media_info(
+        {"path": "/photo/a.jpg", "shooting_date": None}, source_root="/photo"
+    )
+
+    assert "フォルダ: （source_root 直下）" in info
+
+
+def test_a_relative_source_root_is_anchored_to_the_settings_file(tmp_path, monkeypatch):
+    """相対の `source_root` を、**起動した場所に左右されず**に解くこと。
+
+    cwd 起点だと、リポジトリ直下以外から起動したときに相対化が静かに外れ、
+    `GUI_USAGE.md` が約束している「`source_root` からの相対」ではなく、
+    読めない NFS の絶対パスに戻る。
+    """
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "app_settings.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("PHOTOARCHIVE_CONFIG", str(config_dir / "app_settings.json"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    resolved = photoarchive_gui.resolve_source_root("mediaFiles/suzukiFamily")
+
+    assert resolved == str(tmp_path / "mediaFiles/suzukiFamily")
+
+
+def test_an_absolute_source_root_is_left_alone(tmp_path):
+    """絶対パスの `source_root` は触らない。"""
+    assert photoarchive_gui.resolve_source_root("/mnt/photo") == "/mnt/photo"
+    assert photoarchive_gui.resolve_source_root(None) is None
+
+
+def test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded(
+    window, tmp_path, monkeypatch
+):
+    """デコードに失敗したとき、前の写真の画像を残さない。
+
+    情報欄は先に新しい写真で上書きしているので、画像だけ残すと
+    **上下で別の写真**になる。
+    """
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    assert not window.preview_label.pixmap().isNull()
+
+    monkeypatch.setattr(
+        photoarchive_gui.face, "load_face_image_bytes", lambda path, bbox: b"not an image"
+    )
+    window._show_preview()
+
+    assert window.preview_label.pixmap().isNull()
+    assert "画像を表示できません" in window.preview_label.text()
+
+
+def test_the_age_dialog_says_how_many_faces_get_the_same_age():
+    """**1回の入力が選択中の全件に入る**ことを、入れる前に知らせる。
+
+    プレビューに出ているのは最後に選んだ1枚の撮影日時だけなので、
+    撮影年をまたいで選ぶと、画面の日時を見て入れた年齢が別の年の顔にも入る。
+    """
+    spanning = photoarchive_gui.summarize_selection(
+        2, ["2012-01-01T00:00:00", "2019-08-15T12:00:00"]
+    )
+    same_day = photoarchive_gui.summarize_selection(
+        3, ["2019-08-15T12:00:00", "2019-08-15T13:00:00"]
+    )
+
+    assert "2 件すべてに同じ年齢を入れます" in spanning
+    assert "2012-01-01 〜 2019-08-15 にまたがっています" in spanning
+    assert "3 件すべてに同じ年齢を入れます" in same_day
+    assert "またがって" not in same_day
+    # 1件だけならプレビューと食い違わないので、何も足さない
+    assert photoarchive_gui.summarize_selection(1, ["2019-08-15T12:00:00"]) == ""
+    # 装飾記号を書かない（QLabel は Markdown を解釈せず、そのまま出る）
+    assert "**" not in spanning
+
+
+def test_the_summary_reaches_the_age_dialog(window, qt_app):
+    """要約がダイアログに実際に載ること。"""
+    dialog = photoarchive_gui.FaceAgeDialog(summary="2 件すべてに同じ年齢を入れます。")
+    dialog.show()
+    qt_app.processEvents()
+
+    labels = [
+        child.text()
+        for child in dialog.findChildren(photoarchive_gui.QLabel)
+    ]
+    assert any("2 件すべてに同じ年齢を入れます。" in text for text in labels)
+    dialog.close()
