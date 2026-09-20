@@ -65,6 +65,20 @@ dlib モデルが読めないと顔が無言で全損する問題は、全件ス
 
 詳細: [details/2026-09-19-issue30-foundation.md](details/2026-09-19-issue30-foundation.md)
 
+## 2026-09-19 — #32 Phase 2: 未検証だった経路にテストを足す
+
+PR [#33](https://github.com/Beerski43/PhotoArchiveAI/pull/33)。
+
+`face.py` の入出力、`scoring.py` の計算式、`gui.py` の人物編集とプレビュー、
+`migration.py` の残りに、テストを足した。`scoring.py` は既定のフェイクが常に
+同じランドマークを返すため、計算式が実質未検証だった。
+
+レビューで **`CLAUDE.md` と `README.md` に実装で変わる数字（テストの件数・
+所要時間・成功件数）を置かない**という方針を受けた。関係のない変更のたびに
+更新が要り、忘れればいちばんよく読まれる2つの文書が静かに嘘になるため。
+数字は `docs/testing/` 側に置くか、実行して確かめる形にした。
+`tests/test_docs_stay_stable.py` が番人として入っている。
+
 ## 2026-09-06 — #18 顔への年齢登録、#17 GUI の起動エラー
 
 PR [#20](https://github.com/Beerski43/PhotoArchiveAI/pull/20) と
