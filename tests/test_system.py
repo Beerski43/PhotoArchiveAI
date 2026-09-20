@@ -90,11 +90,13 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         photoarchive_gui.PersonDialog,
         "values",
-        lambda self: ("Test Person", "family", "test memo"),
+        lambda self: ("Test Person", "family", "test memo", (2011, 5, 3)),
     )
     window._add_person()
     persons = db.list_persons(window.connection)
     assert len(persons) == 1
+    # 誕生日は年齢の計算にしか使わないが、通しで入ることは確かめておく
+    assert persons[0]["birth_date"] == "2011-05-03"
     person_id = persons[0]["id"]
 
     # 4) GUI で検出済みの顔を人物に割り当て

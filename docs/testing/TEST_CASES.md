@@ -27,10 +27,17 @@
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_registered_faces_dialog_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
+| `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
+| `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces` が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
+| `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
+| `test_gui_person.py::test_the_age_line_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
 | `test_scanner_incremental.py::test_an_error_from_one_file_is_not_reported_for_the_next` | 直近のエラーが大域変数に残り、無関係なファイルに付いた |
+| `test_migration.py::test_a_version_2_database_keeps_every_face_when_migrated` | **v2 のDBを v1 の再構築経路へ流すと、顔 58,606 件と数時間ぶんのスキャンが消える**（Issue #48 で版ごとの分岐を追加） |
+| `test_migration.py::test_opening_an_old_database_does_not_stamp_it_as_current` | **移行していないDBにアプリが版の印だけを刻んだ。** `migrate` が「すでに最新です」と答えて何もしなくなり、欠けた列が二度と足されない。実データで発生し、GUI で入れた誕生日が保存されなかった |
+| `test_migration.py::test_a_database_whose_version_ran_ahead_is_still_repaired` | 上の状態になったDBを、版ではなく**実際の列**を見て直せること |
 | `test_scanner_incremental.py::test_a_worker_writes_its_errors_to_the_log_file` | `fork` をやめた副作用で、並列時にワーカーのログがファイルへ1行も残らなくなった（既定の経路） |
 | `test_scanner_incremental.py::test_the_workers_are_not_started_by_forking` | **並列スキャンが実データのDBを壊した。** fork した子が親の SQLite 接続を引き継ぎ、`row N missing from index idx_media_hash`（Issue #35） |
 | `test_scanner_incremental.py::test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 上と同じ原因を、子が親の状態を引き継いでいないかという側から押さえる |
@@ -51,7 +58,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（6件）
+### `test_db.py` — スキーマと永続化（8件）
 
 | テスト | 内容 |
 |---|---|
@@ -61,6 +68,10 @@
 | `test_deleting_media_cascades_to_faces_and_results` | 外部キーの CASCADE |
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
+| `test_shooting_dates_come_back_one_per_face` | **顔1件につき1件返す。** `DISTINCT` で潰さず、日時の無い顔も落とさない |
+| `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
+| `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
+| `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
 
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
@@ -160,7 +171,19 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
-### `test_gui_assignment.py` — GUI での割り当て（17件）
+### `test_gui_migration.py` — 起動時の移行（7件）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_current_database_opens_without_asking_anything` | 移行が要らなければ何も出さない |
+| `test_choosing_to_run_migrates_the_database` | 「移行を実行」でその場で移行し、起動を続けられる |
+| `test_the_confirmation_says_what_is_kept` | **何が残るかを見せてから実行する。** 「破棄」と読める案内を出さない |
+| `test_choosing_to_quit_leaves_the_database_alone` | 「終了」ならデータベースに触らない |
+| `test_a_failed_migration_does_not_let_the_window_open` | **失敗を成功のように見せない。** どこまで進んだかも出す |
+| `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
+| `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
+
+### `test_gui_assignment.py` — GUI での割り当て（18件）
 
 | テスト | 内容 |
 |---|---|
@@ -175,8 +198,9 @@
 | `test_assigning_without_an_age_keeps_the_one_already_recorded` | 年齢を指定しない割り当ては年齢を触らない |
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
+| `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
 
-### `test_gui_person.py` — 人物編集とプレビュー（22件）
+### `test_gui_person.py` — 人物編集とプレビュー（40件）
 
 | テスト | 内容 |
 |---|---|
@@ -202,6 +226,31 @@
 | `test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded` | デコード失敗で上下が別の写真にならない |
 | `test_the_age_dialog_says_how_many_faces_get_the_same_age` | **1回の入力が全件に入る**ことと、撮影日時のまたがりを知らせる |
 | `test_the_summary_reaches_the_age_dialog` | 要約がダイアログに載る |
+| `test_the_age_is_counted_from_the_birthday_not_the_year` | **誕生日を迎える前なら1引く**（年の引き算だけだと1歳ずれる） |
+| `test_the_age_is_not_calculated_when_either_side_is_missing` | 誕生日か撮影日時が欠けたら計算しない |
+| `test_a_broken_exif_date_does_not_produce_an_age` | **「撮影日時: 不明」と出ている写真に年齢だけ出さない**（`0000:00:00`） |
+| `test_a_photo_taken_before_the_birthday_says_so` | 誕生前は行を消さず「誕生前」と出す（選び間違いに気づける） |
+| `test_the_preview_shows_the_age_of_the_selected_person` | 情報欄の最後に「誰が何歳か」を出す |
+| `test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated` | 計算できないときは行そのものを出さない |
+| `test_the_age_line_follows_the_person_selection` | 人物を選び直すと年齢の行が変わる。**元写真は読み直さない**（NFS 律速） |
+| `test_a_birth_date_can_be_registered_and_cleared` | 誕生日の登録と、空欄での未設定へ戻し |
+| `test_a_partly_filled_birth_date_is_rejected` | **年月日まで必須。** 一部だけの入力と、暦に無い日とで言うことを変える |
+| `test_the_birth_date_is_built_from_three_numbers` | 年・月・日の3つから組み立て、保存済みの値を3つに割る |
+| `test_typing_a_birth_date_straight_from_the_keyboard` | `--` の入った欄でも打鍵で置き換わる |
+| `test_the_edit_dialog_opens_with_the_stored_birth_date` | 編集ダイアログが今の誕生日で開く |
+| `test_the_person_dialog_round_trips_a_birth_date` | 実物のダイアログが誕生日を持ち帰る |
+| `test_the_person_details_show_the_birth_date` | 人物詳細に誕生日が出る（年齢が出ない理由が分かる） |
+| `test_the_suggested_age_needs_every_selected_face_to_agree` | **食い違うなら初期値を出さない**（1回の入力が全件に入る） |
+| `test_the_age_dialog_opens_with_the_calculated_age` | 計算値を初期値に入れ、計算値だと画面に書く |
+| `test_assigning_faces_offers_the_calculated_age_without_saving_it` | **自動保存はしない。** 取り消せば何も入らない |
+| `test_assigning_several_faces_warns_that_one_age_covers_them_all` | まとめて割り当てるときにも、全件に入る旨とまたがりを知らせる |
+| `test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **「分からない」を「反対しない」にしない。** 日時の無い顔が1件でもあれば初期値を出さない |
+| `test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken` | 壊れた EXIF も「分からない」として扱う |
+| `test_the_selection_notice_says_how_many_dates_are_unknown` | 初期値が入らない理由（不明な件数）を出す |
+| `test_a_broken_exif_date_does_not_appear_in_the_selection_notice` | `0000:00:00` を撮影日時として画面に出さない |
+| `test_the_age_line_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
+| `test_dropping_the_person_selection_also_drops_the_age_line` | 前の人物の年齢を残さない |
+| `test_a_new_person_is_selected_so_the_age_shows_immediately` | 追加した人物も選ばれた状態になる |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
@@ -265,10 +314,21 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — 旧スキーマからの移行（12件）
+### `test_migration.py` — スキーマの移行（21件）
 
-Media と Person を温存し Face と AnalysisResult を破棄すること、冪等性、
-旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
+**v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
+冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
+
+**v2 → v3**: `Person.birth_date` を足すだけで、**顔・解析結果・検出済みの状態が
+1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
+案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
+
+**版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
+すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
+導かれていること。
+
+移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
+移行でしか効かない。黙って効かない引数を作らない）。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、
