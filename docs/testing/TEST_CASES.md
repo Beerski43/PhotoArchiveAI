@@ -21,6 +21,7 @@
 | `test_matcher.py::test_match_assigns_the_correct_person_with_uneven_teacher_counts` | 手本の数で剰余を取って人物を引いていたため、1人に2枚以上割り当てた時点で結果が壊れた |
 | `test_matcher.py::test_match_leaves_distant_faces_unassigned` | 閾値判定が無く、どんなに遠い顔も必ず誰かに割り当てられた（Issue #22） |
 | `test_matcher.py::test_dry_run_is_not_blinded_by_a_previous_match` | `--dry-run` が2回目以降ほぼ空振りし、閾値を決める目安にならなかった |
+| `test_gui_person.py::test_a_broken_exif_date_is_treated_as_missing` | EXIF が `0000:00:00` の写真で、撮影日時を持っているように見え、ファイル日時のフォールバックまで消えた |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
@@ -175,7 +176,7 @@
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 
-### `test_gui_person.py` — 人物編集とプレビュー（15件）
+### `test_gui_person.py` — 人物編集とプレビュー（22件）
 
 | テスト | 内容 |
 |---|---|
@@ -194,6 +195,13 @@
 | `test_the_folder_is_shown_without_a_source_root` | `source_root` が無くても動く |
 | `test_selecting_a_face_fills_the_information_under_the_preview` | 顔を選ぶと情報欄が埋まる |
 | `test_the_information_is_still_shown_when_the_original_is_gone` | **元写真が開けないときこそ出す**（出どころはDB） |
+| `test_a_broken_exif_date_is_treated_as_missing` | `0000:00:00` を書くカメラがある（実データ55件）。持っていない扱いにしてファイル日時へ落とす |
+| `test_a_photo_directly_under_the_source_root_says_so` | `フォルダ: .` では読めない |
+| `test_a_relative_source_root_is_anchored_to_the_settings_file` | **起動した場所で表示が変わらない**（相対の起点は設定ファイル） |
+| `test_an_absolute_source_root_is_left_alone` | 絶対パスと未設定は触らない |
+| `test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded` | デコード失敗で上下が別の写真にならない |
+| `test_the_age_dialog_says_how_many_faces_get_the_same_age` | **1回の入力が全件に入る**ことと、撮影日時のまたがりを知らせる |
+| `test_the_summary_reaches_the_age_dialog` | 要約がダイアログに載る |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
