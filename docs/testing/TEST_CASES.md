@@ -28,6 +28,9 @@
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_registered_faces_dialog_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
 | `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
+| `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces` が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
+| `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
+| `test_gui_person.py::test_the_age_line_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
@@ -65,6 +68,8 @@
 | `test_deleting_media_cascades_to_faces_and_results` | 外部キーの CASCADE |
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
+| `test_shooting_dates_come_back_one_per_face` | **顔1件につき1件返す。** `DISTINCT` で潰さず、日時の無い顔も落とさない |
+| `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
 | `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
 | `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
 
@@ -239,6 +244,13 @@
 | `test_the_age_dialog_opens_with_the_calculated_age` | 計算値を初期値に入れ、計算値だと画面に書く |
 | `test_assigning_faces_offers_the_calculated_age_without_saving_it` | **自動保存はしない。** 取り消せば何も入らない |
 | `test_assigning_several_faces_warns_that_one_age_covers_them_all` | まとめて割り当てるときにも、全件に入る旨とまたがりを知らせる |
+| `test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **「分からない」を「反対しない」にしない。** 日時の無い顔が1件でもあれば初期値を出さない |
+| `test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken` | 壊れた EXIF も「分からない」として扱う |
+| `test_the_selection_notice_says_how_many_dates_are_unknown` | 初期値が入らない理由（不明な件数）を出す |
+| `test_a_broken_exif_date_does_not_appear_in_the_selection_notice` | `0000:00:00` を撮影日時として画面に出さない |
+| `test_the_age_line_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
+| `test_dropping_the_person_selection_also_drops_the_age_line` | 前の人物の年齢を残さない |
+| `test_a_new_person_is_selected_so_the_age_shows_immediately` | 追加した人物も選ばれた状態になる |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
@@ -302,7 +314,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（20件）
+### `test_migration.py` — スキーマの移行（21件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -314,6 +326,9 @@ editable install のときだけ出すこと（通常のインストールでは
 **版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
 すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
 導かれていること。
+
+移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
+移行でしか効かない。黙って効かない引数を作らない）。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、

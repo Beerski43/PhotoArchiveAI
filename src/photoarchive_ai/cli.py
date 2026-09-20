@@ -107,7 +107,10 @@ def _build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("--db", help="SQLite database path.")
     migrate_parser.add_argument("--backup", help="Backup file path (default: <db>.bak-<timestamp>).")
     migrate_parser.add_argument(
-        "--no-vacuum", action="store_true", help="Skip VACUUM after the migration."
+        "--no-vacuum",
+        action="store_true",
+        help="Skip VACUUM after the migration. VACUUM runs only when migrating from v1"
+        " (the v2+ migration only adds columns, so nothing is rebuilt).",
     )
     migrate_parser.add_argument(
         "--yes", action="store_true", help="Do not ask for confirmation."

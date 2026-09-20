@@ -390,11 +390,12 @@ def test_the_age_dialog_says_how_many_faces_get_the_same_age():
     プレビューに出ているのは最後に選んだ1枚の撮影日時だけなので、
     撮影年をまたいで選ぶと、画面の日時を見て入れた年齢が別の年の顔にも入る。
     """
+    # `shooting_dates` は**顔1件につき1件**。件数を合わせて渡す
     spanning = photoarchive_gui.summarize_selection(
         2, ["2012-01-01T00:00:00", "2019-08-15T12:00:00"]
     )
     same_day = photoarchive_gui.summarize_selection(
-        3, ["2019-08-15T12:00:00", "2019-08-15T13:00:00"]
+        3, ["2019-08-15T12:00:00", "2019-08-15T13:00:00", "2019-08-15T14:00:00"]
     )
 
     assert "2 件すべてに同じ年齢を入れます" in spanning
@@ -801,3 +802,127 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
     assert "2012-01-01 〜 2017-12-16 にまたがっています" in opened["summary"]
     # 年をまたいでいるので、初期値は出さない
     assert opened["initial_age"] is None
+
+
+# ---------------------------------------------------------------------------
+# レビュー対応（PR #51）
+# ---------------------------------------------------------------------------
+
+
+def test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date():
+    """**撮影日時の分からない顔が1件でもあれば、初期値を出さない。**
+
+    以前は `ages.discard(None)` で「分からない」を捨てていたので、10件のうち
+    9件が EXIF 無しでも、残る1件の年齢が10件すべての初期値になった。
+    **その顔には、別の写真から計算した年齢が黙って保存される**（実データでは
+    `Media.shooting_date` が 15.8% 欠けている）。
+    """
+    # 読める1件だけなら出る
+    assert photoarchive_gui.suggested_age("2011-05-03", ["2017-12-16T18:46:32"]) == 6
+    # 撮影日時の無い顔が混ざったら出さない
+    assert (
+        photoarchive_gui.suggested_age("2011-05-03", ["2017-12-16T18:46:32", None]) is None
+    ), "撮影日時の無い顔があるのに初期値を出している"
+
+
+def test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken():
+    """壊れた EXIF も「分からない」として扱う。
+
+    `0000-00-00` は `parse_date` が弾くと決めた値（実データで Media 55件）。
+    年齢が計算できない以上、日時の無い顔と同じ扱いにする。
+    """
+    assert (
+        photoarchive_gui.suggested_age(
+            "2011-05-03", ["2017-12-16T18:46:32", "0000-00-00T00:00:00"]
+        )
+        is None
+    )
+
+
+def test_the_selection_notice_says_how_many_dates_are_unknown():
+    """**初期値が出ない理由を伝える。** 黙っていると「なぜ空欄か」が分からない。"""
+    notice = photoarchive_gui.summarize_selection(
+        3, ["2017-12-16T18:46:32", None, "0000-00-00T00:00:00"]
+    )
+
+    assert "3 件すべてに同じ年齢を入れます" in notice
+    assert "うち 2 件は撮影日時が分かりません" in notice
+
+
+def test_a_broken_exif_date_does_not_appear_in_the_selection_notice():
+    """**`0000:00:00` を撮影日時として画面に出さない。**
+
+    `_format_timestamp` が「撮影日時: 不明」と出している写真が、同じ画面で
+    日付を持っているように見えてしまう。
+    """
+    notice = photoarchive_gui.summarize_selection(
+        2, ["0000-00-00T00:00:00", "2017-12-16T18:46:32"]
+    )
+
+    assert "0000" not in notice
+    # 読める1件だけが範囲になる
+    assert "2017-12-16" in notice
+    assert "にまたがっています" not in notice
+
+
+def test_the_age_line_appears_right_after_the_birth_date_is_registered(window, monkeypatch):
+    """**誕生日を登録したら、その場で年齢の行が出る。**
+
+    `_reload_person_list` の `clear()` で選択が外れ、`_on_person_selected(None)` が
+    early return していたため、**人物を選び直すまで出なかった。** この機能を
+    初めて使う人には、効いていないように見える。
+    """
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    assert "歳" not in window.preview_info.text()
+
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "father", "", (1980, 1, 2))),
+    )
+    window._edit_person()
+
+    # 写真は 2017-12-16 撮影
+    assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
+    # 詳細欄も「人物を選択してください。」に戻らない
+    assert "誕生日: 1980-01-02" in window.details_label.text()
+    assert window._current_person()["name"] == "父"
+
+
+def test_dropping_the_person_selection_also_drops_the_age_line(window):
+    """**前の人物の年齢を残さない。** 誰の年齢なのか分からなくなる。"""
+    db.update_person(
+        window.connection,
+        db.list_persons(window.connection)[0]["id"],
+        "父",
+        "father",
+        "",
+        birth_date="1980-01-02",
+    )
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    assert "父: 37歳" in window.preview_info.text()
+
+    window.person_list.setCurrentRow(-1)
+
+    assert "歳" not in window.preview_info.text()
+
+
+def test_a_new_person_is_selected_so_the_age_shows_immediately(window, monkeypatch):
+    """追加した人物も選ばれた状態になる（編集と同じ理由）。"""
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("なつ", "daughter", "", (2011, 5, 3))),
+    )
+
+    window._add_person()
+
+    assert window._current_person()["name"] == "なつ"
+    assert window.preview_info.text().splitlines()[-1] == "なつ: 6歳"

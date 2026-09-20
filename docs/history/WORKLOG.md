@@ -11,6 +11,51 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
+## 2026-09-20 — #48/#52 レビュー指摘6件に対応する
+
+PR #51 のレビュー。**いちばん重いのは、このPRが自分で掲げた安全弁が
+そのまま破れていたこと。** 実データの移行がまだ残っている件は
+[details/2026-09-20-handoff.md](details/2026-09-20-handoff.md) のまま。
+
+### 撮影日時の無い顔に、別の顔の年齢が黙って入っていた
+
+`db.shooting_dates_for_faces` が `DISTINCT` と `IS NOT NULL` で
+**撮影日時の無い顔を行ごと落としていた**ので、呼び出し側から「分からない顔が
+混ざっている」ことが見えなかった。`suggested_age` はさらに `ages.discard(None)`
+で残った `None` も捨てていた。**10件のうち9件が EXIF 無しでも、残る1件の年齢が
+10件すべての初期値になる。** 実データでは撮影日時が 15.8% 欠けている。
+
+仕様書 §10.3 と `GUI_USAGE.md` が明文で約束していることが守られていなかった。
+
+**「分からない」を捨てずに届ける**形にした。`shooting_dates_for_faces` は
+**顔1件につき1件**返し、読めない顔は `None` のまま渡す。`suggested_age` は
+`None` が1件でもあれば出さない。**読めるかどうかの判断は `parse_date` の1か所**に
+残るので、`summarize_selection` が `0000:00:00` を撮影日時として画面に出していた
+問題も同時に消えた。知らせには「うち N 件は撮影日時が分かりません」を足した
+（初期値が入らない理由がそれなので、黙っていると分からない）。
+
+### 誕生日を登録しても、年齢の行がその場で出なかった
+
+`_reload_person_list` の `clear()` で選択が外れ、`_on_person_selected(None)` が
+`_refresh_preview_info()` に届く前に戻っていた。**このPRの目玉の操作が、
+初めて使う人には効いていないように見える。** 追加・編集のあとはその人物を
+選び直すようにし、選択が外れたときは年齢の行も消すようにした。
+
+### そのほか
+
+- **`db.update_person` の `birth_date` を `KEEP_BIRTH_DATE` にした。** 既定が
+  `None` だったので、**名前だけ直すつもりの呼び出しで誕生日が消えていた。**
+  `assign_faces` の `age` とまったく同じ罠（CLAUDE.md §8 に追記）
+- **`--no-vacuum` が v2 以降の経路で黙って効かない**ことを、移行前の案内と
+  `--help` に書いた。黙って効かない引数を作らない
+- PR 本文の回帰テストの行が古かった（289 → 311）
+
+### 1つのPRで #48 と #52 を閉じることにした（判断）
+
+依存が実在し（#52 は #48 の `db.missing_columns` が無いと実データの状態を
+拾えない）、コミットも Issue ごとに分かれている。**CLAUDE.md §3 に例外を1行
+足し、ROADMAP にも #52 を書いた。**
+
 ## 2026-09-20 — #52 GUI の起動時に、その場で移行できるようにする
 
 **移行のためだけに端末へ出させない。** これまでは「`photoarchive migrate` を
@@ -636,9 +681,6 @@ CLI に進捗バーを追加した。ANSI のカーソル移動で2行を書き�
 PR [#6](https://github.com/Beerski43/PhotoArchiveAI/pull/6)（merged）。
 pytest を導入し、システムテストを追加した。
 
-## 2026-08-01 — #1 仕様設計、#2 初版実装
+## 過去の履歴
 
-PR [#3](https://github.com/Beerski43/PhotoArchiveAI/pull/3) と
-[#5](https://github.com/Beerski43/PhotoArchiveAI/pull/5)（ともに merged）。
-要件・仕様・DB設計を [spec/Specification.md](../spec/Specification.md) に起こし、
-スキャン・解析・抽出の初版を実装した。
+- [2026](archive/WORKLOG-2026.md)

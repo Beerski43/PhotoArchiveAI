@@ -146,19 +146,28 @@ def split_birth_date(value: Optional[str]) -> tuple:
     return (parsed.year, parsed.month, parsed.day)
 
 
-def suggested_age(birth_date: Optional[str], shooting_dates: List[str]) -> Optional[int]:
+def suggested_age(
+    birth_date: Optional[str], shooting_dates: List[Optional[str]]
+) -> Optional[int]:
     """年齢ダイアログの初期値。出せないなら ``None``（＝「未設定」で開く）。
+
+    ``shooting_dates`` は**顔1件につき1件**（`db.shooting_dates_for_faces`）。
+    撮影日時の無い顔・読めない顔は ``None`` で入ってくる。
 
     **選択中の顔すべてが同じ年齢に落ちるときだけ**出す。1回の入力が選択中の
     全件に入る（`summarize_selection`）ので、年をまたいで選んでいるときに
     片方の年齢を初期値にすると、**黙って間違いが入る。**
 
+    **「分からない」を捨てない。** 以前は `ages.discard(None)` していたため、
+    10件のうち9件が EXIF 無しでも、残る1件の年齢が10件すべての初期値になった。
+    **分からない顔が1件でもあれば出さない**（仕様書 §10.3 と `GUI_USAGE.md` が
+    明文で約束していること）。
+
     誕生前（負の値）も出さない。初期値として意味を持たないうえ、
     `FaceAgeDialog` では負の値が「未設定」の席になっている。
     """
     ages = {calculate_age(birth_date, shooting_date) for shooting_date in shooting_dates}
-    ages.discard(None)
-    if len(ages) != 1:
+    if len(ages) != 1 or None in ages:
         return None
     age = ages.pop()
     return None if age < 0 else age
@@ -425,27 +434,43 @@ class PersonDialog(QDialog):
         )
 
 
-def summarize_selection(face_count: int, shooting_dates: List[str]) -> str:
-    """年齢ダイアログに出す「何に入れるのか」の1行。
+def summarize_selection(face_count: int, shooting_dates: List[Optional[str]]) -> str:
+    """年齢ダイアログに出す「何に入れるのか」の1〜2行。
 
     **1回の入力が選択中の全件に入る**のに、プレビューに出ているのは最後に
     選んだ1枚の撮影日時だけ。撮影年をまたいで選ぶと、画面の日時を見て入れた
     年齢が別の年の顔にも入る。件数と、撮影日時の範囲を見せて気づけるようにする。
 
+    ``shooting_dates`` は**顔1件につき1件**。読めない値（`0000-00-00` など）と
+    撮影日時の無い顔を **`parse_date` で外してから**範囲を作る。外さないと、
+    `_format_timestamp` が「撮影日時: 不明」と出している写真が、同じ画面で
+    日付を持っているように見える。
+
+    **撮影日時の分からない顔があれば、その件数も出す。** 初期値が入らない
+    理由がこれなので、黙っていると「なぜ空欄なのか」が分からない。
+
     1件だけの選択なら、プレビューと食い違わないので出さない。
     """
     if face_count <= 1:
         return ""
-    if not shooting_dates:
+    readable = sorted(value for value in shooting_dates if parse_date(value))
+    unknown = face_count - len(readable)
+
+    if not readable:
         return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時は不明）。"
-    first, last = shooting_dates[0][:10], shooting_dates[-1][:10]
+
+    first, last = readable[0][:10], readable[-1][:10]
     if first == last:
-        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"
-    # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
-    return (
-        f"{face_count} 件すべてに同じ年齢を入れます。"
-        f"\n撮影日時が {first} 〜 {last} にまたがっています。"
-    )
+        lines = [f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"]
+    else:
+        # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
+        lines = [
+            f"{face_count} 件すべてに同じ年齢を入れます。",
+            f"撮影日時が {first} 〜 {last} にまたがっています。",
+        ]
+    if unknown:
+        lines.append(f"うち {unknown} 件は撮影日時が分かりません。")
+    return "\n".join(lines)
 
 
 class FaceAgeDialog(QDialog):
@@ -797,13 +822,24 @@ class MainWindow(QWidget):
     # 人物
     # ------------------------------------------------------------------
 
-    def _reload_person_list(self):
+    def _reload_person_list(self, select_person_id: Optional[int] = None):
+        """人物一覧を作り直す。``select_person_id`` を渡すとその人物を選び直す。
+
+        **選び直さないと、追加・編集した直後に選択が外れる。** `clear()` が
+        選択を落とすので、詳細欄が「人物を選択してください。」に戻り、
+        **プレビューの年齢の行も出ない。** 誕生日を登録した本人には、
+        機能が効いていないように見える。
+        """
         self.person_list.clear()
         for person in db.list_persons(self.connection):
             item = QListWidgetItem(f"{person['name']} ({person.get('relation') or '-'})")
             item.setData(Qt.UserRole, person)
             self.person_list.addItem(item)
-        self.details_label.setText("人物を選択してください。")
+            if select_person_id is not None and person["id"] == select_person_id:
+                self.person_list.setCurrentRow(self.person_list.count() - 1)
+        if self.person_list.currentItem() is None:
+            self.details_label.setText("人物を選択してください。")
+            self._refresh_preview_info()
 
     def _current_person(self) -> Optional[dict]:
         item = self.person_list.currentItem()
@@ -812,6 +848,9 @@ class MainWindow(QWidget):
     def _on_person_selected(self, current: QListWidgetItem, previous: QListWidgetItem = None):
         if current is None:
             self.details_label.setText("人物を選択してください。")
+            # **前の人物の年齢を残さない。** 選択が外れているのに年齢の行が
+            # 出ていると、誰の年齢なのか分からない。
+            self._refresh_preview_info()
             return
         person = current.data(Qt.UserRole)
         manual = db.count_faces(
@@ -854,8 +893,8 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
-        db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
-        self._reload_person_list()
+        person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
         person = self._current_person()
@@ -877,7 +916,8 @@ class MainWindow(QWidget):
         db.update_person(
             self.connection, person["id"], name, relation, memo, birth_date=birth_date
         )
-        self._reload_person_list()
+        # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
+        self._reload_person_list(select_person_id=person["id"])
 
     def _delete_person(self):
         person = self._current_person()

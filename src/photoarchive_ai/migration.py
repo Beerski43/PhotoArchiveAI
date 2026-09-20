@@ -143,6 +143,7 @@ def describe_for_operator(database_path: str) -> str:
             f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
             " 顔検出をやり直します。"
         )
+        lines.append("  移行後に VACUUM します（--no-vacuum で省けます）。")
     else:
         # **ここで「破棄します」と出してはいけない。** 列を足すだけなので何も消えない。
         # 消えると読めると、実行をためらって移行が進まなくなる。
@@ -150,6 +151,10 @@ def describe_for_operator(database_path: str) -> str:
             f"  顔データ {info.get('faces_kept', 0)} 件はそのまま残ります"
             "（列を追加するだけの移行です）。"
         )
+        # **黙って効かない引数を作らない。** 列を足すだけの移行はテーブルを
+        # 組み直さないので VACUUM する理由が無い。`--no-vacuum` を付けても
+        # 付けなくても同じ、という状態を画面に出す。
+        lines.append("  VACUUM はしません（テーブルを組み直さないため）。")
     return "\n".join(lines)
 
 
@@ -237,7 +242,13 @@ def migrate_database(
     make_backup: bool = True,
     log: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
-    """データベースを現行スキーマへ移行する。すでに現行なら何もしない。"""
+    """データベースを現行スキーマへ移行する。すでに現行なら何もしない。
+
+    ``vacuum`` が効くのは **v1 からの移行だけ**。テーブルを組み直すので
+    ファイルが縮む。列を足すだけの移行（v2 以降）は組み直さないため、
+    VACUUM する理由が無く、この引数を見ない。**そのことは
+    `describe_for_operator` が画面に出す。**
+    """
 
     def emit(message: str) -> None:
         if log is not None:

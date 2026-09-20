@@ -215,3 +215,76 @@ def test_a_person_without_a_birth_date_is_stored_as_unset(tmp_path):
         assert db.list_persons(connection)[0]["birth_date"] is None
     finally:
         connection.close()
+
+
+def test_shooting_dates_come_back_one_per_face(tmp_path: Path):
+    """**顔1件につき1件返す。** `DISTINCT` で潰さず、無い顔も落とさない。
+
+    潰すと「撮影日時の分からない顔が混ざっている」ことが呼び出し側から消え、
+    その顔にも別の写真から計算した年齢が黙って入る（PR #51 のレビュー指摘1）。
+    """
+    connection = db.ensure_database(str(tmp_path / "dates.db"))
+    try:
+        face_ids = []
+        for index, shooting_date in enumerate(
+            ("2017-12-16T18:46:32", None, "0000-00-00T00:00:00", "2017-12-16T18:46:32")
+        ):
+            media_id = db.save_media(
+                connection,
+                {
+                    "path": f"/photos/{index}.jpg",
+                    "filename": f"{index}.jpg",
+                    "type": "image",
+                    "file_hash": f"hash{index}",
+                    "file_size": 100,
+                    "created_time": "2026-01-01T00:00:00",
+                    "shooting_date": shooting_date,
+                },
+            )
+            face_ids.append(
+                db.add_face(
+                    connection,
+                    media_id=media_id,
+                    bbox=(0, 10, 10, 0),
+                    embedding=[0.0] * 128,
+                    embed_version="test",
+                )
+            )
+        connection.commit()
+
+        dates = db.shooting_dates_for_faces(connection, face_ids)
+
+        assert len(dates) == len(face_ids)
+        # 撮影日時の無い顔は None として残る
+        assert None in dates
+        # 同じ日時の顔が2件あれば2件とも残る（DISTINCT で潰さない）
+        assert dates.count("2017-12-16T18:46:32") == 2
+        # 壊れた値もそのまま返す（読めるかの判断は gui.parse_date の1か所）
+        assert "0000-00-00T00:00:00" in dates
+        assert db.shooting_dates_for_faces(connection, []) == []
+    finally:
+        connection.close()
+
+
+def test_updating_a_person_without_a_birth_date_keeps_it(tmp_path: Path):
+    """**省いて呼んだら触らない。** `None` は「未設定へ戻す」指示。
+
+    既定が `None` だったため、名前だけ直すつもりの呼び出しで登録済みの
+    誕生日が消えていた（`assign_faces` の `age` と同じ罠。CLAUDE.md §8）。
+    """
+    connection = db.ensure_database(str(tmp_path / "person.db"))
+    try:
+        person_id = db.add_person(
+            connection, "なつ", "daughter", "メモ", birth_date="2011-05-03"
+        )
+
+        db.update_person(connection, person_id, "なつ", "daughter", "メモ2")
+
+        assert db.list_persons(connection)[0]["birth_date"] == "2011-05-03"
+        assert db.list_persons(connection)[0]["memo"] == "メモ2"
+
+        # None は消す指示として、これまで通り効く
+        db.update_person(connection, person_id, "なつ", "daughter", "メモ2", birth_date=None)
+        assert db.list_persons(connection)[0]["birth_date"] is None
+    finally:
+        connection.close()
