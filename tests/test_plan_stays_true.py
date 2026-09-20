@@ -18,6 +18,7 @@
 """
 
 import re
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -46,11 +47,38 @@ def _worklog_dates(text: str):
     ]
 
 
+def _undated_counts(text: str, label: str = "") -> list[str]:
+    """日付も数え直す手段も無い件数を拾う。
+
+    **免除は節の単位にする。** 文書のどこかに `sqlite3` があれば全体を
+    免除する作りにしていたが、それだと**数え直すコマンドを1つ置いた時点で、
+    その文書は以後ずっと検査の対象外**になる。仕組みを入れる操作そのものが
+    仕組みを無効にしていた（PR #50 のレビュー指摘2）。
+    """
+    lines = text.splitlines()
+    offenders = []
+    section_start = 0
+    for index, line in enumerate(lines):
+        if line.startswith("#"):
+            section_start = index
+        if not REAL_DATA_COUNT.search(line):
+            continue
+        window = "\n".join(lines[section_start : index + 1])
+        if not (DATE_IN_TEXT.search(window) or RECOUNT_HINT.search(window)):
+            prefix = f"{label}:" if label else "行 "
+            offenders.append(f"{prefix}{index + 1}  {line.strip()}")
+    return offenders
+
+
 def test_the_worklog_entries_are_newest_first():
-    """**先頭が最新であること。**
+    """**日をまたぐ逆転が無いこと。**
 
     `CLAUDE.md` §1 は「新しいセッションは先頭を読んで直近の状況をつかむ」と
     している。並びが崩れると、**いちばん古い話を最新だと思って再開する。**
+
+    **同じ日の中の順序は見張れない。** 見出しが日付までしか持たないため。
+    1日に何本も入る日（実際にある）の並びは、人が見るしかない。
+    できないことをできると書かないために、ここに限界を残す。
     """
     entries = _worklog_dates(WORKLOG.read_text(encoding="utf-8"))
 
@@ -132,19 +160,7 @@ def test_a_real_data_count_in_a_plan_document_is_dated_or_recountable(path):
     おおよその規模を語りたいだけなら「7万件規模」のように丸めて書く
     （この検査に引っかからず、古くもならない）。
     """
-    text = path.read_text(encoding="utf-8")
-    if RECOUNT_HINT.search(text):
-        return
-
-    lines = text.splitlines()
-    offenders = []
-    for index, line in enumerate(lines):
-        if not REAL_DATA_COUNT.search(line):
-            continue
-        # 同じ行か、その少し上に日付があればよい（表なら見出しの説明文）。
-        window = "\n".join(lines[max(0, index - 6) : index + 1])
-        if not DATE_IN_TEXT.search(window):
-            offenders.append(f"{path.name}:{index + 1}  {line.strip()}")
+    offenders = _undated_counts(path.read_text(encoding="utf-8"), path.name)
 
     assert not offenders, (
         "いつ数えたのか分からない実データの件数がある。日付を添えるか、\n"
@@ -179,14 +195,76 @@ def test_every_handoff_note_is_linked_from_the_worklog():
     )
 
 
-def test_the_checks_would_catch_a_plan_that_drifted():
-    """**番人自身が働くことを確かめる。** 素通りする検査は無いのと同じ。"""
-    jumbled = "## 2026-09-01 — 古い\n\n## 2026-09-20 — 新しい\n"
-    dates = _worklog_dates(jumbled)
-    assert dates[0][0] < dates[1][0], "並びの崩れを見つけられていない"
+def test_the_checks_would_catch_a_plan_that_drifted(tmp_path, monkeypatch):
+    """**番人自身が働くことを確かめる。** 素通りする検査は無いのと同じ。
 
+    検査と同じ判定をここに書き写すと、**検査を壊しても気づけない**
+    （実際そうなっていた。PR #50 のレビュー指摘5）。
+    本物の検査を、崩した文書に向けて呼ぶ。
+    """
+    drifted = tmp_path / "WORKLOG.md"
+    drifted.write_text(
+        "## 2026-09-01 — 古い\n\n## 2026-09-20 — 新しい\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "WORKLOG", drifted)
+
+    with pytest.raises(AssertionError):
+        test_the_worklog_entries_are_newest_first()
+
+
+def test_entries_on_the_same_day_are_not_ordered(tmp_path, monkeypatch):
+    """同じ日の中の順序は見張らない。**これは意図した限界。**
+
+    見出しが日付までしか持たないので比べようがない。時刻を足せば見張れるが、
+    書式が変わり `archive_worklog.py` にも波及する。
+    """
+    same_day = tmp_path / "WORKLOG.md"
+    same_day.write_text(
+        "## 2026-09-20 — 古い作業\n\n## 2026-09-20 — 新しい作業\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "WORKLOG", same_day)
+
+    test_the_worklog_entries_are_newest_first()  # 落ちない
+
+
+def test_a_dated_count_in_another_section_does_not_excuse_this_one(tmp_path):
+    """**節をまたいだ免除をしない。**
+
+    日付や数え直すコマンドが文書のどこかにあれば全体を免除する作りだと、
+    あとから足した節の古い数字を見逃す。守りたい文書ほど、先に免除される。
+    """
+    document = (
+        "## 数えた節\n\n2026-09-20 に数えた。Media は 70,297 件。\n\n"
+        "## あとから足した節\n\n未スキャンは 69,347 件（日付なし）。\n"
+    )
+
+    offenders = _undated_counts(document)
+
+    assert len(offenders) == 1
+    assert "69,347" in offenders[0]
+    assert "70,297" not in offenders[0]
+
+
+def test_a_recount_command_excuses_only_its_own_section(tmp_path):
+    """数え直すコマンドも、同じ節の中だけを免除する。"""
+    document = (
+        "## 数え直せる節\n\n```\nsqlite3 data/x.db \"SELECT COUNT(*)\"\n```\n"
+        "Media は 70,297 件。\n\n## 別の節\n\n顔は 58,606 件。\n"
+    )
+
+    offenders = _undated_counts(document)
+
+    assert len(offenders) == 1
+    assert "58,606" in offenders[0]
+
+
+def test_a_rounded_number_is_not_treated_as_a_count():
+    """丸めた表現は引っかからない。**逃げ道を残す**ための確認。
+
+    規模を語りたいだけの数字まで日付を強いると、書き手が検査を嫌う。
+    丸めれば古くならないので、そちらへ誘導する。
+    """
     assert REAL_DATA_COUNT.search("未スキャン 69,347 件")
     assert REAL_DATA_COUNT.search("顔 58,606件")
-    # 丸めた表現は引っかからない
     assert not REAL_DATA_COUNT.search("実データは7万件規模")
     assert not REAL_DATA_COUNT.search("200 件ずつ読む")

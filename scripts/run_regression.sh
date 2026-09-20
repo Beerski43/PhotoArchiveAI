@@ -11,9 +11,20 @@
 #   4. 作業履歴の切り出しが必要かの確認 — 通知のみ。結果に影響しない
 #   5. 引き継ぎの状態 — 通知のみ。結果に影響しない
 #
+# 引数:
+#   --offline   5 で remote を見ない(繋がらない環境や、急ぐとき)
+#
 # 終了コード: 1 と 2 がすべて成功したときだけ 0。
 #
 set -uo pipefail
+
+handoff_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --offline) handoff_args+=(--offline) ;;
+    *) echo "知らない引数: $arg" >&2; exit 2 ;;
+  esac
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
@@ -65,11 +76,17 @@ echo "=== 5/5 引き継ぎの状態 ==="
 # 通知のみで、回帰テストの合否には含めない(gh がネットワークを使うため)。
 if [ -f scripts/check_handoff.py ]; then
   # 1回だけ実行する(git fetch と gh を二度叩かない)。
-  handoff="$(python scripts/check_handoff.py 2>&1)"
-  if printf '%s' "$handoff" | grep -q "^気にすること:"; then
-    printf '%s\n' "$handoff" | sed -n '/^気にすること:/,/^---/p' | grep -v '^---' | sed 's/^/  /'
+  # **落ちたことを隠さない。** 番人が働かなかったのに「異常なし」と出すのが
+  # いちばん危ない。
+  if handoff="$(python scripts/check_handoff.py "${handoff_args[@]+"${handoff_args[@]}"}" 2>&1)"; then
+    if printf '%s' "$handoff" | grep -q "^気にすること:"; then
+      printf '%s\n' "$handoff" | sed -n '/^気にすること:/,/^---/p' | grep -v '^---' | sed 's/^/  /'
+    else
+      echo "  引き継ぎで気になる点は見つからなかった"
+    fi
   else
-    echo "  引き継ぎで気になる点は見つからなかった"
+    echo "  **引き継ぎの点検が落ちた。** 手で確認すること:"
+    printf '%s\n' "$handoff" | tail -5 | sed 's/^/    /'
   fi
 else
   echo "  scripts/check_handoff.py が無い"
