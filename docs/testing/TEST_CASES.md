@@ -60,7 +60,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（8件）
+### `test_db.py` — スキーマと永続化（17件）
 
 | テスト | 内容 |
 |---|---|
@@ -161,7 +161,7 @@
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
 
-### `test_evaluation.py` — 精度の実測（11件）
+### `test_evaluation.py` — 精度の実測（12件）
 
 手動割り当てを正解とみなし、手本を1件ずつ抜いて `match` の判定を通す
 （1件抜き交差検証）。**この測定が甘く出ると、閾値の判断ごと間違える。**
@@ -192,7 +192,7 @@
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
 ### `test_gui_migration.py` — 起動時の移行（7件）
-### `test_gui_assignment.py` — GUI での割り当て（18件）
+### `test_gui_assignment.py` — GUI での割り当て（20件）
 
 | テスト | 内容 |
 |---|---|
@@ -212,7 +212,7 @@
 | `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
 | `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
 
-### `test_gui_person.py` — 人物編集とプレビュー（40件）
+### `test_gui_person.py` — 人物編集とプレビュー（48件）
 
 | テスト | 内容 |
 |---|---|
@@ -300,7 +300,7 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
-### `test_cli_commands.py` — サブコマンドの配線（10件）
+### `test_cli_commands.py` — サブコマンドの配線（15件）
 
 | テスト | 内容 |
 |---|---|
@@ -354,7 +354,7 @@ editable install のときだけ出すこと（通常のインストールでは
 **日付エントリ以外の節を消さないこと**（前にあるものは前書きとしてその場に残し、
 あとにあるものは末尾へ移す）。切り出し済みの本文を後から書き換えないこと。
 
-### `test_pytest_summary.py` — 回帰テストの集計行（9件）
+### `test_pytest_summary.py` — 回帰テストの集計行（15件）
 
 CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした行。着色された
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
