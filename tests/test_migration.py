@@ -508,3 +508,123 @@ def test_the_notice_says_whether_vacuum_will_run(tmp_path):
 
     assert "VACUUM します" in describe_for_operator(str(legacy))
     assert "VACUUM はしません" in describe_for_operator(str(v2))
+
+
+V3_PERSON_DDL = (
+    "CREATE TABLE Person (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "name TEXT NOT NULL,relation TEXT,memo TEXT,birth_date TEXT)"
+)
+
+
+def _build_v3_database(path):
+    """`display_order` が無いだけの、現行と同じスキーマ（版3）。
+
+    **実データが通る経路。** 現行スキーマを作ってから `Person` を版3の形へ
+    戻す。DDL を丸ごと書き写すと、本物のスキーマが変わったときに気づけない。
+    """
+    connection = db.ensure_database(str(path))
+    media_id = db.save_media(
+        connection,
+        {
+            "path": "/photos/1.jpg",
+            "filename": "1.jpg",
+            "type": "image",
+            "file_hash": "hash1",
+            "file_size": 100,
+            "created_time": "2026-01-01T00:00:00",
+        },
+    )
+    person_id = db.add_person(connection, "父", "father", "メモ", birth_date="1980-01-01")
+    for index in range(5):
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * 128,
+            embed_version="test",
+            person_id=person_id,
+            assign_source=db.ASSIGN_MANUAL,
+        )
+    db.save_media_scores(connection, media_id, smile_score=10.0, quality_score=20.0)
+    connection.commit()
+    connection.close()
+
+    connection = sqlite3.connect(str(path))
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("ALTER TABLE Person RENAME TO Person_old")
+    connection.execute(V3_PERSON_DDL)
+    connection.execute(
+        "INSERT INTO Person (id, name, relation, memo, birth_date)"
+        " SELECT id, name, relation, memo, birth_date FROM Person_old"
+    )
+    connection.execute("DROP TABLE Person_old")
+    connection.execute("PRAGMA user_version = 3")
+    connection.commit()
+    connection.close()
+
+
+def test_a_version_3_database_gains_the_display_order_and_keeps_its_faces(tmp_path):
+    """**v3 からの移行で顔を1件も失わないこと。**
+
+    実データが通る唯一の経路。列を足すだけなので、顔・手本・誕生日は残る
+    （`CLAUDE.md` §4 が「移行して顔が減らないことをテストで固定する」ことを
+    求めている。#48 の事故もこの領域）。
+    """
+    database = tmp_path / "v3.db"
+    _build_v3_database(database)
+    connection = sqlite3.connect(str(database))
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("SELECT COUNT(*) FROM Face").fetchone()[0] == 5
+    connection.close()
+    assert needs_migration(str(database)) is True
+
+    messages = []
+    migrate_database(str(database), make_backup=False, log=messages.append)
+
+    connection = sqlite3.connect(str(database))
+    connection.row_factory = sqlite3.Row
+    try:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(Person)")}
+        assert "display_order" in columns
+        # **顔も手本も減らない**
+        assert connection.execute("SELECT COUNT(*) FROM Face").fetchone()[0] == 5
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM Face WHERE assign_source = 'manual'"
+            ).fetchone()[0]
+            == 5
+        )
+        # v3 で入れた誕生日も残る
+        person = dict(connection.execute("SELECT * FROM Person").fetchone())
+        assert person["birth_date"] == "1980-01-01"
+        assert person["display_order"] is None
+    finally:
+        connection.close()
+
+    assert any("display_order を追加" in message for message in messages)
+    # 案内が「破棄します」にならないこと（列を足すだけの移行）
+    assert "破棄" not in describe_for_operator(str(database)) or not needs_migration(
+        str(database)
+    )
+    # 直ったので普通に開ける
+    db.ensure_database(str(database)).close()
+    assert needs_migration(str(database)) is False
+
+
+def test_the_face_order_survives_a_version_3_migration(tmp_path):
+    """移行直後は全員 `display_order` が未設定で、**名前順のまま**出ること。
+
+    そのあと人物を足しても末尾に来る（`db._next_display_order`）。
+    """
+    database = tmp_path / "v3.db"
+    _build_v3_database(database)
+    migrate_database(str(database), make_backup=False)
+
+    connection = db.ensure_database(str(database))
+    try:
+        db.add_person(connection, "あい")
+        names = [person["name"] for person in db.list_persons(connection)]
+        assert names == ["父", "あい"], "移行前から居た人物が先、追加は末尾"
+    finally:
+        connection.close()

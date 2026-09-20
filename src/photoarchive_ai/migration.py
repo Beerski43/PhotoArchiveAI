@@ -4,8 +4,10 @@
 
 - **v1 → v2**: テーブル再構築。顔と解析結果を**破棄する**（下の方針）。
   破棄するのは旧特徴量が使えないからで、移行という操作の性質ではない
-- **v2 → v3**: ``Person.birth_date`` を足すだけ。``ALTER TABLE`` の1文で、
-  **何も破棄しない**。顔も解析結果も残る
+- **v2 以降**: 列を足すだけ。``ALTER TABLE`` で済み、**何も破棄しない**。
+  顔も解析結果も残る（v2 → v3 は ``Person.birth_date``、
+  v3 → v4 は ``Person.display_order``）。**足す列は
+  `db.ADDABLE_COLUMNS` に1行書くだけでよい**
 
 **v1 の経路に v2 のDBを流し込まないこと。** 使えるはずの顔が消える。
 
@@ -184,11 +186,37 @@ def needs_migration(database_path: str) -> bool:
         connection.close()
 
 
+def _apply_addable_columns(connection: sqlite3.Connection, emit: Callable[[str], None]) -> None:
+    """現行スキーマに足りない列を `ALTER TABLE` で埋める。
+
+    **v2 以降の移行と、v1 の再構築のあと**の両方から呼ぶ。再構築は自前の DDL で
+    テーブルを作り直すが、その DDL は**現行スキーマとは別に書かれている**ので、
+    列を足すたびに片方だけ古くなる（実際にそうなった）。最後にここを通せば、
+    どちらの経路でも形がそろう。
+
+    何を足すかは `db.missing_columns`（実際の形との差）と
+    `db.ADDABLE_COLUMNS`（型）から決まる。**足す列をここに書き足さない。**
+    """
+    for table, columns in sorted(db.missing_columns(connection).items()):
+        for column in columns:
+            column_type = db.ADDABLE_COLUMNS.get((table, column))
+            if column_type is None:
+                # 足し方が分からない列。版を刻む前に呼び出し側が落とす。
+                continue
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+            emit(f"{table} に {column} を追加しました（既存の行は未設定）。")
+
+
 def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dict[str, Any]:
     """v2 以降のDBへ、足りない列を足すだけの移行。**何も破棄しない。**
 
     ``ALTER TABLE ... ADD COLUMN`` は既存行に NULL を入れるだけなので、
     顔・解析結果・メディアはそのまま残る。
+
+    **足す列を、ここに書き足していかない。** 何を足すかは
+    `db.missing_columns`（実際の形との差）と `db.ADDABLE_COLUMNS`（型）から
+    決まる。版を上げるたびに `if "..." not in columns` を書き足す作りだと、
+    書き忘れが「版だけ進んで列が無い」状態を生む。**それ自体が #48 の事故。**
     """
     connection = sqlite3.connect(str(database_path))
     connection.row_factory = sqlite3.Row
@@ -197,10 +225,7 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
         if integrity != "ok":
             raise RuntimeError(f"integrity_check failed: {integrity}")
 
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(Person)")}
-        if "birth_date" not in columns:
-            connection.execute("ALTER TABLE Person ADD COLUMN birth_date TEXT")
-            emit("Person に birth_date を追加しました（既存の行は未設定）。")
+        _apply_addable_columns(connection, emit)
 
         remaining = db.missing_columns(connection)
         if remaining:
@@ -209,6 +234,7 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
             raise RuntimeError(
                 "移行できない列が残っています: "
                 f"{db.describe_missing_columns(remaining)}"
+                "（`db.ADDABLE_COLUMNS` に型を書けば足せます）"
             )
 
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
@@ -339,6 +365,16 @@ def migrate_database(
         connection.execute("ALTER TABLE Media_new RENAME TO Media")
         connection.execute("ALTER TABLE Person_new RENAME TO Person")
         connection.execute("ALTER TABLE AnalysisResult_new RENAME TO AnalysisResult")
+
+        # **再構築の DDL は現行スキーマとは別に書かれている。** 列を足すたびに
+        # 片方だけ古くなるので、最後に形をそろえる。
+        _apply_addable_columns(connection, emit)
+        remaining = db.missing_columns(connection)
+        if remaining:
+            raise RuntimeError(
+                "再構築したテーブルに足りない列があります: "
+                f"{db.describe_missing_columns(remaining)}"
+            )
 
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
