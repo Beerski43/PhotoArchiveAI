@@ -213,10 +213,19 @@ def _run_migrate(args, db_path: str) -> None:
     info = describe_migration(db_path)
     print(f"移行対象: {db_path}")
     print(f"  Media {info['media']} 件 / Person {info['persons']} 件 は保持します。")
-    print(
-        f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
-        " 顔検出をやり直します。"
-    )
+    if info.get("rebuilds", True):
+        # 旧スキーマ(v1)からの移行だけが、顔と解析結果を作り直す。
+        print(
+            f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
+            " 顔検出をやり直します。"
+        )
+    else:
+        # **ここで「破棄します」と出してはいけない。** 列を足すだけなので何も消えない。
+        # 消えると読めると、実行をためらって移行が進まなくなる。
+        print(
+            f"  顔データ {info.get('faces_kept', 0)} 件はそのまま残ります"
+            "（列を追加するだけの移行です）。"
+        )
     if not args.yes:
         answer = input("続行しますか? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
@@ -227,7 +236,8 @@ def _run_migrate(args, db_path: str) -> None:
         vacuum=not args.no_vacuum,
         log=print,
     )
-    print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
+    if info.get("rebuilds", True):
+        print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
 
 
 def _run_scan(args, settings) -> None:

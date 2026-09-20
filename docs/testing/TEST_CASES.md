@@ -31,6 +31,7 @@
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
 | `test_scanner_incremental.py::test_an_error_from_one_file_is_not_reported_for_the_next` | 直近のエラーが大域変数に残り、無関係なファイルに付いた |
+| `test_migration.py::test_a_version_2_database_keeps_every_face_when_migrated` | **v2 のDBを v1 の再構築経路へ流すと、顔 58,606 件と数時間ぶんのスキャンが消える**（Issue #48 で版ごとの分岐を追加） |
 | `test_scanner_incremental.py::test_a_worker_writes_its_errors_to_the_log_file` | `fork` をやめた副作用で、並列時にワーカーのログがファイルへ1行も残らなくなった（既定の経路） |
 | `test_scanner_incremental.py::test_the_workers_are_not_started_by_forking` | **並列スキャンが実データのDBを壊した。** fork した子が親の SQLite 接続を引き継ぎ、`row N missing from index idx_media_hash`（Issue #35） |
 | `test_scanner_incremental.py::test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 上と同じ原因を、子が親の状態を引き継いでいないかという側から押さえる |
@@ -51,7 +52,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（6件）
+### `test_db.py` — スキーマと永続化（8件）
 
 | テスト | 内容 |
 |---|---|
@@ -61,6 +62,8 @@
 | `test_deleting_media_cascades_to_faces_and_results` | 外部キーの CASCADE |
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
+| `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
+| `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
 
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
@@ -265,10 +268,14 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — 旧スキーマからの移行（12件）
+### `test_migration.py` — スキーマの移行（17件）
 
-Media と Person を温存し Face と AnalysisResult を破棄すること、冪等性、
-旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
+**v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
+冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
+
+**v2 → v3**: `Person.birth_date` を足すだけで、**顔・解析結果・検出済みの状態が
+1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
+案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、
