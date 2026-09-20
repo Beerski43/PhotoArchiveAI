@@ -1171,3 +1171,47 @@ def test_dimming_leaves_the_original_alone():
     assert _average_alpha(original) == 255
     # 空の画像を渡しても落ちない
     assert photoarchive_gui.dim_pixmap(QPixmap()).isNull()
+
+
+def test_a_new_person_goes_to_the_end_even_before_anyone_was_reordered(tmp_path):
+    """**移行直後のDBでも、追加した人物は末尾に来ること。**
+
+    既存の行が全員 `display_order = NULL`（`migrate` 直後。実データがこの状態
+    だった）のとき、`MAX` が NULL なので 0 が振られ、**その人物だけが全員より
+    前に出ていた。** `list_persons` は値を持つ行を先に出すため。
+
+    既存の `test_a_new_person_goes_to_the_end_of_the_order` は全員が値を持つ
+    状態しか見ていないので、この穴では落ちない。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        for name in ("母", "父", "長女"):
+            db.add_person(connection, name)
+        # migrate 直後を模す
+        connection.execute("UPDATE Person SET display_order = NULL")
+        connection.commit()
+        before = [p["name"] for p in db.list_persons(connection)]
+        assert before == ["母", "父", "長女"], "NULL のときは名前順で出る"
+
+        db.add_person(connection, "次女")
+
+        # **末尾に来る。** ここが 0 だと先頭に割り込んでいた
+        assert [p["name"] for p in db.list_persons(connection)] == before + ["次女"]
+        assert all(p["display_order"] is not None for p in db.list_persons(connection))
+    finally:
+        connection.close()
+
+
+def test_persons_added_to_a_new_database_keep_their_registration_order(tmp_path):
+    """新しいDBでは**登録順**。名前順になるのは移行前から居た行だけ。
+
+    `GUI_USAGE.md` が「並べ替えるまでは登録順」と約束している通りであること。
+    """
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        for name in ("父", "母", "あい"):
+            db.add_person(connection, name)
+
+        assert [p["name"] for p in db.list_persons(connection)] == ["父", "母", "あい"]
+    finally:
+        connection.close()

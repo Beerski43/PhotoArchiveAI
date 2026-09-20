@@ -297,6 +297,10 @@ class WorkProgress:
     """
 
     def __init__(self, parent, label: str, total: int, delay_ms: int = PROGRESS_POPUP_DELAY_MS):
+        # **自分が書いた文字を読み直さない。** `labelText()` から元の文言を
+        # 取り出す作りだと、人物名に `（）` が入っていたときに名前が欠ける
+        # （「父（実父） に割り当てています」→「父（0 / 120 件）」）。
+        self.base_label = label
         self.dialog = QProgressDialog(label, "", 0, max(total, 1), parent)
         self.dialog.setWindowTitle("処理中")
         self.dialog.setCancelButton(None)
@@ -307,10 +311,16 @@ class WorkProgress:
     def __call__(self, done: int, total: int) -> None:
         """``db`` から呼ばれる通知口。"""
         self.dialog.setMaximum(max(total, 1))
-        self.dialog.setLabelText(f"{self.dialog.labelText().split('（')[0]}（{done} / {total} 件）")
+        self.dialog.setLabelText(f"{self.base_label}（{done} / {total} 件）")
         self.dialog.setValue(done)
         # **描き直さないと、窓が白いままになる。** 同期処理の途中なので、
         # ここで明示的にイベントを回す。
+        QApplication.processEvents()
+
+    def step(self, label: str) -> None:
+        """件数で測れない工程に移ったことを知らせる（一覧の作り直しなど）。"""
+        self.base_label = label
+        self.dialog.setLabelText(label)
         QApplication.processEvents()
 
     def finish(self) -> None:
@@ -757,8 +767,7 @@ class RegisteredFacesDialog(QDialog):
             progress = WorkProgress(self, label, len(face_ids))
             try:
                 work(progress)
-                progress.dialog.setLabelText("一覧を作り直しています")
-                QApplication.processEvents()
+                progress.step("一覧を作り直しています")
                 self.reload()
             finally:
                 progress.finish()
@@ -1198,6 +1207,24 @@ class MainWindow(QWidget):
     def _selected_face_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
 
+    def _run_with_progress(self, label: str, face_ids: List[int], work, done_message: str) -> None:
+        """件数の分かる作業を、砂時計と進み具合つきで流し、済んだことを知らせる。
+
+        **3か所に同じ型を書かない。** 割り当て・除外・未割当へ戻す、の違いは
+        「何をするか」と「完了に何と出すか」だけ。`RegisteredFacesDialog` にも
+        同じ形のものがある。
+        """
+        with busy_cursor():
+            progress = WorkProgress(self, label, len(face_ids))
+            try:
+                work(progress)
+                progress.step("一覧を作り直しています")
+                self.reload_faces()
+                self._on_person_selected(self.person_list.currentItem())
+            finally:
+                progress.finish()
+        self._mark_preview_done(done_message)
+
     def _mark_preview_done(self, message: str) -> None:
         """プレビューを「済んだ」表示にする。帯を出し、顔写真を薄くする。
 
@@ -1318,50 +1345,39 @@ class MainWindow(QWidget):
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        with busy_cursor():
-            progress = WorkProgress(self, f"{person['name']} に割り当てています", len(face_ids))
-            try:
-                self.assign_faces(face_ids, person["id"], dialog.age(), progress=progress)
-                progress.dialog.setLabelText("一覧を作り直しています")
-                QApplication.processEvents()
-                self.reload_faces()
-                self._on_person_selected(self.person_list.currentItem())
-            finally:
-                progress.finish()
-        self._mark_preview_done(f"完了 — {len(face_ids)} 件を {person['name']} に登録しました")
+        age = dialog.age()
+        self._run_with_progress(
+            f"{person['name']} に割り当てています",
+            face_ids,
+            lambda progress: self.assign_faces(
+                face_ids, person["id"], age, progress=progress
+            ),
+            f"完了 — {len(face_ids)} 件を {person['name']} に登録しました",
+        )
 
     def _unassign_selected(self):
         """選んだ顔を未割当へ戻す。**除外の取り消しがこれ。**"""
         face_ids = self._selected_face_ids()
         if not face_ids:
             return
-        with busy_cursor():
-            progress = WorkProgress(self, "未割当に戻しています", len(face_ids))
-            try:
-                db.unassign_faces(self.connection, face_ids, progress=progress)
-                progress.dialog.setLabelText("一覧を作り直しています")
-                QApplication.processEvents()
-                self.reload_faces()
-                self._on_person_selected(self.person_list.currentItem())
-            finally:
-                progress.finish()
-        self._mark_preview_done(f"完了 — {len(face_ids)} 件を未割当に戻しました")
+        self._run_with_progress(
+            "未割当に戻しています",
+            face_ids,
+            lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
+            f"完了 — {len(face_ids)} 件を未割当に戻しました",
+        )
 
     def _reject_selected(self):
         face_ids = self._selected_face_ids()
         if not face_ids:
             return
-        with busy_cursor():
-            progress = WorkProgress(self, "除外しています", len(face_ids))
-            try:
-                db.reject_faces(self.connection, face_ids, progress=progress)
-                progress.dialog.setLabelText("一覧を作り直しています")
-                QApplication.processEvents()
-                self.reload_faces()
-            finally:
-                progress.finish()
         # 除外でも顔は一覧から消える。**割り当てと同じ症状**なので同じ扱いにする。
-        self._mark_preview_done(f"完了 — {len(face_ids)} 件を除外しました")
+        self._run_with_progress(
+            "除外しています",
+            face_ids,
+            lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
+            f"完了 — {len(face_ids)} 件を除外しました",
+        )
 
 
 def main() -> None:

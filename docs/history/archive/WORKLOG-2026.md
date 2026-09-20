@@ -21,6 +21,50 @@ PR [#29](https://github.com/Beerski43/PhotoArchiveAI/pull/29)（merged）。
 
 詳細: [details/2026-09-19-issue28-rework.md](details/2026-09-19-issue28-rework.md)
 
+## 2026-09-19 — #30 作業ルール・実装プラン・回帰テスト環境の整備と、既知の欠陥修正
+
+リポジトリ全体の立て直し。`docs/` 直下を `spec/` `plan/` `history/` `testing/`
+`operation/` へ整理し、作業ルールを `CLAUDE.md` に一本化した
+（`.github/copilot-instructions.md` はポインタへ縮退）。
+
+**素の `pytest` が収集エラーで落ちていた**（`pythonpath` 未設定）。3つの文書が
+そろってこの落ちるコマンドを案内していた。`pyproject.toml` に
+`pythonpath = ["."]` と `--strict-markers` を足して直した。
+`scripts/run_regression.sh` を PR 起票前の必須手順にした。
+
+`docs/plan/ROADMAP.md`（フェーズと Issue の対応）と
+`docs/history/WORKLOG.md`（この文書）を新設し、CLAUDE.md から必ず参照させる
+ようにした。WORKLOG は `scripts/archive_worklog.py` が直近20件だけを残し、
+古いものを年ごとに `archive/` へ切り出す。
+
+仕様書を v1.0 へ改訂した。各章に 実装済み / 一部実装 / 未実装 を明示し、
+CLI リファレンス・スキーマ版と移行・特徴量の生成規約・非機能要件を新設。
+画質評価は2要素しか実装していないこと、重複検出はハッシュ一致だけであること、
+用途プリセットが未実装であることを、仕様の側で認めた。
+
+**実データ運用を壊す欠陥を10件修正した。** 特に、更新時刻だけ変わった
+ファイルが恒久的に再ハッシュされる問題（441GB を毎回読み直す）と、
+dlib モデルが読めないと顔が無言で全損する問題は、全件スキャンの前に
+潰す必要があった。テストは 40件 → 136件。
+
+解消済みの #9 / #22 / #23 / #25 は、PR 本文の `Closes #N` でこの PR のマージ時に
+閉じる。エージェントが Issue を直接クローズしない方針はそのままで、
+「解消したものは PR 本文に任せる」とルールを足した。
+
+レビュー（PR #31）で6件の指摘を受けて修正した。**このPRで新設した仕組み自体の
+欠陥が2件**あった。回帰テストの集計行が端末では必ず `0 passed / 0 failed` になり
+（pytest の着色エスケープ）、それが成功のように見えていたこと。作業履歴の
+切り出しが日付エントリ以外の節を黙って消していたこと。どちらも
+「毎回実行する」と決めた仕組みなので、気づかないまま記録が壊れる形だった。
+`--allow-missing-embeddings` の逃げ道にも、A3 が防ごうとした
+「二度と回収されない」状態が残っていた。
+
+次にやること: ROADMAP の Phase 3（全件スキャン → GUI で人物ごとに20〜50枚を
+割り当て → `match` の**取りこぼし率**を実測して閾値を確定）。
+これまで測れているのは誤一致率だけ。
+
+詳細: [details/2026-09-19-issue30-foundation.md](details/2026-09-19-issue30-foundation.md)
+
 ## 2026-09-06 — #18 顔への年齢登録、#17 GUI の起動エラー
 
 PR [#20](https://github.com/Beerski43/PhotoArchiveAI/pull/20) と

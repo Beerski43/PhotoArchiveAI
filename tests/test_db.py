@@ -544,3 +544,50 @@ def test_the_shooting_date_order_does_not_fall_back_to_a_full_sort(tmp_path: Pat
         assert "USE TEMP B-TREE FOR ORDER BY" not in plan
     finally:
         connection.close()
+
+
+def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path):
+    """**進み具合を知らせても、戻り値が壊れないこと。**
+
+    `executemany` を塊に分けたので、`cursor.rowcount` は**最後の塊のぶん**しか
+    持たない。それを返していたため、120件を割り当てても 20 が返っていた。
+    """
+    connection = db.ensure_database(str(tmp_path / "count.db"))
+    try:
+        person_id = db.add_person(connection, "なつ")
+        media_id = db.save_media(
+            connection,
+            {
+                "path": "/photos/a.jpg",
+                "filename": "a.jpg",
+                "type": "image",
+                "file_hash": "hash",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+            },
+        )
+        # **塊の境目をまたぐ件数**にする。ちょうど割り切れると穴に気づけない
+        count = db.PROGRESS_CHUNK * 2 + 20
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=[0.0] * 128,
+                embed_version="test",
+            )
+            for _ in range(count)
+        ]
+        connection.commit()
+        noop = lambda done, total: None  # noqa: E731
+
+        assert db.assign_faces(
+            connection, face_ids, person_id, db.ASSIGN_MANUAL, progress=noop
+        ) == count
+        assert db.set_faces_age(connection, face_ids, 5, progress=noop) == count
+        assert db.unassign_faces(connection, face_ids, progress=noop) == count
+        assert db.reject_faces(connection, face_ids, progress=noop) == count
+        # 知らせない場合も同じ
+        assert db.unassign_faces(connection, face_ids) == count
+    finally:
+        connection.close()

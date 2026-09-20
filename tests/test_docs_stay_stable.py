@@ -128,3 +128,109 @@ def test_the_section_check_would_catch_a_dangling_pointer():
         "99.9",
     ]
     assert "99.9" not in sections
+
+
+# ---------------------------------------------------------------------------
+# テスト項目一覧の、見出しと表の対応
+# ---------------------------------------------------------------------------
+
+TEST_CASES = REPO_ROOT / "docs/testing/TEST_CASES.md"
+FILE_SECTION = re.compile(r"^### `(test_\w+\.py)`")
+
+
+def _sections_of_test_cases(path=None):
+    """`### \\`test_*.py\\`` ごとに、見出し行と、そのあとに続く行を返す。"""
+    lines = (path or TEST_CASES).read_text(encoding="utf-8").splitlines()
+    sections = []
+    for number, line in enumerate(lines):
+        match = FILE_SECTION.match(line)
+        if match:
+            sections.append({"name": match.group(1), "line": number + 1, "body": []})
+        elif sections:
+            if line.startswith("### ") or line.startswith("## "):
+                sections.append(None)  # 別の節に入った印
+            elif sections[-1] is not None:
+                sections[-1]["body"].append(line)
+    return [section for section in sections if section]
+
+
+def test_a_test_file_section_owns_the_table_under_it(path=None):
+    """**見出しと表がずれていないこと。**
+
+    見出しが自分の表の**下**に落ちると、その表は前の節にぶら下がる。
+    実際に起きた（`test_gui_migration.py` の7行が `test_evaluation.py` の
+    節に紛れ、移行の節は空になった）。読み手は、どの節の表なのかを
+    取り違える。
+    """
+    offenders = []
+    for section in _sections_of_test_cases(path):
+        filled = [line for line in section["body"] if line.strip()]
+        place = f"{section['name']}（{section['line']} 行目）"
+        if not filled:
+            # 見出しだけが残っている＝自分の表を前の節に持っていかれている
+            offenders.append(f"{place}: 表も説明も無い")
+            continue
+        if not filled[0].startswith("|"):
+            continue  # 説明文から始まるのは正しい
+        # 表から始まるなら、1行目はヘッダで、2行目は区切り行のはず。
+        # 途中の行から始まっているのは、ヘッダを前の節に置いてきた印。
+        if len(filled) < 2 or not filled[1].startswith("|--"):
+            offenders.append(f"{place}: 表のヘッダが無く、途中の行から始まっている")
+    assert not offenders, (
+        "見出しが自分の表の下に落ちている。表は見出しの**あと**に置くこと。\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_a_table_is_not_split_by_a_blank_line(path=None):
+    """**表の途中に空行を入れないこと。**
+
+    GitHub の描画器は、空行のあとの行を表として扱わない
+    （`| z | w |` がそのまま文字として出る）。実際に11行が表から外れていた。
+    """
+    offenders = []
+    for section in _sections_of_test_cases(path):
+        body = section["body"]
+        for index, line in enumerate(body):
+            if line.strip():
+                continue
+            previous = body[index - 1] if index else ""
+            following = next((l for l in body[index + 1 :] if l.strip()), "")
+            if previous.startswith("|") and following.startswith("|"):
+                offenders.append(f"{section['name']}: 表の途中に空行がある（{following[:40]}…）")
+    assert not offenders, (
+        "表の途中に空行がある。GitHub はそのあとの行を表にしない。\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_the_table_checks_would_catch_a_broken_document(tmp_path):
+    """**番人自身が働くことを確かめる。** 素通りする検査は無いのと同じ。
+
+    実際に起きた2つの壊れ方を、そのまま書いた文書で落ちることを見る。
+    """
+    split_table = tmp_path / "split.md"
+    split_table.write_text(
+        "### `test_a.py` — あ（1件）\n\n"
+        "| テスト | 内容 |\n|---|---|\n| `test_x` | x |\n"
+        "\n"                      # ← 表の途中の空行
+        "| `test_y` | y |\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="表の途中に空行"):
+        test_a_table_is_not_split_by_a_blank_line(split_table)
+
+    stray_heading = tmp_path / "stray.md"
+    stray_heading.write_text(
+        "### `test_a.py` — あ（1件）\n\n"
+        "| テスト | 内容 |\n|---|---|\n| `test_x` | x |\n\n"
+        "### `test_b.py` — い（1件）\n"   # ← 見出しが表の下に落ちている
+        "| `test_y` | y |\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="表の下に落ちている"):
+        test_a_test_file_section_owns_the_table_under_it(stray_heading)
+
+    # いまの文書は両方とも通る
+    test_a_table_is_not_split_by_a_blank_line()
+    test_a_test_file_section_owns_the_table_under_it()
