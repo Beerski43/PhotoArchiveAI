@@ -15,7 +15,17 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 
@@ -787,6 +797,35 @@ def get_face(connection: sqlite3.Connection, face_id: int) -> Optional[Dict[str,
     return _row_to_dict(row)
 
 
+#: 進み具合を知らせるときの単位。**小さすぎると通知そのものが重い。**
+PROGRESS_CHUNK = 50
+
+#: 進み具合の通知口。``(終わった件数, 全体の件数)`` を受け取る。
+ProgressCallback = Optional[Callable[[int, int], None]]
+
+
+def _executemany_with_progress(
+    cursor: sqlite3.Cursor,
+    statement: str,
+    rows: List[tuple],
+    progress: ProgressCallback,
+) -> None:
+    """``executemany`` を、進み具合を知らせながら流す。
+
+    **1つのトランザクションのまま分ける。** 分割してコミットすると、
+    途中で失敗したときに半分だけ適用された状態が残る。ここで分けるのは
+    **知らせる回数**だけで、確定するのは呼び出し側の1回の ``commit``。
+    """
+    total = len(rows)
+    if progress is None:
+        cursor.executemany(statement, rows)
+        return
+    progress(0, total)
+    for start in range(0, total, PROGRESS_CHUNK):
+        cursor.executemany(statement, rows[start : start + PROGRESS_CHUNK])
+        progress(min(start + PROGRESS_CHUNK, total), total)
+
+
 class _KeepAge:
     """``assign_faces`` の ``age`` 既定値。「年齢は触らない」を表す。
 
@@ -808,54 +847,71 @@ def assign_faces(
     assign_source: str = ASSIGN_MANUAL,
     assign_score: Optional[float] = None,
     age: Any = KEEP_AGE,
+    progress: ProgressCallback = None,
 ) -> int:
     """顔を人物へ割り当てる。
 
     ``age`` を省くと年齢は触らない。``None`` を明示すると未設定へ戻す。
+    ``progress`` を渡すと ``(終わった件数, 全体の件数)`` を知らせる。
     """
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
     if isinstance(age, _KeepAge):
-        cursor.executemany(
+        statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ? WHERE id = ?",
-            [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids],
+            " assigned_at = ? WHERE id = ?"
         )
+        rows = [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids]
     else:
-        cursor.executemany(
+        statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ?, age = ? WHERE id = ?",
-            [(person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids],
+            " assigned_at = ?, age = ? WHERE id = ?"
         )
+        rows = [
+            (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
+        ]
+    _executemany_with_progress(cursor, statement, rows, progress)
     connection.commit()
     return cursor.rowcount
 
 
-def unassign_faces(connection: sqlite3.Connection, face_ids: Sequence[int]) -> int:
+def unassign_faces(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    progress: ProgressCallback = None,
+) -> int:
     if not face_ids:
         return 0
     cursor = connection.cursor()
-    cursor.executemany(
+    _executemany_with_progress(
+        cursor,
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
         " assigned_at = NULL WHERE id = ?",
         [(face_id,) for face_id in face_ids],
+        progress,
     )
     connection.commit()
     return cursor.rowcount
 
 
-def reject_faces(connection: sqlite3.Connection, face_ids: Sequence[int]) -> int:
+def reject_faces(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    progress: ProgressCallback = None,
+) -> int:
     """「誰でもない顔」として、未割当一覧からも自動紐づけからも外す。"""
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
-    cursor.executemany(
+    _executemany_with_progress(
+        cursor,
         "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL,"
         " assigned_at = ? WHERE id = ?",
         [(ASSIGN_REJECTED, now, face_id) for face_id in face_ids],
+        progress,
     )
     connection.commit()
     return cursor.rowcount
@@ -864,6 +920,30 @@ def reject_faces(connection: sqlite3.Connection, face_ids: Sequence[int]) -> int
 def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int]) -> None:
     connection.execute("UPDATE Face SET age = ? WHERE id = ?", (age, face_id))
     connection.commit()
+
+
+def set_faces_age(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    age: Optional[int],
+    progress: ProgressCallback = None,
+) -> int:
+    """選んだ顔にまとめて年齢を入れる。``None`` は未設定へ戻す指示。
+
+    **1件ずつ `set_face_age` を呼ばない。** 呼ぶたびにコミットするので、
+    200件なら 200 回の書き込み確定になる。ここは1回で確定する。
+    """
+    if not face_ids:
+        return 0
+    cursor = connection.cursor()
+    _executemany_with_progress(
+        cursor,
+        "UPDATE Face SET age = ? WHERE id = ?",
+        [(age, face_id) for face_id in face_ids],
+        progress,
+    )
+    connection.commit()
+    return cursor.rowcount
 
 
 def load_manual_embeddings(

@@ -23,6 +23,7 @@
 | `test_matcher.py::test_dry_run_is_not_blinded_by_a_previous_match` | `--dry-run` が2回目以降ほぼ空振りし、閾値を決める目安にならなかった |
 | `test_gui_person.py::test_a_broken_exif_date_is_treated_as_missing` | EXIF が `0000:00:00` の写真で、撮影日時を持っているように見え、ファイル日時のフォールバックまで消えた |
 | `test_gui_person.py::test_another_shape_of_broken_exif_is_also_treated_as_missing` | **`0000` で始まるかだけを見ていた。** 別の壊れ方（`TTTT-TT-TTTTT:TT:TT`、実データ Media 67件）が素通りし、撮影日時としてそのまま画面に出ていた |
+| `test_gui_assignment.py::test_rebuilding_the_list_does_not_reload_the_preview` | **一覧を作り直すたびにプレビューが再描画され、元写真を NFS から読み直していた。** 200件を選んで割り当てると100回読み直し、1回の操作に17秒かかった（実測。止めると92ms） |
 | `test_db.py::test_a_broken_exif_date_does_not_take_over_the_newest_page` | **撮影日時の新しい順にすると、壊れた EXIF が1ページ目をまるごと占領する**（`T` は数字より大きい。実データで顔123件） |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
@@ -192,7 +193,7 @@
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
 ### `test_gui_migration.py` — 起動時の移行（7件）
-### `test_gui_assignment.py` — GUI での割り当て（20件）
+### `test_gui_assignment.py` — GUI での割り当て（24件）
 
 | テスト | 内容 |
 |---|---|
@@ -211,6 +212,10 @@
 
 | `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
 | `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
+| `test_rebuilding_the_list_does_not_reload_the_preview` | **一覧の作り直しで元写真を読み直さない**（200件の割り当てに17秒かかっていた） |
+| `test_the_progress_is_reported_for_every_face` | 進み具合が件数で出る |
+| `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
+| `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（57件）
 
