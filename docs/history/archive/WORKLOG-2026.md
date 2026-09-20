@@ -11,6 +11,24 @@ PR [#20](https://github.com/Beerski43/PhotoArchiveAI/pull/20) と
 区別する。GUI の起動バグを直し、操作手順を
 [operation/GUI_USAGE.md](../operation/GUI_USAGE.md) に書いた。
 
+## 2026-09-06 — #14 HEIC/HEIF の一括変換と、#10 の真因特定
+
+PR [#21](https://github.com/Beerski43/PhotoArchiveAI/pull/21)（merged）。
+
+`photoarchive convert-heic` を追加した。同名JPEGが同じ写真ならスキップし、違う
+写真なら連番を付ける。元のHEICは変更しない。
+
+`face_recognition_models/__init__.py` の `pkg_resources` 依存が setuptools 81 以降で
+`ModuleNotFoundError` になるのが #10 の真因だった。`importlib.util.find_spec` なら
+`__init__.py` を実行せずモデルのパスだけ取り出せる。`face_recognition` パッケージ
+自体は不要なので依存から外した。
+
+あわせて、解析結果がすべて0になる問題を追い込んだ。MediaPipe の矩形は
+`relative_bounding_box` に入るのに空の `bounding_box` を見ていたこと、
+`mp.solutions` API のために 0.10.21 への固定が必要だったことが原因。
+
+詳細: [details/2026-09-06-heic-and-analyze.md](details/2026-09-06-heic-and-analyze.md)
+
 ## 2026-09-05 — #7 進捗表示、#10 の一次対応
 
 PR [#11](https://github.com/Beerski43/PhotoArchiveAI/pull/11) と

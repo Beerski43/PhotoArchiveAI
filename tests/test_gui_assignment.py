@@ -17,6 +17,22 @@ def qt_app():
     yield app
 
 
+def _always_accepts_age(age):
+    """年齢を入れて OK を押す `FaceAgeDialog` の代わり。"""
+
+    class _Dialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def age(self):
+            return age
+
+    return _Dialog
+
+
 def _seed(connection, count: int) -> None:
     media_id = db.save_media(
         connection,
@@ -374,3 +390,82 @@ def test_the_assigned_list_is_ordered_by_age(window):
     # **未設定は最後。** 先頭に来ると、年齢順に見ていく邪魔になる
     assert ages[-1] is None
     dialog.close()
+
+
+def test_rebuilding_the_list_does_not_reload_the_preview(window, monkeypatch):
+    """**一覧を作り直すたびに元写真を読み直さない。**
+
+    `clear()` は項目を1つずつ外すので、そのたびに `itemSelectionChanged` が
+    出る。プレビューがそれに繋がっていたため、**200件を選んで割り当てると
+    元写真を NFS から100回読み直し、1回の操作に17秒かかっていた**
+    （実データで実測。1枚あたり 220ms）。
+    """
+    reads = []
+    monkeypatch.setattr(
+        photoarchive_gui.face,
+        "load_face_image_bytes",
+        lambda path, bbox: reads.append(path) or b"",
+    )
+    db.add_person(window.connection, "父")
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.selectAll()
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
+    # 選んだときの1回は正しい読み出し。数えるのは**作り直しのぶん**だけ
+    reads.clear()
+
+    window._assign_selected()
+
+    assert reads == []
+
+
+def test_the_progress_is_reported_for_every_face(window, monkeypatch):
+    """**進み具合が件数で出ること。** 複数枚を一度に処理するときの手がかり。"""
+    reported = []
+
+    class _Spy(photoarchive_gui.WorkProgress):
+        def __call__(self, done, total):
+            reported.append((done, total))
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(photoarchive_gui, "WorkProgress", _Spy)
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
+    db.add_person(window.connection, "父")
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.selectAll()
+
+    window._assign_selected()
+
+    # 最初に 0、最後に全件。件数は選んだ顔の数と一致する
+    assert reported[0] == (0, 5)
+    assert reported[-1] == (5, 5)
+
+
+def test_the_cursor_is_restored_even_when_the_work_fails():
+    """**砂時計を戻し忘れない。** 戻し損ねると、以後ずっと砂時計のままになる。"""
+    before = QApplication.overrideCursor()
+
+    with pytest.raises(RuntimeError):
+        with photoarchive_gui.busy_cursor():
+            raise RuntimeError("途中で失敗した")
+
+    assert QApplication.overrideCursor() is before
+
+
+def test_setting_the_age_of_many_faces_commits_once(window, monkeypatch):
+    """**1件ずつコミットしない。** 200件なら 200 回の書き込み確定になる。"""
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.assign_faces(face_ids, person_id)
+    statements = []
+    window.connection.set_trace_callback(statements.append)
+    try:
+        db.set_faces_age(window.connection, face_ids, 7)
+    finally:
+        window.connection.set_trace_callback(None)
+
+    assert sum("COMMIT" in s.upper() for s in statements) == 1
+    assert all(row["age"] == 7 for row in db.list_faces(window.connection, person_id=person_id))

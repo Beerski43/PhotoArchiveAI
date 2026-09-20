@@ -9,6 +9,7 @@ BLOB を全件読むと数百MBになり、画面が固まる。
 
 import argparse
 import os
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import List, Optional
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -259,6 +261,61 @@ def format_media_info(
 
 #: 登録が済んだ顔のプレビューを、どこまで薄くするか。
 DONE_PREVIEW_OPACITY = 0.35
+
+#: これより短い作業では、進み具合の窓を出さない（ミリ秒）。
+#: **一瞬だけ出て消える窓は、出さないより煩わしい。** `QProgressDialog` が
+#: この時間を超えたときだけ自分で開く。
+PROGRESS_POPUP_DELAY_MS = 400
+
+
+@contextmanager
+def busy_cursor():
+    """処理のあいだ、カーソルを砂時計にする。
+
+    **押したことが分かるようにするため。** 実測で、顔を1つ選ぶたびに元写真を
+    NFS から読み直して 220ms かかる。その間まったく無反応なので、
+    「クリックできたのか」が分からない。
+
+    **例外が出ても必ず戻す。** 戻し忘れると、以後ずっと砂時計のままになる。
+    """
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
+class WorkProgress:
+    """件数の分かる作業の進み具合を出す。``db`` の ``progress`` に渡せる。
+
+    **短い作業では何も出さない。** `QProgressDialog` は
+    `setMinimumDuration` を超えて初めて自分を開くので、1件の割り当てのように
+    すぐ終わるものでは窓が出ない。
+
+    **取り消しボタンは置かない。** 書き込みの途中で止めると、半分だけ
+    適用された状態になる。
+    """
+
+    def __init__(self, parent, label: str, total: int, delay_ms: int = PROGRESS_POPUP_DELAY_MS):
+        self.dialog = QProgressDialog(label, "", 0, max(total, 1), parent)
+        self.dialog.setWindowTitle("処理中")
+        self.dialog.setCancelButton(None)
+        self.dialog.setWindowModality(Qt.WindowModal)
+        self.dialog.setMinimumDuration(delay_ms)
+        self.dialog.setValue(0)
+
+    def __call__(self, done: int, total: int) -> None:
+        """``db`` から呼ばれる通知口。"""
+        self.dialog.setMaximum(max(total, 1))
+        self.dialog.setLabelText(f"{self.dialog.labelText().split('（')[0]}（{done} / {total} 件）")
+        self.dialog.setValue(done)
+        # **描き直さないと、窓が白いままになる。** 同期処理の途中なので、
+        # ここで明示的にイベントを回す。
+        QApplication.processEvents()
+
+    def finish(self) -> None:
+        self.dialog.setValue(self.dialog.maximum())
+        self.dialog.close()
 
 
 def dim_pixmap(pixmap: QPixmap, opacity: float = DONE_PREVIEW_OPACITY) -> QPixmap:
@@ -690,19 +747,47 @@ class RegisteredFacesDialog(QDialog):
     def _selected_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
 
+    def _run_with_progress(self, label: str, face_ids: List[int], work) -> None:
+        """件数の分かる作業を、砂時計と進み具合つきで流す。
+
+        **押したことが分かるようにするため。** 短い作業では窓は出ない
+        （`WorkProgress` が自分で判断する）。
+        """
+        with busy_cursor():
+            progress = WorkProgress(self, label, len(face_ids))
+            try:
+                work(progress)
+                progress.dialog.setLabelText("一覧を作り直しています")
+                QApplication.processEvents()
+                self.reload()
+            finally:
+                progress.finish()
+
     def _confirm_selected(self) -> None:
         face_ids = self._selected_ids()
         if not face_ids:
             return
-        db.assign_faces(self.connection, face_ids, self.person["id"], db.ASSIGN_MANUAL)
-        self.reload()
+        self._run_with_progress(
+            "手本に確定しています",
+            face_ids,
+            lambda progress: db.assign_faces(
+                self.connection,
+                face_ids,
+                self.person["id"],
+                db.ASSIGN_MANUAL,
+                progress=progress,
+            ),
+        )
 
     def _unassign_selected(self) -> None:
         face_ids = self._selected_ids()
         if not face_ids:
             return
-        db.unassign_faces(self.connection, face_ids)
-        self.reload()
+        self._run_with_progress(
+            "割り当てを解除しています",
+            face_ids,
+            lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
+        )
 
     def _set_age_selected(self) -> None:
         face_ids = self._selected_ids()
@@ -717,12 +802,34 @@ class RegisteredFacesDialog(QDialog):
         if dialog.exec() != QDialog.Accepted:
             return
         age = dialog.age()
-        for face_id in face_ids:
-            db.set_face_age(self.connection, face_id, age)
-        self.reload()
+
+        def work(progress):
+            # **1件ずつコミットしていた。** 200件なら 200 回の fsync になる。
+            # まとめて1回にし、そのぶん進み具合を知らせる。
+            db.set_faces_age(self.connection, face_ids, age, progress=progress)
+
+        self._run_with_progress("年齢を設定しています", face_ids, work)
 
 
 def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
+    """一覧を作り直す。**作り直しているあいだ、信号を止める。**
+
+    `clear()` は項目を1つずつ外すので、そのたびに `itemSelectionChanged` が
+    出る。プレビューがそれに繋がっているため、**200件を選んで割り当てると
+    元写真を NFS から100回読み直し、1回の操作に17秒かかっていた**
+    （実測。1枚あたり 220ms）。
+
+    止めても困らない。作り直したあとは何も選ばれていないので、
+    プレビューを描き直す理由がそもそも無い。
+    """
+    blocked = widget.blockSignals(True)
+    try:
+        _repopulate_face_list(widget, records)
+    finally:
+        widget.blockSignals(blocked)
+
+
+def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
     widget.clear()
     for record in records:
         pixmap = QPixmap()
@@ -1135,7 +1242,10 @@ class MainWindow(QWidget):
             record["bbox_left"],
         )
         try:
-            data = face.load_face_image_bytes(Path(media["path"]), bbox)
+            # **元写真は NFS 上にあり、1枚あたり実測 220ms かかる。**
+            # その間まったく無反応なので、押したことが分かるようにする。
+            with busy_cursor():
+                data = face.load_face_image_bytes(Path(media["path"]), bbox)
         except Exception as error:
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.setText(f"元写真を開けません:\n{media['path']}\n{error}")
@@ -1155,12 +1265,16 @@ class MainWindow(QWidget):
             )
         )
 
-    def assign_faces(self, face_ids: List[int], person_id: int, age=db.KEEP_AGE) -> int:
+    def assign_faces(
+        self, face_ids: List[int], person_id: int, age=db.KEEP_AGE, progress=None
+    ) -> int:
         """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。
 
         ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。
         """
-        return db.assign_faces(self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age)
+        return db.assign_faces(
+            self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age, progress=progress
+        )
 
     def _assign_selected(self):
         person = self._current_person()
@@ -1181,17 +1295,31 @@ class MainWindow(QWidget):
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        self.assign_faces(face_ids, person["id"], dialog.age())
-        self.reload_faces()
-        self._on_person_selected(self.person_list.currentItem())
+        with busy_cursor():
+            progress = WorkProgress(self, f"{person['name']} に割り当てています", len(face_ids))
+            try:
+                self.assign_faces(face_ids, person["id"], dialog.age(), progress=progress)
+                progress.dialog.setLabelText("一覧を作り直しています")
+                QApplication.processEvents()
+                self.reload_faces()
+                self._on_person_selected(self.person_list.currentItem())
+            finally:
+                progress.finish()
         self._mark_preview_done(f"完了 — {len(face_ids)} 件を {person['name']} に登録しました")
 
     def _reject_selected(self):
         face_ids = self._selected_face_ids()
         if not face_ids:
             return
-        db.reject_faces(self.connection, face_ids)
-        self.reload_faces()
+        with busy_cursor():
+            progress = WorkProgress(self, "除外しています", len(face_ids))
+            try:
+                db.reject_faces(self.connection, face_ids, progress=progress)
+                progress.dialog.setLabelText("一覧を作り直しています")
+                QApplication.processEvents()
+                self.reload_faces()
+            finally:
+                progress.finish()
         # 除外でも顔は一覧から消える。**割り当てと同じ症状**なので同じ扱いにする。
         self._mark_preview_done(f"完了 — {len(face_ids)} 件を除外しました")
 
