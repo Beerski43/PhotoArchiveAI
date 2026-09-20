@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, face
+from .config import find_settings_path
 
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
@@ -42,6 +43,110 @@ THUMBNAIL_SIZE = 120
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "除外済み"
+
+
+def _format_timestamp(value: Optional[str]) -> Optional[str]:
+    """DB の ISO 文字列を "YYYY-MM-DD HH:MM:SS" にする。読めなければ ``None``。
+
+    **カメラが `0000:00:00 00:00:00` を書くことがある**（実データで Media 55件・
+    顔 33件）。`scanner.extract_exif_datetime` は EXIF を機械的に整形するだけなので、
+    これが `0000-00-00T00:00:00` として保存される。日付として読めないものを
+    そのまま出すと、**撮影日時を持っているように見えてファイル日時の
+    フォールバックも消える**。いちばん手がかりが要る写真で手がかりが減るので、
+    持っていないのと同じ扱いにする。
+    """
+    if not value:
+        return None
+    text = str(value).replace("T", " ")[:19]
+    return None if text.startswith("0000") else text
+
+
+def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
+    """設定に書かれた相対パスを、**設定ファイルの置き場所**を起点に解く。
+
+    カレントディレクトリを起点にすると、リポジトリ直下以外から起動したときに
+    相対化が静かに外れ、`GUI_USAGE.md` が約束している「`source_root` からの
+    相対」ではなく、読めない NFS の絶対パスに戻る。`config` は設定ファイル
+    自体を複数の場所から探しているのに、**その中の値だけ cwd 依存**という
+    食い違いだった。
+
+    `database_path` など他の相対値はここでは扱わない。設定の解釈を全体で
+    変えるのは、明示的な指示が要る（CLAUDE.md §4）。
+    """
+    if not source_root or Path(source_root).is_absolute():
+        return source_root
+    settings_path = find_settings_path()
+    if settings_path is None:
+        return source_root
+    # config/app_settings.json → リポジトリ直下
+    return str(settings_path.parent.parent / source_root)
+
+
+def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
+    """プレビューの下に出す、撮影日時とフォルダの説明。
+
+    **年齢を入れるには、その写真がいつ撮られたか分からないといけない。**
+    EXIF の撮影日時は実データの 15.8% で欠けているので、日付を持つことが多い
+    フォルダ名も併せて出す。
+
+    ``created_time`` は**撮影日時ではない**（コピーで変わる）。取り違えると
+    年齢を間違えるので、EXIF が無いときだけ、別の名前で出す。
+    """
+    lines = []
+    shooting_date = _format_timestamp(media.get("shooting_date"))
+    if shooting_date:
+        lines.append(f"撮影日時: {shooting_date}")
+    else:
+        lines.append("撮影日時: 不明（EXIFなし）")
+        file_time = _format_timestamp(media.get("created_time"))
+        if file_time:
+            lines.append(f"ファイル日時: {file_time}")
+
+    path = Path(media.get("path", ""))
+    folder = path.parent
+    if source_root:
+        try:
+            folder = folder.relative_to(Path(source_root).expanduser().resolve())
+        except ValueError:
+            # source_root の外にあるメディア。絶対パスのまま出す。
+            pass
+    if str(folder) == ".":
+        # source_root 直下。"." では何のことか読めない。
+        folder = "（source_root 直下）"
+    lines.append(f"フォルダ: {folder}")
+    lines.append(f"ファイル: {path.name}")
+    return "\n".join(lines)
+
+
+def _select_on_focus(spin: QSpinBox) -> QSpinBox:
+    """特別な文字（「未設定」など）が入った QSpinBox を、打鍵で置き換えられるようにする。
+
+    `setSpecialValueText` を使うと、入力欄には数字ではなく「未設定」という
+    **文字**が入っている。その状態で数字を打つと "未設定5" という文字列になり、
+    検証に落ちて**何も起きない。** 利用者からは「▲を押さないと入力できない」
+    ように見える。
+
+    開いた時点で全選択しておけば、打った数字がそのまま置き換わる。
+    """
+    spin.setFocus()
+    spin.selectAll()
+    return spin
+
+
+def _make_select_all_on_focus(spin: QSpinBox):
+    """フォーカスが入ったら全選択する `focusInEvent` を作る。
+
+    常時フォーカスしてよい入力（ダイアログの主役）と違い、画面に並ぶ入力欄は
+    **触られたときだけ**選択したい。
+    """
+    original = spin.__class__.focusInEvent
+
+    def focus_in(event):
+        original(spin, event)
+        spin.selectAll()
+
+    return focus_in
+
 
 
 class PersonDialog(QDialog):
@@ -69,26 +174,66 @@ class PersonDialog(QDialog):
         )
 
 
+def summarize_selection(face_count: int, shooting_dates: List[str]) -> str:
+    """年齢ダイアログに出す「何に入れるのか」の1行。
+
+    **1回の入力が選択中の全件に入る**のに、プレビューに出ているのは最後に
+    選んだ1枚の撮影日時だけ。撮影年をまたいで選ぶと、画面の日時を見て入れた
+    年齢が別の年の顔にも入る。件数と、撮影日時の範囲を見せて気づけるようにする。
+
+    1件だけの選択なら、プレビューと食い違わないので出さない。
+    """
+    if face_count <= 1:
+        return ""
+    if not shooting_dates:
+        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時は不明）。"
+    first, last = shooting_dates[0][:10], shooting_dates[-1][:10]
+    if first == last:
+        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"
+    # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
+    return (
+        f"{face_count} 件すべてに同じ年齢を入れます。"
+        f"\n撮影日時が {first} 〜 {last} にまたがっています。"
+    )
+
+
 class FaceAgeDialog(QDialog):
     """撮影時の年齢を任意で入力する。未設定と0歳は区別する。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, summary: str = ""):
         super().__init__(parent)
         self.setWindowTitle("撮影時の年齢")
+        self.summary = summary
         self.age_input = QSpinBox()
         # 最小値を -1 にして「未設定」に割り当てる。0 を特別扱いにすると
         # 0歳の顔を登録できなくなる。
         self.age_input.setRange(-1, 150)
         self.age_input.setSpecialValueText("未設定")
         self.age_input.setValue(-1)
+        # 「未設定」の文字が入ったままなので、全選択しておかないと
+        # キーボードから数字を入れられない（▲を押すしかなくなる）。
+        _select_on_focus(self.age_input)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QFormLayout(self)
+        if summary:
+            summary_label = QLabel(summary)
+            summary_label.setWordWrap(True)
+            layout.addRow(summary_label)
         layout.addRow("撮影時の年齢", self.age_input)
         layout.addRow(buttons)
+
+    def showEvent(self, event):
+        """開くたびに入力欄を選択しておく。
+
+        `__init__` での選択は、ダイアログが表示されるときに解除されることが
+        ある。**開いた直後に数字を打てる**ことが大事なので、ここでもやり直す。
+        """
+        super().showEvent(event)
+        _select_on_focus(self.age_input)
 
     def age(self) -> Optional[int]:
         value = self.age_input.value()
@@ -112,6 +257,10 @@ class RegisteredFacesDialog(QDialog):
         self.max_age.setRange(0, 150)
         self.max_age.setSpecialValueText("指定なし")
         self.max_age.setValue(150)
+        # 年齢の絞り込みも「指定なし」の文字が入っている。年齢の入力と
+        # 同じ理由で、触ったときに打鍵で置き換えられるようにする。
+        for spin in (self.min_age, self.max_age):
+            spin.focusInEvent = _make_select_all_on_focus(spin)
 
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -229,7 +378,12 @@ class RegisteredFacesDialog(QDialog):
         face_ids = self._selected_ids()
         if not face_ids:
             return
-        dialog = FaceAgeDialog(self)
+        dialog = FaceAgeDialog(
+            self,
+            summary=summarize_selection(
+                len(face_ids), db.shooting_dates_for_faces(self.connection, face_ids)
+            ),
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         age = dialog.age()
@@ -257,9 +411,12 @@ def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
 
 
 class MainWindow(QWidget):
-    def __init__(self, database_path: str):
+    def __init__(self, database_path: str, source_root: Optional[str] = None):
         super().__init__()
         self.db_path = database_path
+        #: プレビューのフォルダ表示を相対パスにするためだけに使う。
+        #: 無ければ絶対パスで出すので、渡さなくても動く。
+        self.source_root = source_root
         self.connection = db.ensure_database(database_path)
         self.setWindowTitle("PhotoArchiveAI 人物登録と顔の割り当て")
         self.page = 0
@@ -331,11 +488,24 @@ class MainWindow(QWidget):
         self.preview_label.setMinimumWidth(320)
         self.preview_label.setWordWrap(True)
         self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
+
+        # 撮影日時とフォルダ。**年齢を入れるのに要る。**
+        # QLabel は画像か文字のどちらかしか持てないので、もう1枚に分ける。
+        self.preview_info = QLabel("")
+        self.preview_info.setWordWrap(True)
+        self.preview_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.preview_info.setStyleSheet("padding: 4px;")
+
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.addWidget(self.preview_label, 1)
+        preview_layout.addWidget(self.preview_info, 0)
         self.face_list.itemSelectionChanged.connect(self._show_preview)
 
         face_area = QSplitter(Qt.Horizontal)
         face_area.addWidget(self.face_list)
-        face_area.addWidget(self.preview_label)
+        face_area.addWidget(preview_panel)
         face_area.setStretchFactor(0, 3)
         face_area.setStretchFactor(1, 2)
 
@@ -501,6 +671,9 @@ class MainWindow(QWidget):
         media = db.get_media_by_id(self.connection, record["media_id"])
         if not media:
             return
+        # 情報は画像より先に出す。**元写真が開けないときこそ、
+        # どのフォルダのどのファイルなのかが要る。**
+        self.preview_info.setText(format_media_info(media, self.source_root))
         bbox = (
             record["bbox_top"],
             record["bbox_right"],
@@ -516,6 +689,10 @@ class MainWindow(QWidget):
         pixmap = QPixmap()
         pixmap.loadFromData(data)
         if pixmap.isNull():
+            # **前の写真の画像を残さない。** 情報欄は先に新しい写真で
+            # 上書きしているので、残すと上下で別の写真になる。
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText(f"画像を表示できません:\n{media['path']}")
             return
         self.preview_label.setText("")
         self.preview_label.setPixmap(
@@ -567,9 +744,12 @@ def main() -> None:
 
     # CLI と同じ解決順にする。GUI だけ設定ファイルを読まないと、
     # 「アプリケーション内にDBパスをハードコードしない」という方針から外れる。
-    from .config import get_database_path, load_settings
+    from .config import get_database_path, get_source_root, load_settings
 
-    db_path = args.db or get_database_path(load_settings())
+    settings = load_settings()
+    db_path = args.db or get_database_path(settings)
+    # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く。
+    source_root = resolve_source_root(get_source_root(settings))
     if not db_path:
         raise SystemExit(
             "データベースのパスが必要です。--db で指定するか、"
@@ -583,6 +763,6 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    window = MainWindow(db_path)
+    window = MainWindow(db_path, source_root=source_root)
     window.show()
     sys.exit(app.exec())
