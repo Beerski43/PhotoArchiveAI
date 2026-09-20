@@ -212,6 +212,29 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     return str(settings_path.parent.parent / source_root)
 
 
+def format_folder(folder: str, source_root: Optional[str] = None) -> str:
+    """フォルダを、画面に出す形にする。**`source_root` からの相対。**
+
+    絶対パスは長すぎて読めない（実データは
+    `/mnt/nfs/nanoPi-NEO2/suzuki/Photo/2011/...`）。`source_root` の外にある
+    ものは絶対パスのまま出す。
+
+    **プレビューの情報欄とフォルダ選択で、同じ規則を使う。** 別々に書くと、
+    同じフォルダが画面によって違う名前で出る。
+    """
+    path = Path(folder)
+    if source_root:
+        try:
+            path = path.relative_to(Path(source_root).expanduser().resolve())
+        except ValueError:
+            # source_root の外にあるメディア。絶対パスのまま出す。
+            pass
+    if str(path) == ".":
+        # source_root 直下。"." では何のことか読めない。
+        return "（source_root 直下）"
+    return str(path)
+
+
 def format_media_info(
     media: dict, source_root: Optional[str] = None, person: Optional[dict] = None
 ) -> str:
@@ -239,17 +262,7 @@ def format_media_info(
             lines.append(f"ファイル日時: {file_time}")
 
     path = Path(media.get("path", ""))
-    folder = path.parent
-    if source_root:
-        try:
-            folder = folder.relative_to(Path(source_root).expanduser().resolve())
-        except ValueError:
-            # source_root の外にあるメディア。絶対パスのまま出す。
-            pass
-    if str(folder) == ".":
-        # source_root 直下。"." では何のことか読めない。
-        folder = "（source_root 直下）"
-    lines.append(f"フォルダ: {folder}")
+    lines.append(f"フォルダ: {format_folder(str(path.parent), source_root)}")
     lines.append(f"ファイル: {path.name}")
 
     if person:
@@ -820,6 +833,88 @@ class RegisteredFacesDialog(QDialog):
         self._run_with_progress("年齢を設定しています", face_ids, work)
 
 
+def format_folder_row(counts: dict, source_root: Optional[str] = None) -> str:
+    """フォルダ選択の1行。**件数を先に、フォルダ名を後ろに置く。**
+
+    フォルダ名は長さがまちまちなので、後ろに置かないと件数の桁が揃わず、
+    どれが大きいのか見比べられない。
+    """
+    return (
+        f"未割当 {counts['unassigned']:,} / 手本 {counts['manual']:,}"
+        f" / 除外 {counts['rejected']:,}   "
+        f"{format_folder(counts['folder'], source_root)}"
+    )
+
+
+class FolderPickerDialog(QDialog):
+    """顔の一覧を絞り込むフォルダを選ぶ。
+
+    **未割当の多い順に並べる。** まとめて除外して効き目が大きいフォルダが
+    上に来る（実データの1位は結婚式の 1,357 件）。
+
+    **ページャは置かない。** 「ページャの無い一覧を作らない」はサムネイルの
+    BLOB を全件読まないための約束で、ここは文字だけ（実データで 1,042 行・
+    0.099 秒）。目的のフォルダを探すにはページ送りより絞り込み欄が要る。
+    """
+
+    def __init__(self, parent, connection, source_root: Optional[str] = None):
+        super().__init__(parent)
+        self.setWindowTitle("フォルダを選ぶ")
+        self.source_root = source_root
+        with busy_cursor():
+            self.rows = db.folder_face_counts(connection)
+
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText("フォルダ名で絞り込む（例: 結婚式）")
+        self.filter_edit.textChanged.connect(self._apply_filter)
+
+        self.folder_list = QListWidget()
+        self.folder_list.itemDoubleClicked.connect(lambda _item: self.accept())
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        self.summary_label = QLabel("")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.filter_edit)
+        layout.addWidget(self.folder_list)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(buttons)
+        self.resize(760, 520)
+        self._apply_filter("")
+
+    def _apply_filter(self, text: str) -> None:
+        """絞り込み欄の文字を含むフォルダだけ出す。
+
+        **画面に出している名前で照合する**（`source_root` からの相対）。
+        絶対パスで照合すると、画面に見えていない部分に当たってしまう。
+        """
+        needle = text.strip()
+        self.folder_list.clear()
+        shown = 0
+        for counts in self.rows:
+            label = format_folder_row(counts, self.source_root)
+            if needle and needle not in label:
+                continue
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, counts)
+            self.folder_list.addItem(item)
+            shown += 1
+        self.summary_label.setText(f"{shown} / {len(self.rows)} フォルダ")
+        if shown:
+            self.folder_list.setCurrentRow(0)
+
+    def selected_folder(self) -> Optional[str]:
+        """選ばれたフォルダ。**絞り込みの条件に使う絶対パスのほうを返す。**"""
+        item = self.folder_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)["folder"]
+
+
 def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
@@ -937,6 +1032,26 @@ class MainWindow(QWidget):
         pager.addWidget(self.page_label)
         pager.addWidget(self.next_button)
 
+        # --- フォルダで絞り、まとめて処理する ---------------------------
+        # **未割当 58,212 件のうち、上位100フォルダで 51.5%（30,094件）を
+        # 占める**（2026-09-20 実測）。結婚式や学校行事はほとんどが他人なので、
+        # 1件ずつ判断させると総時間がそのぶん延びる。
+        self.folder: Optional[str] = None
+        self.folder_label = QLabel("")
+        self.folder_label.setWordWrap(True)
+        self.choose_folder_button = QPushButton("フォルダを選ぶ")
+        self.clear_folder_button = QPushButton("解除")
+        self.bulk_folder_button = QPushButton("")
+        self.choose_folder_button.clicked.connect(self._choose_folder)
+        self.clear_folder_button.clicked.connect(self._clear_folder)
+        self.bulk_folder_button.clicked.connect(self._bulk_folder_action)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self.folder_label, 1)
+        folder_row.addWidget(self.choose_folder_button)
+        folder_row.addWidget(self.clear_folder_button)
+        folder_row.addWidget(self.bulk_folder_button)
+
         face_actions = QHBoxLayout()
         face_actions.addWidget(self.assign_button)
         face_actions.addWidget(self.reject_button)
@@ -988,6 +1103,7 @@ class MainWindow(QWidget):
         face_panel = QWidget()
         face_layout = QVBoxLayout(face_panel)
         face_layout.addLayout(pager)
+        face_layout.addLayout(folder_row)
         face_layout.addWidget(face_area)
         face_layout.addLayout(face_actions)
 
@@ -1004,6 +1120,7 @@ class MainWindow(QWidget):
 
         self._reload_person_list()
         self._sync_unassign_button()
+        self._sync_folder_controls()
         self.reload_faces()
 
     # ------------------------------------------------------------------
@@ -1152,10 +1269,130 @@ class MainWindow(QWidget):
     def _filter_arguments(self) -> dict:
         selected = self.filter_box.currentText()
         if selected == FILTER_AUTO:
-            return {"assign_source": db.ASSIGN_AUTO}
+            filters = {"assign_source": db.ASSIGN_AUTO}
+        elif selected == FILTER_REJECTED:
+            filters = {"assign_source": db.ASSIGN_REJECTED}
+        else:
+            filters = {"unassigned": True}
+        # **フォルダ未指定なら `folder` を渡さない。** 渡すと `Media` を辿る
+        # 条件が増え、撮影日時の索引を順に歩く経路（未割当 58,212 件を
+        # 0.002 秒で1ページ分読む）から外れる。
+        if self.folder is not None:
+            filters["folder"] = self.folder
+        return filters
+
+    # ------------------------------------------------------------------
+    # フォルダで絞る / まとめて処理する
+    # ------------------------------------------------------------------
+
+    def _choose_folder(self) -> None:
+        dialog = FolderPickerDialog(self, self.connection, self.source_root)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        folder = dialog.selected_folder()
+        if folder is None:
+            return
+        self.folder = folder
+        self._reset_page()
+
+    def _clear_folder(self) -> None:
+        self.folder = None
+        self._reset_page()
+
+    def _sync_folder_controls(self) -> None:
+        """フォルダ行の表示と、まとめて処理するボタンの意味をそろえる。
+
+        **まとめて処理できるのはフォルダを選んでいるときだけ。** 選んでいないと
+        対象が未割当 58,212 件全部になり、**一度の押し間違いで作業がすべて
+        飛ぶ。** 押せない理由はツールチップに書く（隠さない）。
+        """
+        if self.folder is None:
+            self.folder_label.setText("フォルダ: すべて")
+        else:
+            self.folder_label.setText(f"フォルダ: {format_folder(self.folder, self.source_root)}")
+        self.clear_folder_button.setEnabled(self.folder is not None)
+
+        label, tooltip = self._bulk_action_labels()
+        self.bulk_folder_button.setText(label)
+        self.bulk_folder_button.setEnabled(self.folder is not None)
+        self.bulk_folder_button.setToolTip(
+            tooltip
+            if self.folder is not None
+            else "先に「フォルダを選ぶ」でフォルダを指定してください。"
+        )
+
+    def _bulk_action_labels(self) -> tuple:
+        """いま表示している一覧に対して、まとめて何ができるか。
+
+        **表示を切り替えたらボタンの意味も変える。** 未割当を見ているときは
+        「まとめて除外」、除外済みや自動割当を見ているときは「まとめて取り消す」。
+        """
+        selected = self.filter_box.currentText()
         if selected == FILTER_REJECTED:
-            return {"assign_source": db.ASSIGN_REJECTED}
-        return {"unassigned": True}
+            return (
+                "このフォルダの除外をすべて取り消す",
+                "このフォルダで除外した顔を、ページをまたいで未割当へ戻します。",
+            )
+        if selected == FILTER_AUTO:
+            return (
+                "このフォルダの自動割当をすべて取り消す",
+                "このフォルダの自動割当を、ページをまたいで未割当へ戻します。",
+            )
+        return (
+            "このフォルダの未割当をすべて除外",
+            "このフォルダの未割当の顔を、ページをまたいでまとめて除外します"
+            "（手動で割り当てた顔は触りません）。",
+        )
+
+    def _bulk_folder_action(self) -> None:
+        """フォルダ単位のまとめ処理。**表示中のページではなくフォルダ全体に効く。**"""
+        if self.folder is None:
+            return
+        filters = self._filter_arguments()
+        with busy_cursor():
+            face_ids = db.face_ids(self.connection, **filters)
+        name = format_folder(self.folder, self.source_root)
+        if not face_ids:
+            QMessageBox.information(
+                self, "対象なし", f"{name} に、まとめて処理できる顔はありません。"
+            )
+            return
+
+        rejecting = self.filter_box.currentText() == FILTER_UNASSIGNED
+        if rejecting:
+            question = (
+                f"{name}\n\n未割当の顔 {len(face_ids):,} 件をまとめて除外します。\n\n"
+                "手動で割り当てた顔は触りません。\n"
+                "除外したあとは、表示を「除外済み」にして取り消せます。"
+            )
+            title = "まとめて除外"
+        else:
+            question = f"{name}\n\n{len(face_ids):,} 件をまとめて未割当へ戻します。"
+            title = "まとめて取り消し"
+        answer = QMessageBox.question(
+            self,
+            title,
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        if rejecting:
+            self._run_with_progress(
+                "まとめて除外しています",
+                face_ids,
+                lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
+                f"完了 — {name} の {len(face_ids):,} 件を除外しました",
+            )
+        else:
+            self._run_with_progress(
+                "まとめて未割当に戻しています",
+                face_ids,
+                lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
+                f"完了 — {name} の {len(face_ids):,} 件を未割当に戻しました",
+            )
 
     def _sync_unassign_button(self) -> None:
         """いま見ている一覧で「未割当に戻す」が意味を持つかを反映する。
@@ -1174,6 +1411,7 @@ class MainWindow(QWidget):
     def _reset_page(self):
         self.page = 0
         self._sync_unassign_button()
+        self._sync_folder_controls()
         self.reload_faces()
 
     def reload_faces(self):
