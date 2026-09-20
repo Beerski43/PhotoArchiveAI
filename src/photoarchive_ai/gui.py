@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -255,6 +255,28 @@ def format_media_info(
         if age:
             lines.append(f"{person.get('name') or '?'}: {age}")
     return "\n".join(lines)
+
+
+#: 登録が済んだ顔のプレビューを、どこまで薄くするか。
+DONE_PREVIEW_OPACITY = 0.35
+
+
+def dim_pixmap(pixmap: QPixmap, opacity: float = DONE_PREVIEW_OPACITY) -> QPixmap:
+    """画像を薄くした複製を返す。**元の画像は変えない。**
+
+    登録の済んだ顔だと**一目で分かる**ようにするため。文字だけで知らせると、
+    次の顔を選ぶまで前の顔がそのままの濃さで残り、「まだ選んでいる」ように
+    見える。
+    """
+    if pixmap.isNull():
+        return pixmap
+    dimmed = QPixmap(pixmap.size())
+    dimmed.fill(Qt.transparent)
+    painter = QPainter(dimmed)
+    painter.setOpacity(opacity)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.end()
+    return dimmed
 
 
 def _select_on_focus(spin: QSpinBox) -> QSpinBox:
@@ -731,7 +753,14 @@ class MainWindow(QWidget):
 
         # --- 左: 人物 ---------------------------------------------------
         self.person_list = QListWidget()
+        # **ドラッグで並べ替えられるようにする。** よく割り当てる人物を上に
+        # 置けないと、人数が増えるほど毎回探すことになる。
+        self.person_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.person_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.person_list.currentItemChanged.connect(self._on_person_selected)
+        # 並べ替えは「落とした時点」で確定する。**保存ボタンを置かない**
+        # （押し忘れたぶんが黙って消える）。
+        self.person_list.model().rowsMoved.connect(self._save_person_order)
         self.add_person_button = QPushButton("人物追加")
         self.edit_person_button = QPushButton("編集")
         self.delete_person_button = QPushButton("削除")
@@ -804,6 +833,22 @@ class MainWindow(QWidget):
         self.preview_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.preview_info.setStyleSheet("padding: 4px;")
 
+        # 登録が済んだことを知らせる札。**顔写真に重ねて中央に出す。**
+        # 画像の外に置くと、見ているところ（顔）から目を離さないと気づけない。
+        self.preview_status = QLabel("", self.preview_label)
+        self.preview_status.setAlignment(Qt.AlignCenter)
+        self.preview_status.setStyleSheet(
+            "padding: 10px 18px; font-size: 16px; font-weight: bold;"
+            " color: #1b5e20; background: rgba(232, 245, 233, 235);"
+            " border: 2px solid #2e7d32; border-radius: 6px;"
+        )
+        self.preview_status.hide()
+        # `preview_label` の中央に置く。レイアウトに入れると、画像は
+        # `QLabel` 自身が描き、子ウィジェットがその上に載る。
+        status_layout = QVBoxLayout(self.preview_label)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.addWidget(self.preview_status, 0, Qt.AlignCenter)
+
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(0, 0, 0, 0)
@@ -859,6 +904,19 @@ class MainWindow(QWidget):
         if self.person_list.currentItem() is None:
             self.details_label.setText("人物を選択してください。")
             self._refresh_preview_info()
+
+    def _save_person_order(self, *args) -> None:
+        """画面に並んでいる順を、そのまま `display_order` に書く。
+
+        **一覧に出ている全員を渡す。** 一部だけ書くと、書かなかった人物の
+        順序が古いままになって並びが混ざる。
+        """
+        person_ids = [
+            self.person_list.item(row).data(Qt.UserRole)["id"]
+            for row in range(self.person_list.count())
+        ]
+        if person_ids:
+            db.set_person_order(self.connection, person_ids)
 
     def _current_person(self) -> Optional[dict]:
         item = self.person_list.currentItem()
@@ -1010,6 +1068,25 @@ class MainWindow(QWidget):
     def _selected_face_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
 
+    def _mark_preview_done(self, message: str) -> None:
+        """プレビューを「済んだ」表示にする。帯を出し、顔写真を薄くする。
+
+        **顔は一覧から消えるのに、プレビューだけが残る。** 割り当てても除外しても
+        同じで、そのままだと「まだ選んでいる」ように見え、**同じ顔をもう一度
+        登録しようとする。**
+        """
+        self.preview_status.setText(message)
+        self.preview_status.show()
+        pixmap = self.preview_label.pixmap()
+        if pixmap is not None and not pixmap.isNull():
+            self.preview_label.setPixmap(dim_pixmap(pixmap))
+
+    def _clear_preview_done(self) -> None:
+        """「済んだ」表示を解く。**次の顔を選んだら必ず通る。**"""
+        if self.preview_status.isVisible() or self.preview_status.text():
+            self.preview_status.clear()
+            self.preview_status.hide()
+
     def _selected_face_and_media(self):
         """プレビューの対象。選択が無ければ ``(None, None)``。
 
@@ -1043,6 +1120,9 @@ class MainWindow(QWidget):
         record, media = self._selected_face_and_media()
         if not record or not media:
             return
+        # 別の顔を選んだのだから、前の「完了」は消す。**残すと、いま選んでいる
+        # 顔が済んでいるように見える。**
+        self._clear_preview_done()
         # 情報は画像より先に出す。**元写真が開けないときこそ、
         # どのフォルダのどのファイルなのかが要る。**
         self.preview_info.setText(
@@ -1104,6 +1184,7 @@ class MainWindow(QWidget):
         self.assign_faces(face_ids, person["id"], dialog.age())
         self.reload_faces()
         self._on_person_selected(self.person_list.currentItem())
+        self._mark_preview_done(f"完了 — {len(face_ids)} 件を {person['name']} に登録しました")
 
     def _reject_selected(self):
         face_ids = self._selected_face_ids()
@@ -1111,6 +1192,8 @@ class MainWindow(QWidget):
             return
         db.reject_faces(self.connection, face_ids)
         self.reload_faces()
+        # 除外でも顔は一覧から消える。**割り当てと同じ症状**なので同じ扱いにする。
+        self._mark_preview_done(f"完了 — {len(face_ids)} 件を除外しました")
 
 
 def main() -> None:
