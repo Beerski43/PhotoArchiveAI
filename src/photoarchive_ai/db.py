@@ -128,19 +128,87 @@ def has_any_table(connection: sqlite3.Connection) -> bool:
     return row[0] > 0
 
 
+def expected_columns() -> Dict[str, set]:
+    """現行スキーマが持つ列を、``SCHEMA`` から実際に作って調べる。
+
+    列の一覧をここに書き写すと、**スキーマを変えたときに片方だけ古くなる。**
+    空のデータベースに一度作って読み取れば、正本は ``SCHEMA`` のままになる。
+    """
+    probe = sqlite3.connect(":memory:")
+    try:
+        for statement in SCHEMA:
+            probe.execute(statement)
+        return {
+            table: {row[1] for row in probe.execute(f"PRAGMA table_info({table})")}
+            for table in KNOWN_TABLES
+            if probe.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()[0]
+        }
+    finally:
+        probe.close()
+
+
+def missing_columns(connection: sqlite3.Connection) -> Dict[str, List[str]]:
+    """現行スキーマが要求する列のうち、このDBに**実際に無い**もの。
+
+    **版の数字を信じない。** ``CREATE TABLE IF NOT EXISTS`` は既存のテーブルを
+    変えないので、列が足りないまま版だけ進んだデータベースがありうる
+    （実際に起きた。`create_tables` が移行していないDBに版を刻んでいた）。
+    数字ではなく形を見れば、その状態を検出して直せる。
+    """
+    gaps: Dict[str, List[str]] = {}
+    for table, columns in expected_columns().items():
+        present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if not present:
+            # まだ無いテーブルは `create_tables` が作る。欠けとは数えない。
+            continue
+        missing = sorted(columns - present)
+        if missing:
+            gaps[table] = missing
+    return gaps
+
+
+def describe_missing_columns(gaps: Dict[str, List[str]]) -> str:
+    """欠けている列を `Person.birth_date` の形で並べる。"""
+    return ", ".join(
+        f"{table}.{column}" for table, columns in sorted(gaps.items()) for column in columns
+    )
+
+
+MIGRATE_HINT = "`photoarchive migrate --db <データベース>` を実行してください。"
+
+
 def create_tables(connection: sqlite3.Connection) -> None:
-    """最新スキーマを用意する。旧スキーマのDBは移行を促して中断する。"""
+    """最新スキーマを用意する。旧スキーマのDBは移行を促して中断する。
+
+    **すでにテーブルがあるDBには、版を刻まない。** ``SCHEMA`` は
+    ``CREATE TABLE IF NOT EXISTS`` なので既存のテーブルを変えず、それでいて
+    最後に ``PRAGMA user_version`` を書くと、**中身が古いまま「移行済み」の
+    印だけが付く。** そうなると `migrate` が「すでに最新です」と言って
+    何もしなくなり、**欠けた列は二度と足されない**（実データで発生）。
+    """
     version = get_schema_version(connection)
-    if version == 0 and has_any_table(connection):
-        raise SchemaVersionError(
-            "データベースのスキーマが古い形式です。"
-            "`photoarchive migrate --db <データベース>` を実行してください。"
-        )
     if version > SCHEMA_VERSION:
         raise SchemaVersionError(
             f"データベースのスキーマ({version})がこのアプリケーション"
             f"({SCHEMA_VERSION})より新しいため開けません。"
         )
+    if has_any_table(connection):
+        if version < SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"データベースのスキーマ({version})が古い形式です"
+                f"（このアプリケーションは {SCHEMA_VERSION}）。{MIGRATE_HINT}"
+            )
+        gaps = missing_columns(connection)
+        if gaps:
+            raise SchemaVersionError(
+                f"データベースの版は {version} ですが、実際の形が追いついていません"
+                f"（欠けている列: {describe_missing_columns(gaps)}）。{MIGRATE_HINT}"
+            )
+    # ここまで来たDBだけが、作成と版の記録を受けてよい。**足りないテーブルは
+    # 作る**（移行の途中でテーブルを組み直す経路が、ここで `Face` を作る）。
     cursor = connection.cursor()
     for statement in SCHEMA:
         cursor.execute(statement)

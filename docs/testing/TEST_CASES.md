@@ -33,6 +33,8 @@
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
 | `test_scanner_incremental.py::test_an_error_from_one_file_is_not_reported_for_the_next` | 直近のエラーが大域変数に残り、無関係なファイルに付いた |
 | `test_migration.py::test_a_version_2_database_keeps_every_face_when_migrated` | **v2 のDBを v1 の再構築経路へ流すと、顔 58,606 件と数時間ぶんのスキャンが消える**（Issue #48 で版ごとの分岐を追加） |
+| `test_migration.py::test_opening_an_old_database_does_not_stamp_it_as_current` | **移行していないDBにアプリが版の印だけを刻んだ。** `migrate` が「すでに最新です」と答えて何もしなくなり、欠けた列が二度と足されない。実データで発生し、GUI で入れた誕生日が保存されなかった |
+| `test_migration.py::test_a_database_whose_version_ran_ahead_is_still_repaired` | 上の状態になったDBを、版ではなく**実際の列**を見て直せること |
 | `test_scanner_incremental.py::test_a_worker_writes_its_errors_to_the_log_file` | `fork` をやめた副作用で、並列時にワーカーのログがファイルへ1行も残らなくなった（既定の経路） |
 | `test_scanner_incremental.py::test_the_workers_are_not_started_by_forking` | **並列スキャンが実データのDBを壊した。** fork した子が親の SQLite 接続を引き継ぎ、`row N missing from index idx_media_hash`（Issue #35） |
 | `test_scanner_incremental.py::test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 上と同じ原因を、子が親の状態を引き継いでいないかという側から押さえる |
@@ -181,7 +183,7 @@
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 | `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
 
-### `test_gui_person.py` — 人物編集とプレビュー（38件）
+### `test_gui_person.py` — 人物編集とプレビュー（40件）
 
 | テスト | 内容 |
 |---|---|
@@ -215,7 +217,9 @@
 | `test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated` | 計算できないときは行そのものを出さない |
 | `test_the_age_line_follows_the_person_selection` | 人物を選び直すと年齢の行が変わる。**元写真は読み直さない**（NFS 律速） |
 | `test_a_birth_date_can_be_registered_and_cleared` | 誕生日の登録と、空欄での未設定へ戻し |
-| `test_an_unreadable_birth_date_is_rejected` | **年月日まで必須。** `2011` や `2011-05` を受け取らない |
+| `test_a_partly_filled_birth_date_is_rejected` | **年月日まで必須。** 一部だけの入力と、暦に無い日とで言うことを変える |
+| `test_the_birth_date_is_built_from_three_numbers` | 年・月・日の3つから組み立て、保存済みの値を3つに割る |
+| `test_typing_a_birth_date_straight_from_the_keyboard` | `--` の入った欄でも打鍵で置き換わる |
 | `test_the_edit_dialog_opens_with_the_stored_birth_date` | 編集ダイアログが今の誕生日で開く |
 | `test_the_person_dialog_round_trips_a_birth_date` | 実物のダイアログが誕生日を持ち帰る |
 | `test_the_person_details_show_the_birth_date` | 人物詳細に誕生日が出る（年齢が出ない理由が分かる） |
@@ -286,7 +290,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（17件）
+### `test_migration.py` — スキーマの移行（20件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -294,6 +298,10 @@ editable install のときだけ出すこと（通常のインストールでは
 **v2 → v3**: `Person.birth_date` を足すだけで、**顔・解析結果・検出済みの状態が
 1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
 案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
+
+**版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
+すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
+導かれていること。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、

@@ -24,7 +24,7 @@ def qt_app():
     yield app
 
 
-def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ", "")):
+def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ", (0, 0, 0))):
     """`PersonDialog` の代わり。開いたときの初期値を記録する。"""
 
     class _FakeDialog:
@@ -96,6 +96,7 @@ def test_editing_a_person_saves_the_new_values(window, monkeypatch):
 
     # 編集ダイアログは今の値で開く
     assert dialog.opened_with == ("父", "father", "元のメモ", "")
+    # 誕生日は文字列のまま渡す。ダイアログが年・月・日に割る
     person = db.list_persons(window.connection)[0]
     assert (person["name"], person["relation"], person["memo"]) == (
         "新しい名前",
@@ -119,7 +120,7 @@ def test_an_empty_name_is_rejected(window, monkeypatch):
     monkeypatch.setattr(
         photoarchive_gui,
         "PersonDialog",
-        _make_dialog_class(accepted=True, values=("", "", "", "")),
+        _make_dialog_class(accepted=True, values=("", "", "", (0, 0, 0))),
     )
     window.person_list.setCurrentRow(0)
 
@@ -529,18 +530,18 @@ def test_a_birth_date_can_be_registered_and_cleared(window, monkeypatch):
     monkeypatch.setattr(
         photoarchive_gui,
         "PersonDialog",
-        _make_dialog_class(accepted=True, values=("父", "father", "", " 1980-01-02 ")),
+        _make_dialog_class(accepted=True, values=("父", "father", "", (1980, 1, 2))),
     )
     window.person_list.setCurrentRow(0)
     window._edit_person()
 
     assert db.list_persons(window.connection)[0]["birth_date"] == "1980-01-02"
 
-    # 空欄は「未設定へ戻す」
+    # 3つとも空なら「未設定へ戻す」
     monkeypatch.setattr(
         photoarchive_gui,
         "PersonDialog",
-        _make_dialog_class(accepted=True, values=("父", "father", "", "")),
+        _make_dialog_class(accepted=True, values=("父", "father", "", (0, 0, 0))),
     )
     window.person_list.setCurrentRow(0)
     window._edit_person()
@@ -548,27 +549,40 @@ def test_a_birth_date_can_be_registered_and_cleared(window, monkeypatch):
     assert db.list_persons(window.connection)[0]["birth_date"] is None
 
 
-def test_an_unreadable_birth_date_is_rejected(window, monkeypatch):
+def test_a_partly_filled_birth_date_is_rejected(window, monkeypatch):
     """**年月日まで必須**（Issue #48 の判断3）。月日の分からない誕生日から
     年齢は出せないので、中途半端に持たない。"""
     warned = []
     monkeypatch.setattr(
         photoarchive_gui.QMessageBox, "warning", lambda *args: warned.append(args[2])
     )
-    for text in ("1980", "1980-01", "1980/01/02", "きのう"):
+    for parts in ((1980, 0, 0), (1980, 1, 0), (0, 1, 2), (1980, 2, 30)):
         monkeypatch.setattr(
             photoarchive_gui,
             "PersonDialog",
-            _make_dialog_class(accepted=True, values=("父", "father", "", text)),
+            _make_dialog_class(accepted=True, values=("父", "father", "", parts)),
         )
         window.person_list.setCurrentRow(0)
         window._edit_person()
 
     assert len(warned) == 4
-    assert all("YYYY-MM-DD" in message for message in warned)
+    # 一部だけ入っている場合と、暦に無い日とで、言うことを変える
+    assert "すべて入れてください" in warned[0]
+    assert "存在しない日付" in warned[3]
     # 何も保存されていない（名前も誕生日も元のまま）
     person = db.list_persons(window.connection)[0]
     assert person["birth_date"] is None and person["name"] == "父"
+
+
+def test_the_birth_date_is_built_from_three_numbers():
+    """年・月・日を別々に受け取る。**区切り文字を間違えようがない。**"""
+    assert photoarchive_gui.build_birth_date(2011, 5, 3) == "2011-05-03"
+    # 3つとも未入力なら未設定
+    assert photoarchive_gui.build_birth_date(0, 0, 0) is None
+    # 分解も同じ形に戻る
+    assert photoarchive_gui.split_birth_date("2011-05-03") == (2011, 5, 3)
+    assert photoarchive_gui.split_birth_date(None) == (0, 0, 0)
+    assert photoarchive_gui.split_birth_date("0000-00-00") == (0, 0, 0)
 
 
 def test_the_edit_dialog_opens_with_the_stored_birth_date(window, monkeypatch):
@@ -591,12 +605,42 @@ def test_the_edit_dialog_opens_with_the_stored_birth_date(window, monkeypatch):
 
 
 def test_the_person_dialog_round_trips_a_birth_date(qt_app):
-    """実物のダイアログが誕生日を持ち帰ること（フェイクだけでは確かめられない）。"""
+    """実物のダイアログが誕生日を持ち帰ること（フェイクだけでは確かめられない）。
+
+    **保存済みの誕生日は、年・月・日の欄に割って表示する。**
+    """
     dialog = photoarchive_gui.PersonDialog(
         name="なつ", relation="daughter", memo="メモ", birth_date="2011-05-03"
     )
 
-    assert dialog.values() == ("なつ", "daughter", "メモ", "2011-05-03")
+    assert (dialog.birth_year.value(), dialog.birth_month.value()) == (2011, 5)
+    assert dialog.birth_day.value() == 3
+    assert dialog.values() == ("なつ", "daughter", "メモ", (2011, 5, 3))
+
+    # 未設定の人物は3つとも空で開く
+    empty = photoarchive_gui.PersonDialog(name="父")
+    assert empty.values()[3] == (0, 0, 0)
+    dialog.close()
+    empty.close()
+
+
+def test_typing_a_birth_date_straight_from_the_keyboard(qt_app):
+    """「--」の文字が入った欄でも、打鍵で置き換わること。
+
+    年齢の入力と同じ作り。全選択しておかないと ▲ を押すしかなくなる。
+    """
+    from PySide6.QtTest import QTest
+
+    dialog = photoarchive_gui.PersonDialog(name="なつ")
+    dialog.show()
+    qt_app.processEvents()
+
+    dialog.birth_year.setFocus()
+    QTest.keyClicks(dialog.birth_year, "2011")
+    dialog.birth_month.setFocus()
+    QTest.keyClicks(dialog.birth_month, "5")
+
+    assert dialog.values()[3][:2] == (2011, 5)
     dialog.close()
 
 

@@ -104,21 +104,46 @@ def format_age(age: Optional[int]) -> Optional[str]:
     return "誕生前" if age < 0 else f"{age}歳"
 
 
-def parse_birth_date_input(text: Optional[str]) -> Optional[str]:
-    """入力欄の文字列を、DB に入れる `YYYY-MM-DD` にする。空欄は未設定(``None``)。
+#: 年・月・日の入力欄で「未入力」を表す値。`QSpinBox` の最小値に置く。
+BIRTH_DATE_UNSET = 0
 
-    **年月日まで必須。** `date.fromisoformat` は `2011` や `2011-05` を
-    受け取らないので、部分的な日付はここで落ちる。古い写真で正確な日付が
-    分からないことはあるが、**月日の分からない誕生日から年齢は出せない**ので、
-    中途半端に持たない。
+
+def build_birth_date(year: int, month: int, day: int) -> Optional[str]:
+    """年・月・日の3つの入力から、DB に入れる `YYYY-MM-DD` を作る。
+
+    3つとも未入力なら未設定(``None``)。
+
+    **年月日まで必須。** 古い写真では正確な日付が分からないことがあるが、
+    **月日の分からない誕生日から年齢は出せない**ので、中途半端に持たない。
 
     Raises:
-        ValueError: 年月日として読めないとき。
+        ValueError: 一部だけ入っているとき、または存在しない日付のとき。
+            画面にそのまま出す文面を持たせる。
     """
-    text = (text or "").strip()
-    if not text:
+    parts = (year, month, day)
+    if all(part == BIRTH_DATE_UNSET for part in parts):
         return None
-    return date.fromisoformat(text).isoformat()
+    if any(part == BIRTH_DATE_UNSET for part in parts):
+        raise ValueError(
+            "誕生日は年・月・日をすべて入れてください。"
+            "\n（3つとも空にすれば未設定になります）"
+        )
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        # 2月30日のような、暦に無い日。月と日を入れ替えた打ち間違いで起きる。
+        raise ValueError(f"{year}年{month}月{day}日 は存在しない日付です。") from None
+
+
+def split_birth_date(value: Optional[str]) -> tuple:
+    """DB の `YYYY-MM-DD` を、入力欄に入れる (年, 月, 日) にする。
+
+    未設定や読めない値は、3つとも未入力として返す。
+    """
+    parsed = parse_date(value)
+    if parsed is None:
+        return (BIRTH_DATE_UNSET, BIRTH_DATE_UNSET, BIRTH_DATE_UNSET)
+    return (parsed.year, parsed.month, parsed.day)
 
 
 def suggested_age(birth_date: Optional[str], shooting_dates: List[str]) -> Optional[int]:
@@ -247,31 +272,67 @@ class PersonDialog(QDialog):
         self.name_input = QLineEdit(name)
         self.relation_input = QLineEdit(relation)
         self.memo_input = QTextEdit(memo)
-        # 未設定を表せないので `QDateEdit` は使わない。空欄＝未設定。
-        self.birth_date_input = QLineEdit(birth_date or "")
-        self.birth_date_input.setPlaceholderText("YYYY-MM-DD（任意）")
         self.ok_button = QPushButton("OK")
         self.ok_button.clicked.connect(self.accept)
 
         form = QFormLayout()
         form.addRow("名前", self.name_input)
         form.addRow("続柄", self.relation_input)
-        form.addRow("誕生日", self.birth_date_input)
+        form.addRow("誕生日", self._build_birth_date_row(birth_date))
         form.addRow("メモ", self.memo_input)
         form.addWidget(self.ok_button)
         self.setLayout(form)
 
-    def values(self):
-        """入力された 名前 / 続柄 / メモ / 誕生日（**文字列のまま**）。
+    def _build_birth_date_row(self, birth_date) -> QWidget:
+        """`[2011]年 [5]月 [3]日` の入力欄。
 
-        誕生日の検証は呼び出し側で行う。名前が空のときと同じ場所で
-        まとめて弾きたいため。
+        1つの欄に `YYYY-MM-DD` と打たせると、区切りの書き方（`/` か `-` か）を
+        間違えただけで弾かれる。**年・月・日に分ければ、書式を間違えようがない。**
+
+        `QDateEdit` は「未設定」を表せないので使わない。3つとも空（`0`）が未設定。
+        """
+        year, month, day = split_birth_date(birth_date)
+        self.birth_year = QSpinBox()
+        self.birth_year.setRange(BIRTH_DATE_UNSET, 2200)
+        self.birth_year.setValue(year)
+        self.birth_month = QSpinBox()
+        self.birth_month.setRange(BIRTH_DATE_UNSET, 12)
+        self.birth_month.setValue(month)
+        self.birth_day = QSpinBox()
+        self.birth_day.setRange(BIRTH_DATE_UNSET, 31)
+        self.birth_day.setValue(day)
+
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for spin, unit, width in (
+            (self.birth_year, "年", 80),
+            (self.birth_month, "月", 60),
+            (self.birth_day, "日", 60),
+        ):
+            # 未入力であることが分かるようにする。0 のままだと「0年0月0日」を
+            # 入れたように見える。
+            spin.setSpecialValueText("--")
+            spin.setFixedWidth(width)
+            # 「--」の文字が入った欄は、全選択しておかないと打鍵で置き換わらない
+            # （年齢の入力と同じ。▲を押すしかなくなる）。
+            spin.focusInEvent = _make_select_all_on_focus(spin)
+            layout.addWidget(spin)
+            layout.addWidget(QLabel(unit))
+        layout.addStretch(1)
+        return row
+
+    def values(self):
+        """入力された 名前 / 続柄 / メモ / 誕生日 `(年, 月, 日)`。
+
+        誕生日は**打たれた数字のまま**返す。組み立てと検証は呼び出し側で行う。
+        名前が空のときと同じ場所でまとめて弾きたいため。
         """
         return (
             self.name_input.text().strip(),
             self.relation_input.text().strip(),
             self.memo_input.toPlainText().strip(),
-            self.birth_date_input.text().strip(),
+            (self.birth_year.value(), self.birth_month.value(), self.birth_day.value()),
         )
 
 
@@ -685,19 +746,14 @@ class MainWindow(QWidget):
         名前の検証と誕生日の検証を同じ場所に置く。片方がダイアログの中、
         もう片方が外にあると、**どこで弾かれたのかを追うのに両方読む**ことになる。
         """
-        name, relation, memo, birth_date_text = dialog.values()
+        name, relation, memo, birth_parts = dialog.values()
         if not name:
             QMessageBox.warning(self, "入力エラー", "名前は必須です。")
             return None
         try:
-            birth_date = parse_birth_date_input(birth_date_text)
-        except ValueError:
-            QMessageBox.warning(
-                self,
-                "入力エラー",
-                "誕生日は YYYY-MM-DD の形で、年月日まで入れてください"
-                f"（入力: {birth_date_text}）。\n空欄なら未設定になります。",
-            )
+            birth_date = build_birth_date(*birth_parts)
+        except ValueError as error:
+            QMessageBox.warning(self, "入力エラー", str(error))
             return None
         return name, relation, memo, birth_date
 
@@ -937,6 +993,12 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    window = MainWindow(db_path, source_root=source_root)
+    try:
+        window = MainWindow(db_path, source_root=source_root)
+    except db.SchemaVersionError as error:
+        # **黙って落とさない。** GUI は端末を見ずに起動されることがあるので、
+        # 移行が要ることを画面にも出す（CLI は `SystemExit` で同じ文面を出す）。
+        QMessageBox.critical(None, "データベースを開けません", str(error))
+        raise SystemExit(str(error)) from error
     window.show()
     sys.exit(app.exec())

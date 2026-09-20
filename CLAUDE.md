@@ -340,6 +340,13 @@ select        ルールに従って抽出しコピー
   ログファイルに1行も残らない（`scanner._start_worker` が
   `logging_setup.setup_logging` を呼ぶ）。テストはフェイクを `worker_initializer`
   で子へ入れる (`tests/fakes.py`)。
+- **`PRAGMA user_version` を、移行していないDBに刻まない。** スキーマは
+  `CREATE TABLE IF NOT EXISTS` なので既存のテーブルを変えない。それなのに版だけ
+  記録すると、**中身は古いまま「移行済み」の印が付く。** そうなると `migrate` が
+  「すでに最新です」と答えて何もせず、**欠けた列は二度と足されない**（実データで
+  発生。GUI で入れた誕生日が黙って保存されなかった）。**移行が要るかどうかは、
+  版と実際の列の両方で見る**（`db.missing_columns`）。列の一覧は `SCHEMA` から
+  作って読み取ること。書き写すと、スキーマを変えたときに片方だけ古くなる。
 - **`db.assign_faces` の `age` は `KEEP_AGE` が既定。** `None` は
   「未設定に戻す」という指示であって「触らない」ではない。
 - **`--allow-missing-embeddings` で入れたメディアは `detector_version` を書かない。**

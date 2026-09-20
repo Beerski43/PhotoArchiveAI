@@ -127,15 +127,22 @@ def describe_migration(database_path: str) -> Dict[str, Any]:
 
 
 def needs_migration(database_path: str) -> bool:
+    """移行が要るか。**版の数字だけでなく、実際の形も見る。**
+
+    列が足りないまま版だけ進んだデータベースがありうる（`db.missing_columns`）。
+    数字しか見ないと、その状態を「最新」と答えて**直す手立てが無くなる。**
+    """
     path = Path(database_path)
     if not path.exists():
         return False
     connection = sqlite3.connect(str(path))
     try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version >= db.SCHEMA_VERSION:
+        if not (_table_names(connection) & set(db.KNOWN_TABLES)):
             return False
-        return bool(_table_names(connection) & set(db.KNOWN_TABLES))
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version < db.SCHEMA_VERSION:
+            return True
+        return bool(db.missing_columns(connection))
     finally:
         connection.close()
 
@@ -157,6 +164,15 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
         if "birth_date" not in columns:
             connection.execute("ALTER TABLE Person ADD COLUMN birth_date TEXT")
             emit("Person に birth_date を追加しました（既存の行は未設定）。")
+
+        remaining = db.missing_columns(connection)
+        if remaining:
+            # **直せなかった列があるまま版を刻まない。** 刻むと `migrate` が
+            # 次から「すでに最新です」と言い、二度と直らなくなる。
+            raise RuntimeError(
+                "移行できない列が残っています: "
+                f"{db.describe_missing_columns(remaining)}"
+            )
 
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
@@ -205,13 +221,21 @@ def migrate_database(
     try:
         version = int(probe.execute("PRAGMA user_version").fetchone()[0])
         tables = _table_names(probe)
+        gaps = db.missing_columns(probe) if tables & set(db.KNOWN_TABLES) else {}
     finally:
         probe.close()
 
-    if version >= db.SCHEMA_VERSION:
+    if version >= db.SCHEMA_VERSION and not gaps:
         emit("スキーマはすでに最新です。移行は不要です。")
         result["schema_version"] = version
         return result
+
+    if gaps and version >= db.SCHEMA_VERSION:
+        # **版だけ進んでいて、形が追いついていない。** 列を足して辻褄を合わせる。
+        emit(
+            f"版は {version} ですが、列が足りていません"
+            f"（{db.describe_missing_columns(gaps)}）。足りない列を追加します。"
+        )
 
     if not (tables & set(db.KNOWN_TABLES)):
         # 空のファイル。単に最新スキーマを作る。
@@ -235,6 +259,7 @@ def migrate_database(
     if version >= 2:
         # v2 以降は列を足すだけ。**顔も解析結果も触らない。**
         # v1 の再構築経路へ流すと、使えるはずの顔が消える。
+        # 版だけ進んで形が古いDBもここへ来る（版は 2 以上なので再構築しない）。
         after = _add_missing_columns(str(path), emit)
         result.update(migrated=True, schema_version=db.SCHEMA_VERSION, after=after)
         return result
