@@ -469,3 +469,98 @@ def test_setting_the_age_of_many_faces_commits_once(window, monkeypatch):
 
     assert sum("COMMIT" in s.upper() for s in statements) == 1
     assert all(row["age"] == 7 for row in db.list_faces(window.connection, person_id=person_id))
+
+
+# ---------------------------------------------------------------------------
+# 除外の取り消し
+# ---------------------------------------------------------------------------
+
+
+def test_a_rejected_face_can_be_put_back_to_unassigned(window):
+    """**除外を取り消せること。**
+
+    除外した顔は「割り当て済みを確認」に出てこない（あちらは人物で絞るが、
+    除外した顔は `person_id` を持たない）。そのため、いったん除外すると
+    **誰かに割り当てる以外に戻す手段が無かった。** 「決めきれないので保留に
+    戻す」ができない。
+    """
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    window.face_list.selectAll()
+    window._reject_selected()
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == len(face_ids)
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+    window._unassign_selected()
+
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == 0
+    assert db.count_faces(window.connection, unassigned=True) == len(face_ids)
+    assert all(
+        db.get_face(window.connection, face_id)["assign_source"] is None
+        for face_id in face_ids
+    )
+
+
+def test_an_auto_assignment_can_also_be_put_back(window):
+    """自動で付いた割り当ても、同じボタンで外せる。"""
+    person_id = db.add_person(window.connection, "父")
+    face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
+    db.assign_faces(window.connection, face_ids, person_id, db.ASSIGN_AUTO, assign_score=50.0)
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_AUTO)
+    window._reset_page()
+    window.face_list.selectAll()
+    window._unassign_selected()
+
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_AUTO) == 0
+    assert db.count_faces(window.connection, unassigned=True) == len(face_ids)
+
+
+def test_the_unassign_button_is_disabled_while_showing_unassigned_faces(window):
+    """**隠さずに押せなくする。** 隠すと「そんな操作は無い」と思われる。
+
+    戻す先が無いときに押せると、何も起きない操作を押させることになる。
+    """
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_UNASSIGNED)
+    window._reset_page()
+    assert window.unassign_button.isEnabled() is False
+    assert "戻す先がありません" in window.unassign_button.toolTip()
+
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    assert window.unassign_button.isEnabled() is True
+    assert "未割当に戻します" in window.unassign_button.toolTip()
+
+
+def test_putting_a_face_back_says_done(window):
+    """戻したあとも、プレビューに「完了」を出して薄くする（他の操作と同じ）。"""
+    window.face_list.selectAll()
+    window._reject_selected()
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+
+    window._unassign_selected()
+
+    assert "未割当に戻しました" in window.preview_status.text()
+
+
+def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
+    """戻すときも、一覧の作り直しで元写真を読み直さない（割り当てと同じ）。"""
+    reads = []
+    monkeypatch.setattr(
+        photoarchive_gui.face,
+        "load_face_image_bytes",
+        lambda path, bbox: reads.append(path) or b"",
+    )
+    window.face_list.selectAll()
+    window._reject_selected()
+    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+    window._reset_page()
+    window.face_list.selectAll()
+    reads.clear()
+
+    window._unassign_selected()
+
+    assert reads == []
