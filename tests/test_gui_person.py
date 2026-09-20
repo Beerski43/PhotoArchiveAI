@@ -328,6 +328,29 @@ def test_a_broken_exif_date_is_treated_as_missing():
     assert "0000" not in info
 
 
+def test_another_shape_of_broken_exif_is_also_treated_as_missing():
+    """**先頭の文字だけを見て弾かない。**
+
+    実データには `TTTT-TT-TTTTT:TT:TT` を書くカメラもいた（Media 67件）。
+    `0000` で始まるかだけを見ていたので素通りし、**画面にそのまま出ていた。**
+    日付として読めるかどうかで判断する。
+    """
+    for broken in ("TTTT-TT-TTTTT:TT:TT", "いつか", "2019-13-01T00:00:00"):
+        info = photoarchive_gui.format_media_info(
+            {
+                "path": "/photo/2019/a.jpg",
+                "shooting_date": broken,
+                "created_time": "2019-08-15T12:00:00",
+            },
+            source_root="/photo",
+        )
+
+        assert "撮影日時: 不明（EXIFなし）" in info, broken
+        assert broken not in info
+        # 手がかりとしてファイル日時に落ちること
+        assert "ファイル日時: 2019-08-15 12:00:00" in info, broken
+
+
 def test_a_photo_directly_under_the_source_root_says_so():
     """`フォルダ: .` では何のことか読めない。"""
     info = photoarchive_gui.format_media_info(

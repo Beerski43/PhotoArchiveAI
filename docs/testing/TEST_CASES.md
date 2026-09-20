@@ -22,6 +22,8 @@
 | `test_matcher.py::test_match_leaves_distant_faces_unassigned` | 閾値判定が無く、どんなに遠い顔も必ず誰かに割り当てられた（Issue #22） |
 | `test_matcher.py::test_dry_run_is_not_blinded_by_a_previous_match` | `--dry-run` が2回目以降ほぼ空振りし、閾値を決める目安にならなかった |
 | `test_gui_person.py::test_a_broken_exif_date_is_treated_as_missing` | EXIF が `0000:00:00` の写真で、撮影日時を持っているように見え、ファイル日時のフォールバックまで消えた |
+| `test_gui_person.py::test_another_shape_of_broken_exif_is_also_treated_as_missing` | **`0000` で始まるかだけを見ていた。** 別の壊れ方（`TTTT-TT-TTTTT:TT:TT`、実データ Media 67件）が素通りし、撮影日時としてそのまま画面に出ていた |
+| `test_db.py::test_a_broken_exif_date_does_not_take_over_the_newest_page` | **撮影日時の新しい順にすると、壊れた EXIF が1ページ目をまるごと占領する**（`T` は数字より大きい。実データで顔123件） |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
@@ -72,6 +74,13 @@
 | `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
 | `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
 | `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
+| `test_faces_can_be_listed_newest_shot_first` | 撮影日時の新しい順。**日時の無い顔は最後** |
+| `test_faces_can_be_listed_youngest_age_first` | 年齢の若い順。**未設定は最後**（SQLite の NULL は最小） |
+| `test_the_default_order_is_still_the_quality_score` | **既定を変えない**（`match` と `evaluate` も通る） |
+| `test_every_order_honours_the_same_filters` | 絞り込みを2通り書かない。どの並びでも同じ条件が効く |
+| `test_pagination_does_not_repeat_or_skip_a_face` | 撮影日時が同じ顔が並んでも、ページをまたいで重複・欠落しない |
+| `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
+| `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
@@ -171,7 +180,6 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
-### `test_gui_migration.py` — 起動時の移行（7件）
 
 | テスト | 内容 |
 |---|---|
@@ -183,6 +191,7 @@
 | `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
+### `test_gui_migration.py` — 起動時の移行（7件）
 ### `test_gui_assignment.py` — GUI での割り当て（18件）
 
 | テスト | 内容 |
@@ -199,6 +208,9 @@
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 | `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
+
+| `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
+| `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（40件）
 
@@ -220,6 +232,7 @@
 | `test_selecting_a_face_fills_the_information_under_the_preview` | 顔を選ぶと情報欄が埋まる |
 | `test_the_information_is_still_shown_when_the_original_is_gone` | **元写真が開けないときこそ出す**（出どころはDB） |
 | `test_a_broken_exif_date_is_treated_as_missing` | `0000:00:00` を書くカメラがある（実データ55件）。持っていない扱いにしてファイル日時へ落とす |
+| `test_another_shape_of_broken_exif_is_also_treated_as_missing` | **先頭の文字だけを見て弾かない。** `TTTT-TT-TTTTT:TT:TT` が素通りして画面に出ていた（実データ67件） |
 | `test_a_photo_directly_under_the_source_root_says_so` | `フォルダ: .` では読めない |
 | `test_a_relative_source_root_is_anchored_to_the_settings_file` | **起動した場所で表示が変わらない**（相対の起点は設定ファイル） |
 | `test_an_absolute_source_root_is_left_alone` | 絶対パスと未設定は触らない |

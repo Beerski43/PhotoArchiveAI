@@ -28,6 +28,25 @@ ASSIGN_MANUAL = "manual"
 ASSIGN_AUTO = "auto"
 ASSIGN_REJECTED = "rejected"
 
+#: 「日付として読める撮影日時」だけを取り出す式。読めなければ NULL。
+#:
+#: **壊れた EXIF を「いちばん新しい」として先頭に出さないため。** カメラが
+#: `TTTT-TT-TTTTT:TT:TT` を書くことがあり（実データで Media 67件・顔123件）、
+#: 文字の大小で並べると `T` は数字より大きいので、**新しい順の1ページ目を
+#: まるごと占領する。** `0000-00-00` も同じ理由で外す（こちらは最後に来る）。
+#:
+#: `gui._format_timestamp` が画面で行う判断と同じもの。**片方だけ直さない。**
+#: 並びと表示で「読める」の意味がずれると、日時が出ていない写真が日付の
+#: あるところに紛れる。
+#:
+#: **索引もこの式で張る**（式インデックス）。`ORDER BY` に同じ式を書けば
+#: 索引を順に歩ける。文字列を2か所に書くと綴りがずれて索引が使われなくなるので、
+#: 必ずこの定数を使うこと。
+SHOOTING_DATE_SORT_KEY = (
+    "CASE WHEN shooting_date GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]*'"
+    " AND shooting_date NOT LIKE '0000%' THEN shooting_date END"
+)
+
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS Media ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -86,6 +105,9 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_face_person ON Face(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_face_manual ON Face(person_id) WHERE assign_source = 'manual'",
     "CREATE INDEX IF NOT EXISTS idx_face_unassigned ON Face(quality_score DESC, id) WHERE assign_source IS NULL",
+    # 撮影日時の新しい順に顔を並べるため（§10.4）。**この索引が無いと、ページを
+    # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
+    f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
 ]
 
 KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult")
@@ -472,6 +494,12 @@ def list_persons(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
 # Face
 # ---------------------------------------------------------------------------
 
+#: `list_faces` の並び順。**画面ごとに見たい順序が違う。**
+#: 既定を変えないこと（`match` と `evaluate` もこの関数を通る）。
+ORDER_QUALITY = "quality"
+ORDER_SHOT_DESC = "shooting_desc"
+ORDER_AGE = "age"
+
 FACE_LIST_COLUMNS = (
     "id",
     "media_id",
@@ -565,27 +593,31 @@ def _face_filter(
     unassigned: bool,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    prefix: str = "",
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
     年齢の未設定(NULL)は、範囲を指定しても常に残す。年齢を入れていない顔が
     一覧から消えてしまうと、そもそも年齢を入れられなくなるため。
+
+    ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
+    書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
     """
     clauses: List[str] = []
     params: List[Any] = []
     if unassigned:
-        clauses.append("assign_source IS NULL")
+        clauses.append(f"{prefix}assign_source IS NULL")
     elif assign_source is not None:
-        clauses.append("assign_source = ?")
+        clauses.append(f"{prefix}assign_source = ?")
         params.append(assign_source)
     if person_id is not None:
-        clauses.append("person_id = ?")
+        clauses.append(f"{prefix}person_id = ?")
         params.append(person_id)
     if min_age is not None:
-        clauses.append("(age IS NULL OR age >= ?)")
+        clauses.append(f"({prefix}age IS NULL OR {prefix}age >= ?)")
         params.append(min_age)
     if max_age is not None:
-        clauses.append("(age IS NULL OR age <= ?)")
+        clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
         params.append(max_age)
     if not clauses:
         return "", params
@@ -631,26 +663,73 @@ def list_faces(
     with_thumbnail: bool = False,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    order: str = ORDER_QUALITY,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
     サムネイルBLOBは件数が増えると重いので、``with_thumbnail`` を指定した
-    ときだけ読み出す。並び順は品質スコアの高い順で、割り当てやすい顔が
-    先に出るようにしている。
+    ときだけ読み出す。
+
+    ``order`` で並びを選ぶ。**既定は品質スコアの高い順**（`match` と
+    `evaluate` もこの関数を通るので、既定を変えない）。
+
+    - ``ORDER_QUALITY``: 品質スコアの高い順
+    - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
+    - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
     """
     columns = list(FACE_LIST_COLUMNS)
     if with_thumbnail:
         columns.append("thumbnail")
-    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
-    query = (
-        f"SELECT {','.join(columns)} FROM Face{where}"
-        " ORDER BY quality_score DESC, id ASC"
-    )
+
+    if order == ORDER_SHOT_DESC:
+        query, params = _shooting_date_query(
+            columns, assign_source, person_id, unassigned, min_age, max_age
+        )
+    else:
+        where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+        if order == ORDER_AGE:
+            # **未設定を最後に置く。** SQLite の NULL は最小なので、
+            # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
+            order_by = "age IS NULL ASC, age ASC, id ASC"
+        else:
+            order_by = "quality_score DESC, id ASC"
+        query = f"SELECT {','.join(columns)} FROM Face{where} ORDER BY {order_by}"
+
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
         params = params + [limit, offset]
     rows = connection.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def _shooting_date_query(
+    columns: List[str],
+    assign_source: Optional[str],
+    person_id: Optional[int],
+    unassigned: bool,
+    min_age: Optional[int],
+    max_age: Optional[int],
+) -> Tuple[str, List[Any]]:
+    """撮影日時の新しい順に並べる問い合わせ。
+
+    **`CROSS JOIN` は結合の順序を固定するためのもの**で、直積を作るわけでは
+    ない。SQLite は左の表を外側に固定するので、`idx_media_shooting` を
+    順に歩いて `LIMIT` の分だけ取れる。
+
+    **外すと、ページを送るたびに未割当の顔を全件並べ直す**（実データ
+    58,547 件で 220〜435ms。固定すると1ページ目 0.6ms）。`EXPLAIN QUERY PLAN`
+    に `USE TEMP B-TREE FOR ORDER BY` が出たら、その状態に戻っている。
+    """
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, prefix="f."
+    )
+    selected = ",".join(f"f.{column}" for column in columns)
+    sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
+    query = (
+        f"SELECT {selected} FROM Media m CROSS JOIN Face f ON f.media_id = m.id"
+        f"{where} ORDER BY {sort_key} DESC, f.id ASC"
+    )
+    return query, params
 
 
 def get_face(connection: sqlite3.Connection, face_id: int) -> Optional[Dict[str, Any]]:
