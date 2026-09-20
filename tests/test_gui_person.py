@@ -8,7 +8,8 @@
 import os
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog
 
 from photoarchive_ai import db
@@ -22,6 +23,33 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def qt_app():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+def _average_alpha(pixmap) -> float:
+    """画像の平均アルファ。**薄くなったかを数で見るため。**"""
+    image = pixmap.toImage()
+    points = [
+        (x, y)
+        for x in range(0, max(image.width(), 1), max(image.width() // 8, 1))
+        for y in range(0, max(image.height(), 1), max(image.height() // 8, 1))
+    ]
+    return sum(image.pixelColor(x, y).alpha() for x, y in points) / len(points)
+
+
+def _accepting_age_dialog():
+    """年齢を入れて OK を押す `FaceAgeDialog` の代わり。"""
+
+    class _Dialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def age(self):
+            return 6
+
+    return _Dialog
 
 
 def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ", (0, 0, 0))):
@@ -536,12 +564,13 @@ def test_the_age_line_follows_the_person_selection(window, monkeypatch):
         "load_face_image_bytes",
         lambda path, bbox: reads.append(path) or b"",
     )
-    # 写真は 2017-12-16 撮影（window フィクスチャ）
-    window.person_list.setCurrentRow(0)  # なつ（名前順で先頭）
-    assert window.preview_info.text().splitlines()[-1] == "なつ: 6歳"
-
-    window.person_list.setCurrentRow(1)  # 父
+    # 写真は 2017-12-16 撮影（window フィクスチャ）。
+    # 並びは登録順（`display_order`）なので、先に居た「父」が先頭。
+    window.person_list.setCurrentRow(0)
     assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
+
+    window.person_list.setCurrentRow(1)
+    assert window.preview_info.text().splitlines()[-1] == "なつ: 6歳"
     assert reads == []
 
 
@@ -949,3 +978,196 @@ def test_a_new_person_is_selected_so_the_age_shows_immediately(window, monkeypat
 
     assert window._current_person()["name"] == "なつ"
     assert window.preview_info.text().splitlines()[-1] == "なつ: 6歳"
+
+
+# ---------------------------------------------------------------------------
+# 人物一覧の並べ替え / 登録が済んだことの知らせ
+# ---------------------------------------------------------------------------
+
+
+def test_the_person_order_can_be_changed_and_is_remembered(tmp_path, qt_app):
+    """**並べ替えた順が、開き直しても残ること。**
+
+    毎回リセットされるなら並べ替えられる意味がない。順序は `Person.display_order`
+    に持つ。
+    """
+    database = tmp_path / "order.db"
+    connection = db.ensure_database(str(database))
+    for name in ("あ", "い", "う"):
+        db.add_person(connection, name)
+    connection.close()
+
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        assert [p["name"] for p in db.list_persons(window.connection)] == ["あ", "い", "う"]
+
+        # 「う」を先頭へドラッグしたのと同じこと（モデル経由で rowsMoved が出る）
+        moved = window.person_list.model().moveRow(QModelIndex(), 2, QModelIndex(), 0)
+        assert moved
+
+        assert [p["name"] for p in db.list_persons(window.connection)] == ["う", "あ", "い"]
+    finally:
+        window.connection.close()
+
+    # 開き直しても同じ順
+    reopened = photoarchive_gui.MainWindow(str(database))
+    try:
+        listed = [
+            reopened.person_list.item(row).text().split(" (")[0]
+            for row in range(reopened.person_list.count())
+        ]
+        assert listed == ["う", "あ", "い"]
+    finally:
+        reopened.connection.close()
+
+
+def test_the_person_list_accepts_a_drag(window):
+    """ドラッグで動かせる設定になっていること。**外すと並べ替えられない。**"""
+    assert (
+        window.person_list.dragDropMode()
+        == photoarchive_gui.QListWidget.DragDropMode.InternalMove
+    )
+
+
+def test_a_new_person_goes_to_the_end_of_the_order(tmp_path):
+    """**追加した人物を先頭に割り込ませない。** 並べ替えた結果を崩さない。"""
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        first = db.add_person(connection, "ん")  # 名前順なら最後になる名前
+        second = db.add_person(connection, "あ")
+
+        assert [p["id"] for p in db.list_persons(connection)] == [first, second]
+
+        db.set_person_order(connection, [second, first])
+        third = db.add_person(connection, "い")
+
+        assert [p["id"] for p in db.list_persons(connection)] == [second, first, third]
+    finally:
+        connection.close()
+
+
+def test_a_person_who_was_never_reordered_keeps_the_name_order(tmp_path):
+    """並べ替えたことのない人物（移行してきた行）は、名前順のまま。"""
+    connection = db.ensure_database(str(tmp_path / "order.db"))
+    try:
+        for name in ("う", "あ", "い"):
+            db.add_person(connection, name)
+        # 移行直後を作る（display_order が無い状態）
+        connection.execute("UPDATE Person SET display_order = NULL")
+        connection.commit()
+
+        assert [p["name"] for p in db.list_persons(connection)] == ["あ", "い", "う"]
+
+        # 1人だけ並べ替えると、その人が先頭に来て、残りは名前順で続く
+        target = next(p for p in db.list_persons(connection) if p["name"] == "う")
+        db.set_person_order(connection, [target["id"]])
+
+        assert [p["name"] for p in db.list_persons(connection)] == ["う", "あ", "い"]
+    finally:
+        connection.close()
+
+
+def test_the_preview_says_done_and_fades_after_an_assignment(window, monkeypatch, qt_app):
+    """**割り当てた顔がプレビューに濃いまま残らない。**
+
+    顔は一覧から消えるのにプレビューだけが残ると、「まだ選んでいる」ように見え、
+    同じ顔をもう一度登録しようとする。
+    """
+    window.show()
+    qt_app.processEvents()
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    assert window.preview_status.isVisible() is False
+    before = _average_alpha(window.preview_label.pixmap())
+
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
+    window._assign_selected()
+    qt_app.processEvents()
+
+    assert window.preview_status.isVisible() is True
+    assert window.preview_status.text().startswith("完了")
+    assert "父" in window.preview_status.text()
+    # **顔写真そのものを薄くする**
+    assert _average_alpha(window.preview_label.pixmap()) < before
+    window.hide()
+
+
+def test_the_done_label_sits_on_top_of_the_photo(window, monkeypatch, qt_app):
+    """札は**顔写真に重ねて中央**に置く。画像の外だと目を離さないと気づけない。"""
+    window.show()
+    qt_app.processEvents()
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
+
+    window._assign_selected()
+    qt_app.processEvents()
+
+    assert window.preview_status.parent() is window.preview_label
+    centre = window.preview_status.geometry().center()
+    assert abs(centre.x() - window.preview_label.width() // 2) <= 2
+    assert abs(centre.y() - window.preview_label.height() // 2) <= 2
+    window.hide()
+
+
+def test_choosing_another_face_clears_the_done_label(window, monkeypatch, qt_app):
+    """**次の顔を選んだら消す。** 残ると、いま選んだ顔が済んで見える。"""
+    window.show()
+    qt_app.processEvents()
+    connection = window.connection
+    media_id = db.list_faces(connection, with_thumbnail=False)[0]["media_id"]
+    db.add_face(
+        connection,
+        media_id=media_id,
+        bbox=(0, 40, 40, 0),
+        embedding=[0.0] * 128,
+        embed_version="test",
+        thumbnail=b"",
+    )
+    connection.commit()
+    window.reload_faces()
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
+    window._assign_selected()
+    qt_app.processEvents()
+    assert window.preview_status.isVisible() is True
+
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+    qt_app.processEvents()
+
+    assert window.preview_status.isVisible() is False
+    assert window.preview_status.text() == ""
+    window.hide()
+
+
+def test_rejecting_a_face_also_says_done(window, qt_app):
+    """除外でも顔は一覧から消える。**割り当てと同じ症状なので同じ扱い。**"""
+    window.show()
+    qt_app.processEvents()
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+
+    window._reject_selected()
+    qt_app.processEvents()
+
+    assert window.preview_status.isVisible() is True
+    assert "除外" in window.preview_status.text()
+    window.hide()
+
+
+def test_dimming_leaves_the_original_alone():
+    """薄くするのは複製。**元の画像を書き換えない。**"""
+    original = QPixmap(10, 10)
+    original.fill(Qt.red)
+
+    dimmed = photoarchive_gui.dim_pixmap(original, 0.25)
+
+    assert _average_alpha(dimmed) < _average_alpha(original)
+    assert _average_alpha(original) == 255
+    # 空の画像を渡しても落ちない
+    assert photoarchive_gui.dim_pixmap(QPixmap()).isNull()

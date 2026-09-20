@@ -2,6 +2,15 @@
 
 `WORKLOG.md` から切り出したもの。新しいものが上。
 
+## 2026-09-06 — #18 顔への年齢登録、#17 GUI の起動エラー
+
+PR [#20](https://github.com/Beerski43/PhotoArchiveAI/pull/20) と
+[#19](https://github.com/Beerski43/PhotoArchiveAI/pull/19)（ともに merged）。
+
+子どもの成長を扱うため、顔に撮影時の年齢を持たせた。**未設定と0歳は別の状態**として
+区別する。GUI の起動バグを直し、操作手順を
+[operation/GUI_USAGE.md](../operation/GUI_USAGE.md) に書いた。
+
 ## 2026-09-05 — #7 進捗表示、#10 の一次対応
 
 PR [#11](https://github.com/Beerski43/PhotoArchiveAI/pull/11) と

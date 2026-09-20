@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 
 import numpy as np
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 EMBEDDING_DIM = 128
 EMBEDDING_DTYPE = np.float32
@@ -67,7 +67,10 @@ SCHEMA = [
     "relation TEXT,"
     "memo TEXT,"
     # 生年月日 YYYY-MM-DD。未設定は NULL。撮影時の年齢の計算に使う。
-    "birth_date TEXT"
+    "birth_date TEXT,"
+    # 一覧に並べる順。**利用者が画面で入れ替えた順序**を持つ。
+    # 未設定(NULL)は名前順の位置に置く（並べ替えたことのない人物）。
+    "display_order INTEGER"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -197,6 +200,21 @@ def describe_missing_columns(gaps: Dict[str, List[str]]) -> str:
     return ", ".join(
         f"{table}.{column}" for table, columns in sorted(gaps.items()) for column in columns
     )
+
+
+#: `ALTER TABLE ... ADD COLUMN` で足せる列と、その型。
+#:
+#: **移行のたびにコードを足さないため。** 版を上げて列を1本増やすたびに
+#: `migration.py` へ `if "..." not in columns` を書き足していくと、
+#: 足し忘れが「版だけ進んで列が無い」状態を生む（それ自体が #48 の事故）。
+#: ここに1行足せば、移行は `db.missing_columns` が見つけたものを埋める。
+#:
+#: **既存行に入るのは NULL** なので、NOT NULL の列はここへ書けない。
+#: 既定値が要るなら、読み出し側で NULL を解釈すること。
+ADDABLE_COLUMNS = {
+    ("Person", "birth_date"): "TEXT",
+    ("Person", "display_order"): "INTEGER",
+}
 
 
 MIGRATE_HINT = "`photoarchive migrate --db <データベース>` を実行してください。"
@@ -439,8 +457,9 @@ def add_person(
     """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。"""
     cursor = connection.cursor()
     cursor.execute(
-        "INSERT INTO Person (name, relation, memo, birth_date) VALUES (?, ?, ?, ?)",
-        (name, relation, memo, birth_date),
+        "INSERT INTO Person (name, relation, memo, birth_date, display_order)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (name, relation, memo, birth_date, _next_display_order(connection)),
     )
     connection.commit()
     return cursor.lastrowid
@@ -486,8 +505,39 @@ def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
 
 
 def list_persons(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
-    rows = connection.execute("SELECT * FROM Person ORDER BY name").fetchall()
+    """人物を、画面に並べる順で返す。
+
+    **利用者が入れ替えた順（`display_order`）が先。** 並べ替えたことのない
+    人物（NULL）は、そのあとに名前順で続く。名前順だけだと、よく使う人物を
+    上に置けない。
+    """
+    rows = connection.execute(
+        "SELECT * FROM Person"
+        " ORDER BY display_order IS NULL ASC, display_order ASC, name ASC"
+    ).fetchall()
     return [dict(row) for row in rows]
+
+
+def set_person_order(connection: sqlite3.Connection, person_ids: Sequence[int]) -> None:
+    """渡された並びを `display_order` に書く。**渡された順がそのまま画面の順。**
+
+    一覧に出ている人物**全員**を渡すこと。一部だけ渡すと、渡さなかった人物の
+    `display_order` が古いままになり、並びが混ざる。
+    """
+    connection.executemany(
+        "UPDATE Person SET display_order = ? WHERE id = ?",
+        [(order, person_id) for order, person_id in enumerate(person_ids)],
+    )
+    connection.commit()
+
+
+def _next_display_order(connection: sqlite3.Connection) -> int:
+    """新しい人物を**末尾**に置くための順序値。
+
+    先頭に入れると、利用者が並べ替えた結果を勝手に崩すことになる。
+    """
+    row = connection.execute("SELECT MAX(display_order) FROM Person").fetchone()
+    return 0 if row[0] is None else int(row[0]) + 1
 
 
 # ---------------------------------------------------------------------------

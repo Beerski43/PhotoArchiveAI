@@ -212,7 +212,7 @@
 | `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
 | `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
 
-### `test_gui_person.py` — 人物編集とプレビュー（48件）
+### `test_gui_person.py` — 人物編集とプレビュー（57件）
 
 | テスト | 内容 |
 |---|---|
@@ -264,6 +264,15 @@
 | `test_the_age_line_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
 | `test_dropping_the_person_selection_also_drops_the_age_line` | 前の人物の年齢を残さない |
 | `test_a_new_person_is_selected_so_the_age_shows_immediately` | 追加した人物も選ばれた状態になる |
+| `test_the_person_order_can_be_changed_and_is_remembered` | **並べ替えた順が開き直しても残る**（`Person.display_order`） |
+| `test_the_person_list_accepts_a_drag` | ドラッグで動かせる設定になっている |
+| `test_a_new_person_goes_to_the_end_of_the_order` | 追加した人物を先頭に割り込ませない |
+| `test_a_person_who_was_never_reordered_keeps_the_name_order` | 並べ替えたことのない人物は名前順のまま |
+| `test_the_preview_says_done_and_fades_after_an_assignment` | **割り当てた顔が濃いまま残らない。** 「完了」を出して薄くする |
+| `test_the_done_label_sits_on_top_of_the_photo` | 札は顔写真に重ねて中央 |
+| `test_choosing_another_face_clears_the_done_label` | 次の顔を選んだら消す |
+| `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
+| `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 
@@ -338,7 +347,8 @@ editable install のときだけ出すこと（通常のインストールでは
 
 **版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
 すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
-導かれていること。
+導かれていること。**足す列は `db.ADDABLE_COLUMNS` の1行で決まり**、移行コードに
+書き足さない（書き忘れがその事故を生む）。v1 の再構築経路も最後に同じ処理を通す。
 
 移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
 移行でしか効かない。黙って効かない引数を作らない）。
