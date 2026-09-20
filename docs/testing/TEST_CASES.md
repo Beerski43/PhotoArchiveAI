@@ -84,6 +84,22 @@
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
+### `test_db_folders.py` — フォルダの絞り込みと集計（13件）
+
+| テスト | 内容 |
+|---|---|
+| `test_folder_expression_and_folder_of_agree` | **SQL の式と Python の関数が同じ答えを返す。** 片方だけ直すと絞り込みが黙って外れる |
+| `test_folder_of_handles_paths_without_a_folder` | フォルダを持たないパスは `""`（`.` や `/` にしない） |
+| `test_folder_face_counts_separates_unassigned_manual_and_rejected` | **手本の件数も返す。** 見えないと、まとめて除外を押せない |
+| `test_folder_face_counts_are_sorted_by_unassigned_desc` | 未割当の多い順。効き目の大きいフォルダが上に来る |
+| `test_folder_face_counts_ignores_media_without_faces` | 顔の無いフォルダは出さない |
+| `test_list_faces_filters_by_folder_in_every_order`（3件） | **並び順の経路が2つある。** どちらでも同じように絞り込める |
+| `test_folder_filter_does_not_match_subfolders` | **入れ子は別のフォルダ。** 前方一致にしない |
+| `test_face_ids_returns_every_match_beyond_one_page` | **まとめて処理はページをまたぐ** |
+| `test_face_ids_for_unassigned_leaves_manual_faces_alone` | **手本を巻き込まない。** 一括除外でいちばん大事な一線 |
+| `test_the_folder_filter_walks_its_index` | **`idx_media_folder` を使うこと。** 使わないと `Media` を全件走査する |
+| `test_face_filter_without_folder_keeps_the_previous_query` | **フォルダ未指定なら問い合わせを変えない**（`match` と `evaluate` も通る） |
+
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
 | テスト | 内容 |
@@ -221,6 +237,27 @@
 | `test_the_unassign_button_is_disabled_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
+
+### `test_gui_folder_reject.py` — フォルダ単位の一括除外（16件）
+
+| テスト | 内容 |
+|---|---|
+| `test_choosing_a_folder_narrows_the_face_list` | フォルダを選ぶと一覧がそのフォルダだけになる |
+| `test_clearing_the_folder_brings_every_face_back` | `解除` で元に戻る |
+| `test_bulk_button_is_disabled_until_a_folder_is_chosen` | **未選択で押せると、一度の押し間違いで未割当が全部飛ぶ**。隠さずに押せなくする |
+| `test_bulk_reject_covers_the_whole_folder_not_just_the_page` | **表示中のページではなくフォルダ全体に効く** |
+| `test_bulk_reject_leaves_manual_faces_alone` | **手本を巻き込まない** |
+| `test_bulk_reject_does_nothing_when_the_confirmation_is_declined` | 確認で「いいえ」なら何もしない |
+| `test_bulk_reject_reports_when_the_folder_has_nothing_left` | 対象が0件なら、確認を出さずに知らせるだけ |
+| `test_bulk_undo_returns_the_whole_folder_to_unassigned` | **ページを送らずに取り消せる**（1,357 件のフォルダは7ページある） |
+| `test_bulk_button_follows_the_displayed_list` | 表示を切り替えたら、まとめて処理の意味も変わる |
+| `test_folder_picker_lists_folders_with_counts` | 未割当の多い順に、件数を添えて並べる |
+| `test_folder_picker_filters_by_the_displayed_name` | **画面に出ている名前で絞り込む**（見えない部分に当てない） |
+| `test_folder_picker_shows_folders_relative_to_source_root` | 絶対パスは長すぎて読めない。絞り込みに使うのは絶対パスのほう |
+| `test_choosing_a_folder_from_the_dialog_applies_it` | ダイアログで選んだフォルダが一覧に効く |
+| `test_cancelling_the_dialog_keeps_the_current_folder` | キャンセルなら今のフォルダを変えない |
+| `test_format_folder_matches_the_preview_information` | **同じフォルダが画面によって違う名前で出ない** |
+| `test_format_folder_keeps_paths_outside_source_root_absolute` | `source_root` の外は絶対パスのまま |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（59件）
 
