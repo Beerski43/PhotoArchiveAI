@@ -392,6 +392,21 @@ def get_media_with_analysis(connection: sqlite3.Connection) -> List[Dict[str, An
 # ---------------------------------------------------------------------------
 
 
+class _KeepBirthDate:
+    """``update_person`` の ``birth_date`` 既定値。「誕生日は触らない」を表す。
+
+    ``None`` は「未設定に戻す」という**指示**なので、既定値として使えない。
+    区別しないと、**名前だけ直すつもりの呼び出しで誕生日が消える。**
+    `KEEP_AGE` とまったく同じ罠（CLAUDE.md §8）。
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - 表示用
+        return "KEEP_BIRTH_DATE"
+
+
+KEEP_BIRTH_DATE = _KeepBirthDate()
+
+
 def add_person(
     connection: sqlite3.Connection,
     name: str,
@@ -415,13 +430,24 @@ def update_person(
     name: str,
     relation: Optional[str],
     memo: Optional[str],
-    birth_date: Optional[str] = None,
+    birth_date: Any = KEEP_BIRTH_DATE,
 ) -> None:
-    """人物を更新する。``birth_date`` に ``None`` を渡すと未設定へ戻る。"""
-    connection.execute(
-        "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
-        (name, relation, memo, birth_date, person_id),
-    )
+    """人物を更新する。
+
+    ``birth_date`` を**省くと触らない**。``None`` は「未設定へ戻す」指示。
+    既定を ``None`` にしていたため、**名前だけ直すつもりの呼び出しで
+    登録済みの誕生日が消えていた**（`assign_faces` の ``age`` と同じ罠）。
+    """
+    if birth_date is KEEP_BIRTH_DATE:
+        connection.execute(
+            "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
+            (name, relation, memo, person_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
+            (name, relation, memo, birth_date, person_id),
+        )
     connection.commit()
 
 
@@ -568,18 +594,27 @@ def _face_filter(
 
 def shooting_dates_for_faces(
     connection: sqlite3.Connection, face_ids: Sequence[int]
-) -> List[str]:
-    """選んだ顔が写っているメディアの撮影日時を、昇順で返す。
+) -> List[Optional[str]]:
+    """選んだ顔**ごと**の撮影日時を、昇順で返す。**顔1件につき1件返す。**
 
     **年齢をまとめて入れるときに、撮影日時がまたがっていないかを見るため。**
-    EXIF の無いメディアは日時を持たないので、返る件数は顔の件数と一致しない。
+
+    **`DISTINCT` で潰さない。撮影日時の無い顔を落とさない。** 潰すと
+    「撮影日時の分からない顔が混ざっている」ことが呼び出し側から消え、
+    **その顔にも別の写真から計算した年齢が黙って入る**（実データでは
+    `Media.shooting_date` が 15.8% 欠けている）。分からないことは
+    ``None`` として伝え、捨てるかどうかは呼び出し側が決める。
+
+    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
+    そのまま返す）。**判断を SQL と Python に割らない**ためで、
+    `gui.parse_date` の1か所に持たせてある。
     """
     if not face_ids:
         return []
     placeholders = ",".join("?" for _ in face_ids)
     rows = connection.execute(
-        "SELECT DISTINCT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
-        f" WHERE f.id IN ({placeholders}) AND m.shooting_date IS NOT NULL"
+        "SELECT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
+        f" WHERE f.id IN ({placeholders})"
         " ORDER BY m.shooting_date",
         tuple(face_ids),
     ).fetchall()

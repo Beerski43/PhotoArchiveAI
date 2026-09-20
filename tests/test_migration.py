@@ -5,6 +5,7 @@ import pytest
 from photoarchive_ai import db
 from photoarchive_ai.migration import (
     backup_database,
+    describe_for_operator,
     describe_migration,
     migrate_database,
     needs_migration,
@@ -491,3 +492,19 @@ def test_the_expected_columns_come_from_the_schema_itself(tmp_path):
         assert db.missing_columns(connection) == {}
     finally:
         connection.close()
+
+
+def test_the_notice_says_whether_vacuum_will_run(tmp_path):
+    """**黙って効かない引数を作らない。**
+
+    `--no-vacuum` は v1 からの移行でしか効かない（v2 以降はテーブルを
+    組み直さないので VACUUM する理由が無い）。付けても付けなくても同じ、
+    という状態を画面に出す（PR #51 のレビュー指摘6）。
+    """
+    legacy = tmp_path / "v1.db"
+    _build_legacy_database(legacy)
+    v2 = tmp_path / "v2.db"
+    _build_v2_database(v2)
+
+    assert "VACUUM します" in describe_for_operator(str(legacy))
+    assert "VACUUM はしません" in describe_for_operator(str(v2))
