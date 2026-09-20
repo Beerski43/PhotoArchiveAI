@@ -183,3 +183,35 @@ def test_load_manual_embeddings_pairs_vectors_with_person_ids(tmp_path: Path):
         assert list(person_ids) == [alice, alice, alice, bob]
     finally:
         connection.close()
+
+
+def test_person_birth_date_is_stored_and_can_be_cleared(tmp_path):
+    """誕生日は未設定（NULL）と区別して持つ。
+
+    撮影時の年齢を計算するのに使う。**入れ間違えたら未設定へ戻せること**まで
+    確かめる。`Face.age` で「一度入れた値を消せない」不具合があったので、
+    同じ形の穴を最初から塞いでおく。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        person_id = db.add_person(connection, "なつ", "daughter", "メモ", birth_date="2011-05-03")
+
+        stored = db.list_persons(connection)[0]
+        assert stored["birth_date"] == "2011-05-03"
+
+        db.update_person(connection, person_id, "なつ", "daughter", "メモ", birth_date=None)
+
+        assert db.list_persons(connection)[0]["birth_date"] is None
+    finally:
+        connection.close()
+
+
+def test_a_person_without_a_birth_date_is_stored_as_unset(tmp_path):
+    """誕生日は任意。渡さなければ未設定になる。"""
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        db.add_person(connection, "父")
+
+        assert db.list_persons(connection)[0]["birth_date"] is None
+    finally:
+        connection.close()

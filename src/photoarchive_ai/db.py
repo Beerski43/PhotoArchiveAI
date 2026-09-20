@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 
 import numpy as np
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 EMBEDDING_DIM = 128
 EMBEDDING_DTYPE = np.float32
@@ -46,7 +46,9 @@ SCHEMA = [
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "name TEXT NOT NULL,"
     "relation TEXT,"
-    "memo TEXT"
+    "memo TEXT,"
+    # 生年月日 YYYY-MM-DD。未設定は NULL。撮影時の年齢の計算に使う。
+    "birth_date TEXT"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -327,11 +329,13 @@ def add_person(
     name: str,
     relation: Optional[str] = None,
     memo: Optional[str] = None,
+    birth_date: Optional[str] = None,
 ) -> int:
+    """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。"""
     cursor = connection.cursor()
     cursor.execute(
-        "INSERT INTO Person (name, relation, memo) VALUES (?, ?, ?)",
-        (name, relation, memo),
+        "INSERT INTO Person (name, relation, memo, birth_date) VALUES (?, ?, ?, ?)",
+        (name, relation, memo, birth_date),
     )
     connection.commit()
     return cursor.lastrowid
@@ -343,10 +347,12 @@ def update_person(
     name: str,
     relation: Optional[str],
     memo: Optional[str],
+    birth_date: Optional[str] = None,
 ) -> None:
+    """人物を更新する。``birth_date`` に ``None`` を渡すと未設定へ戻る。"""
     connection.execute(
-        "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
-        (name, relation, memo, person_id),
+        "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
+        (name, relation, memo, birth_date, person_id),
     )
     connection.commit()
 

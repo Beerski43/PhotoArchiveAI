@@ -236,3 +236,173 @@ def test_embedding_blob_roundtrip():
     assert abs(float(restored[127]) - values[127]) < 1e-6
     assert db.encode_embedding(None) is None
     assert db.decode_embedding(None) is None
+
+
+# ---------------------------------------------------------------------------
+# v2 → v3（列を足すだけ。何も破棄しない）
+# ---------------------------------------------------------------------------
+
+V2_PERSON_DDL = (
+    "CREATE TABLE Person (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "name TEXT NOT NULL,relation TEXT,memo TEXT)"
+)
+
+
+def _build_v2_database(path):
+    """`birth_date` が無いだけの、現行と同じスキーマ（版2）。
+
+    現行スキーマを作ってから `Person` を版2の形に戻す。DDL を丸ごと書き写すと、
+    本物のスキーマが変わったときに気づけない。
+    """
+    connection = db.ensure_database(str(path))
+    media_id = db.save_media(
+        connection,
+        {
+            "path": "/photos/1.jpg",
+            "filename": "1.jpg",
+            "type": "image",
+            "file_hash": "hash1",
+            "file_size": 100,
+            "created_time": "2026-01-01T00:00:00",
+        },
+    )
+    person_id = db.add_person(connection, "父", "father", "メモ")
+    for index in range(3):
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * 128,
+            embed_version="test",
+            person_id=person_id if index == 0 else None,
+            assign_source=db.ASSIGN_MANUAL if index == 0 else None,
+        )
+    db.save_media_scores(connection, media_id, smile_score=10.0, quality_score=20.0)
+    connection.commit()
+    connection.close()
+
+    # Person を版2の形（birth_date なし）へ戻し、版も 2 に落とす。
+    connection = sqlite3.connect(str(path))
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("ALTER TABLE Person RENAME TO Person_old")
+    connection.execute(V2_PERSON_DDL)
+    connection.execute(
+        "INSERT INTO Person (id, name, relation, memo)"
+        " SELECT id, name, relation, memo FROM Person_old"
+    )
+    connection.execute("DROP TABLE Person_old")
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+
+
+def test_a_version_2_database_keeps_every_face_when_migrated(tmp_path):
+    """**v2 からの移行で顔を1件も失わないこと。**
+
+    v1 → v2 は顔を破棄する（旧特徴量が dlib と互換でないため）。その経路へ
+    v2 のDBを流し込むと、**使えるはずの顔と、数時間かけたスキャンの結果が
+    消える。** 実データは顔 58,000 件規模で、作り直しは現実的でない。
+    """
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+    connection = sqlite3.connect(str(database))
+    before = {
+        "faces": connection.execute("SELECT COUNT(*) FROM Face").fetchone()[0],
+        "media": connection.execute("SELECT COUNT(*) FROM Media").fetchone()[0],
+        "analysis": connection.execute("SELECT COUNT(*) FROM AnalysisResult").fetchone()[0],
+        "manual": connection.execute(
+            "SELECT COUNT(*) FROM Face WHERE assign_source = 'manual'"
+        ).fetchone()[0],
+        "scanned": connection.execute(
+            "SELECT COUNT(*) FROM Media WHERE face_count IS NOT NULL"
+        ).fetchone()[0],
+    }
+    connection.close()
+    assert before["faces"] == 3 and before["manual"] == 1
+
+    migrate_database(str(database), vacuum=False, make_backup=False)
+
+    connection = sqlite3.connect(str(database))
+    try:
+        after = {
+            "faces": connection.execute("SELECT COUNT(*) FROM Face").fetchone()[0],
+            "media": connection.execute("SELECT COUNT(*) FROM Media").fetchone()[0],
+            "analysis": connection.execute("SELECT COUNT(*) FROM AnalysisResult").fetchone()[0],
+            "manual": connection.execute(
+                "SELECT COUNT(*) FROM Face WHERE assign_source = 'manual'"
+            ).fetchone()[0],
+            "scanned": connection.execute(
+                "SELECT COUNT(*) FROM Media WHERE face_count IS NOT NULL"
+            ).fetchone()[0],
+        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(Person)")}
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert after == before, "v2 からの移行で何かが失われている"
+    assert "birth_date" in columns
+    assert version == db.SCHEMA_VERSION
+
+
+def test_a_version_2_database_keeps_the_values_already_stored(tmp_path):
+    """既存の人物の値が消えず、`birth_date` だけが未設定で増えること。"""
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+
+    migrate_database(str(database), vacuum=False, make_backup=False)
+
+    connection = db.connect(str(database))
+    try:
+        person = db.list_persons(connection)[0]
+    finally:
+        connection.close()
+    assert (person["name"], person["relation"], person["memo"]) == ("父", "father", "メモ")
+    assert person["birth_date"] is None
+
+
+def test_describing_a_version_2_migration_does_not_threaten_to_drop_faces(tmp_path):
+    """**「破棄します」と出さないこと。**
+
+    列を足すだけなのに消えると読める案内を出すと、実行をためらって移行が
+    進まない。CLI はこの値を見て文面を切り替える。
+    """
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+
+    info = describe_migration(str(database))
+
+    assert info["rebuilds"] is False
+    assert info["faces_to_drop"] == 0
+    assert info["analysis_to_drop"] == 0
+    assert info["faces_kept"] == 3
+
+
+def test_a_legacy_database_ends_up_with_the_birth_date_column(tmp_path):
+    """v1 からの移行でも、最後は現行スキーマ（`birth_date` あり）になること。"""
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+
+    migrate_database(str(database), vacuum=False, make_backup=False)
+
+    connection = sqlite3.connect(str(database))
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(Person)")}
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        persons = connection.execute("SELECT COUNT(*) FROM Person").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert "birth_date" in columns
+    assert version == db.SCHEMA_VERSION
+    assert persons == 2, "人物は温存される"
+
+
+def test_migrating_a_version_2_database_twice_changes_nothing(tmp_path):
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+    migrate_database(str(database), vacuum=False, make_backup=False)
+
+    result = migrate_database(str(database), vacuum=False, make_backup=False)
+
+    assert result["migrated"] is False
