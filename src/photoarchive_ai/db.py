@@ -545,7 +545,18 @@ def _next_display_order(connection: sqlite3.Connection) -> int:
     """新しい人物を**末尾**に置くための順序値。
 
     先頭に入れると、利用者が並べ替えた結果を勝手に崩すことになる。
+
+    **`display_order` が NULL の行が残っていると、末尾にならない。**
+    `list_persons` は値を持つ行を先に出すので、`MAX` が NULL のときに 0 を
+    返すと、**その人物だけが全員より前に出る**（`migrate` 直後のDBがこの状態。
+    実データもそうだった）。**足す前に、いま画面に出ている順をそのまま
+    書き戻す。** 見た目は変わらないまま、全員が値を持つ状態になる。
     """
+    unordered = connection.execute(
+        "SELECT COUNT(*) FROM Person WHERE display_order IS NULL"
+    ).fetchone()[0]
+    if unordered:
+        set_person_order(connection, [person["id"] for person in list_persons(connection)])
     row = connection.execute("SELECT MAX(display_order) FROM Person").fetchone()
     return 0 if row[0] is None else int(row[0]) + 1
 
@@ -809,21 +820,28 @@ def _executemany_with_progress(
     statement: str,
     rows: List[tuple],
     progress: ProgressCallback,
-) -> None:
-    """``executemany`` を、進み具合を知らせながら流す。
+) -> int:
+    """``executemany`` を、進み具合を知らせながら流す。**触れた行数を返す。**
 
     **1つのトランザクションのまま分ける。** 分割してコミットすると、
     途中で失敗したときに半分だけ適用された状態が残る。ここで分けるのは
     **知らせる回数**だけで、確定するのは呼び出し側の1回の ``commit``。
+
+    **件数は塊ごとに足す。** ``cursor.rowcount`` は**最後の
+    ``executemany`` のぶんしか持たない**ので、呼び出し側がそれを返すと
+    「割り当てた件数」が最大でも `PROGRESS_CHUNK` になってしまう。
     """
     total = len(rows)
     if progress is None:
         cursor.executemany(statement, rows)
-        return
+        return cursor.rowcount
+    affected = 0
     progress(0, total)
     for start in range(0, total, PROGRESS_CHUNK):
         cursor.executemany(statement, rows[start : start + PROGRESS_CHUNK])
+        affected += cursor.rowcount
         progress(min(start + PROGRESS_CHUNK, total), total)
+    return affected
 
 
 class _KeepAge:
@@ -872,9 +890,9 @@ def assign_faces(
         rows = [
             (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
         ]
-    _executemany_with_progress(cursor, statement, rows, progress)
+    affected = _executemany_with_progress(cursor, statement, rows, progress)
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
 def unassign_faces(
@@ -885,7 +903,7 @@ def unassign_faces(
     if not face_ids:
         return 0
     cursor = connection.cursor()
-    _executemany_with_progress(
+    affected = _executemany_with_progress(
         cursor,
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
         " assigned_at = NULL WHERE id = ?",
@@ -893,7 +911,7 @@ def unassign_faces(
         progress,
     )
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
 def reject_faces(
@@ -906,7 +924,7 @@ def reject_faces(
         return 0
     now = _utc_now()
     cursor = connection.cursor()
-    _executemany_with_progress(
+    affected = _executemany_with_progress(
         cursor,
         "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL,"
         " assigned_at = ? WHERE id = ?",
@@ -914,7 +932,7 @@ def reject_faces(
         progress,
     )
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
 def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int]) -> None:
@@ -936,14 +954,14 @@ def set_faces_age(
     if not face_ids:
         return 0
     cursor = connection.cursor()
-    _executemany_with_progress(
+    affected = _executemany_with_progress(
         cursor,
         "UPDATE Face SET age = ? WHERE id = ?",
         [(age, face_id) for face_id in face_ids],
         progress,
     )
     connection.commit()
-    return cursor.rowcount
+    return affected
 
 
 def load_manual_embeddings(

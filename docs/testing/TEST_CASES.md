@@ -61,7 +61,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（17件）
+### `test_db.py` — スキーマと永続化（18件）
 
 | テスト | 内容 |
 |---|---|
@@ -72,6 +72,7 @@
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
 | `test_shooting_dates_come_back_one_per_face` | **顔1件につき1件返す。** `DISTINCT` で潰さず、日時の無い顔も落とさない |
+| `test_the_number_of_affected_faces_is_right_even_with_progress` | **進み具合を知らせても戻り値が壊れない**（塊ごとに足す） |
 | `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
 | `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
 | `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
@@ -181,6 +182,7 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
+### `test_gui_migration.py` — 起動時の移行（7件）
 
 | テスト | 内容 |
 |---|---|
@@ -192,7 +194,6 @@
 | `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
-### `test_gui_migration.py` — 起動時の移行（7件）
 ### `test_gui_assignment.py` — GUI での割り当て（29件）
 
 | テスト | 内容 |
@@ -209,7 +210,6 @@
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 | `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
-
 | `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
 | `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
 | `test_rebuilding_the_list_does_not_reload_the_preview` | **一覧の作り直しで元写真を読み直さない**（200件の割り当てに17秒かかっていた） |
@@ -222,7 +222,7 @@
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（57件）
+### `test_gui_person.py` — 人物編集とプレビュー（59件）
 
 | テスト | 内容 |
 |---|---|
@@ -278,6 +278,8 @@
 | `test_the_person_list_accepts_a_drag` | ドラッグで動かせる設定になっている |
 | `test_a_new_person_goes_to_the_end_of_the_order` | 追加した人物を先頭に割り込ませない |
 | `test_a_person_who_was_never_reordered_keeps_the_name_order` | 並べ替えたことのない人物は名前順のまま |
+| `test_a_new_person_goes_to_the_end_even_before_anyone_was_reordered` | **移行直後（全員 NULL）でも末尾に来る。** 0 を振ると先頭に割り込む |
+| `test_persons_added_to_a_new_database_keep_their_registration_order` | 新しいDBでは登録順 |
 | `test_the_preview_says_done_and_fades_after_an_assignment` | **割り当てた顔が濃いまま残らない。** 「完了」を出して薄くする |
 | `test_the_done_label_sits_on_top_of_the_photo` | 札は顔写真に重ねて中央 |
 | `test_choosing_another_face_clears_the_done_label` | 次の顔を選んだら消す |
@@ -346,7 +348,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（21件）
+### `test_migration.py` — スキーマの移行（23件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -354,6 +356,10 @@ editable install のときだけ出すこと（通常のインストールでは
 **v2 → v3**: `Person.birth_date` を足すだけで、**顔・解析結果・検出済みの状態が
 1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
 案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
+
+**v3 → v4**: `Person.display_order` を足すだけ。**実データが通る唯一の経路**なので、
+顔・手本・誕生日が減らないことと、移行直後の並び（全員未設定＝名前順、追加は末尾）を
+固定している。
 
 **版の印だけが進むのを防ぐ**: 移行していないDBをアプリが開いても版を刻まないこと、
 すでに刻まれてしまったDBを**実際の列**を見て直せること、列の一覧が `SCHEMA` から
@@ -424,7 +430,11 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
 
-### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（6件）
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
+
+`TEST_CASES.md` の**見出しと表がずれていないこと**も見る。見出しが自分の表の
+下に落ちると表が前の節にぶら下がり、**表の途中の空行はそれ以降を表でなくする**
+（GitHub の描画器の仕様。実際に11行が表から外れた）。
 
 `CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
 見る。書いてしまうと**関係のない変更のたびに更新が要り**、忘れれば
