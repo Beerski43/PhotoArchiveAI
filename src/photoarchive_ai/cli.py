@@ -14,7 +14,12 @@ from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
 from .face import get_latest_error
 from .logging_setup import setup_logging
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
-from .migration import describe_migration, migrate_database, needs_migration
+from .migration import (
+    describe_for_operator,
+    migrate_database,
+    needs_migration,
+    rebuilds_faces,
+)
 from .scanner import ScanAborted, scan_directory
 from .selection import copy_selected_media, load_rule, select_media
 
@@ -102,7 +107,10 @@ def _build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("--db", help="SQLite database path.")
     migrate_parser.add_argument("--backup", help="Backup file path (default: <db>.bak-<timestamp>).")
     migrate_parser.add_argument(
-        "--no-vacuum", action="store_true", help="Skip VACUUM after the migration."
+        "--no-vacuum",
+        action="store_true",
+        help="Skip VACUUM after the migration. VACUUM runs only when migrating from v1"
+        " (the v2+ migration only adds columns, so nothing is rebuilt).",
     )
     migrate_parser.add_argument(
         "--yes", action="store_true", help="Do not ask for confirmation."
@@ -210,13 +218,11 @@ def _run_migrate(args, db_path: str) -> None:
     if not needs_migration(db_path):
         print("スキーマはすでに最新です。移行は不要です。")
         return
-    info = describe_migration(db_path)
-    print(f"移行対象: {db_path}")
-    print(f"  Media {info['media']} 件 / Person {info['persons']} 件 は保持します。")
-    print(
-        f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
-        " 顔検出をやり直します。"
-    )
+    # 文面は GUI と共有する。2か所に書くと、片方だけ古くなる。
+    print(describe_for_operator(db_path))
+    # **移行する前に見ておく。** 移行後は版が上がっており、「顔を作り直したか」を
+    # 聞いても必ず False になる。
+    rebuilt = rebuilds_faces(db_path)
     if not args.yes:
         answer = input("続行しますか? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
@@ -227,7 +233,8 @@ def _run_migrate(args, db_path: str) -> None:
         vacuum=not args.no_vacuum,
         log=print,
     )
-    print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
+    if rebuilt:
+        print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
 
 
 def _run_scan(args, settings) -> None:

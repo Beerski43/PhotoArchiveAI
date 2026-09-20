@@ -9,6 +9,7 @@ BLOB を全件読むと数百MBになり、画面が固まる。
 
 import argparse
 import os
+from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face
+from . import db, face, migration
 from .config import find_settings_path
 
 PAGE_SIZE = 200
@@ -61,6 +62,117 @@ def _format_timestamp(value: Optional[str]) -> Optional[str]:
     return None if text.startswith("0000") else text
 
 
+def parse_date(value: Optional[str]) -> Optional[date]:
+    """`YYYY-MM-DD` で始まる文字列を日付にする。読めなければ ``None``。
+
+    撮影日時（`2017-12-16T18:46:32`）も誕生日（`2011-05-03`）も先頭10文字が
+    日付なので、同じ関数で扱える。
+
+    **`0000-00-00` を弾くのがここの役目。** カメラが壊れた EXIF を書くことが
+    あり（実データで Media 55件）、日付として読めないものを通すと、
+    `_format_timestamp` が「撮影日時: 不明」と出している写真に**年齢だけが
+    出る**という食い違いが起きる。
+    """
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def calculate_age(birth_date: Optional[str], shooting_date: Optional[str]) -> Optional[int]:
+    """その写真が撮られた時点の年齢。誕生日を迎える前なら1引く。
+
+    **どちらか一方でも欠けていれば計算しない**（仕様書 §8.4）。撮影日時は
+    実データの 15.8% で欠けており、誕生日は登録するまで全員が未設定。
+
+    撮影日が誕生日より前なら**負の数**を返す。行を消さずに「誕生前」と出して、
+    **人物の選び間違いや日付の誤りに気づける**ようにするため。
+    """
+    born = parse_date(birth_date)
+    taken = parse_date(shooting_date)
+    if born is None or taken is None:
+        return None
+    return taken.year - born.year - ((taken.month, taken.day) < (born.month, born.day))
+
+
+def format_age(age: Optional[int]) -> Optional[str]:
+    """年齢を画面に出す形にする。計算できていなければ ``None``。"""
+    if age is None:
+        return None
+    return "誕生前" if age < 0 else f"{age}歳"
+
+
+#: 年・月・日の入力欄で「未入力」を表す値。`QSpinBox` の最小値に置く。
+BIRTH_DATE_UNSET = 0
+
+
+def build_birth_date(year: int, month: int, day: int) -> Optional[str]:
+    """年・月・日の3つの入力から、DB に入れる `YYYY-MM-DD` を作る。
+
+    3つとも未入力なら未設定(``None``)。
+
+    **年月日まで必須。** 古い写真では正確な日付が分からないことがあるが、
+    **月日の分からない誕生日から年齢は出せない**ので、中途半端に持たない。
+
+    Raises:
+        ValueError: 一部だけ入っているとき、または存在しない日付のとき。
+            画面にそのまま出す文面を持たせる。
+    """
+    parts = (year, month, day)
+    if all(part == BIRTH_DATE_UNSET for part in parts):
+        return None
+    if any(part == BIRTH_DATE_UNSET for part in parts):
+        raise ValueError(
+            "誕生日は年・月・日をすべて入れてください。"
+            "\n（3つとも空にすれば未設定になります）"
+        )
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        # 2月30日のような、暦に無い日。月と日を入れ替えた打ち間違いで起きる。
+        raise ValueError(f"{year}年{month}月{day}日 は存在しない日付です。") from None
+
+
+def split_birth_date(value: Optional[str]) -> tuple:
+    """DB の `YYYY-MM-DD` を、入力欄に入れる (年, 月, 日) にする。
+
+    未設定や読めない値は、3つとも未入力として返す。
+    """
+    parsed = parse_date(value)
+    if parsed is None:
+        return (BIRTH_DATE_UNSET, BIRTH_DATE_UNSET, BIRTH_DATE_UNSET)
+    return (parsed.year, parsed.month, parsed.day)
+
+
+def suggested_age(
+    birth_date: Optional[str], shooting_dates: List[Optional[str]]
+) -> Optional[int]:
+    """年齢ダイアログの初期値。出せないなら ``None``（＝「未設定」で開く）。
+
+    ``shooting_dates`` は**顔1件につき1件**（`db.shooting_dates_for_faces`）。
+    撮影日時の無い顔・読めない顔は ``None`` で入ってくる。
+
+    **選択中の顔すべてが同じ年齢に落ちるときだけ**出す。1回の入力が選択中の
+    全件に入る（`summarize_selection`）ので、年をまたいで選んでいるときに
+    片方の年齢を初期値にすると、**黙って間違いが入る。**
+
+    **「分からない」を捨てない。** 以前は `ages.discard(None)` していたため、
+    10件のうち9件が EXIF 無しでも、残る1件の年齢が10件すべての初期値になった。
+    **分からない顔が1件でもあれば出さない**（仕様書 §10.3 と `GUI_USAGE.md` が
+    明文で約束していること）。
+
+    誕生前（負の値）も出さない。初期値として意味を持たないうえ、
+    `FaceAgeDialog` では負の値が「未設定」の席になっている。
+    """
+    ages = {calculate_age(birth_date, shooting_date) for shooting_date in shooting_dates}
+    if len(ages) != 1 or None in ages:
+        return None
+    age = ages.pop()
+    return None if age < 0 else age
+
+
 def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     """設定に書かれた相対パスを、**設定ファイルの置き場所**を起点に解く。
 
@@ -82,8 +194,10 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     return str(settings_path.parent.parent / source_root)
 
 
-def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
-    """プレビューの下に出す、撮影日時とフォルダの説明。
+def format_media_info(
+    media: dict, source_root: Optional[str] = None, person: Optional[dict] = None
+) -> str:
+    """プレビューの下に出す、撮影日時とフォルダと、選択中の人物の年齢。
 
     **年齢を入れるには、その写真がいつ撮られたか分からないといけない。**
     EXIF の撮影日時は実データの 15.8% で欠けているので、日付を持つことが多い
@@ -91,6 +205,10 @@ def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
 
     ``created_time`` は**撮影日時ではない**（コピーで変わる）。取り違えると
     年齢を間違えるので、EXIF が無いときだけ、別の名前で出す。
+
+    ``person`` を渡すと、その人物の誕生日と撮影日時から**撮影時の年齢**を
+    最後の行に出す。人物が未選択・誕生日が未設定・撮影日時が無いのいずれかなら
+    **行そのものを出さない**（誤解を招く「不明」を並べるより、無いほうがよい）。
     """
     lines = []
     shooting_date = _format_timestamp(media.get("shooting_date"))
@@ -115,6 +233,11 @@ def format_media_info(media: dict, source_root: Optional[str] = None) -> str:
         folder = "（source_root 直下）"
     lines.append(f"フォルダ: {folder}")
     lines.append(f"ファイル: {path.name}")
+
+    if person:
+        age = format_age(calculate_age(person.get("birth_date"), media.get("shooting_date")))
+        if age:
+            lines.append(f"{person.get('name') or '?'}: {age}")
     return "\n".join(lines)
 
 
@@ -149,8 +272,99 @@ def _make_select_all_on_focus(spin: QSpinBox):
 
 
 
+class MigrationDialog(QDialog):
+    """起動時に「移行が要る」と分かったときに出す確認。
+
+    **端末へ追い出さない。** これまでは「`photoarchive migrate` を実行して
+    ください」と言って終了していたが、GUI しか使わない利用者にとっては
+    そこで手が止まる。**その場で実行できるようにする。**
+
+    何が残って何が消えるかは `migration.describe_for_operator` が作る。
+    CLI と同じ文面を使う（2か所に書くと、片方だけ「破棄します」のまま残る）。
+    """
+
+    def __init__(self, parent=None, summary: str = "", backs_up: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("データベースの移行が必要です")
+        layout = QVBoxLayout(self)
+
+        headline = QLabel("このデータベースは、いまのアプリケーションより古い形です。")
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+
+        detail = QLabel(summary)
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        layout.addWidget(detail)
+
+        if backs_up:
+            note = QLabel("実行する前に、自動でバックアップを取ります。")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
+        buttons = QDialogButtonBox()
+        # **既定のボタンを「実行」にしない。** Enter の連打で、内容を読まないまま
+        # 走り出すのを避ける。
+        self.run_button = buttons.addButton("移行を実行", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.quit_button = buttons.addButton("終了", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._prefer_quit()
+
+    def _prefer_quit(self) -> None:
+        """既定のボタンを「終了」にする。
+
+        `QDialogButtonBox` は表示のたびに既定を付け直すので、`showEvent` でも
+        やり直す。ここを外すと、**Enter の連打で内容を読まないまま走り出す。**
+        """
+        self.run_button.setAutoDefault(False)
+        self.run_button.setDefault(False)
+        self.quit_button.setAutoDefault(True)
+        self.quit_button.setDefault(True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._prefer_quit()
+
+
+def ensure_migrated(database_path: str, parent=None) -> bool:
+    """必要なら移行の確認を出し、実行する。**先へ進んでよいか**を返す。
+
+    移行が要らなければ何も出さずに ``True``。利用者が「終了」を選んだとき、
+    または移行に失敗したときは ``False``。
+    """
+    if not migration.needs_migration(database_path):
+        return True
+
+    dialog = MigrationDialog(parent, summary=migration.describe_for_operator(database_path))
+    if dialog.exec() != QDialog.Accepted:
+        return False
+
+    messages: List[str] = []
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        migration.migrate_database(database_path, log=messages.append)
+    except Exception as error:
+        # **何が起きたかを画面に出す。** 端末を見ずに起動されることがある。
+        detail = [str(error)]
+        if messages:
+            # どこまで進んでいたか（バックアップを取ったかどうかを含む）。
+            detail += ["", "ここまでの記録:"] + messages
+        QMessageBox.critical(parent, "移行できませんでした", "\n".join(detail))
+        return False
+    finally:
+        QApplication.restoreOverrideCursor()
+
+    QMessageBox.information(parent, "移行が完了しました", "\n".join(messages))
+    return True
+
+
 class PersonDialog(QDialog):
-    def __init__(self, parent=None, name="", relation="", memo=""):
+    """人物の追加・編集。誕生日は任意で、入れると撮影時の年齢を出せる。"""
+
+    def __init__(self, parent=None, name="", relation="", memo="", birth_date=""):
         super().__init__(parent)
         self.setWindowTitle("人物情報")
         self.name_input = QLineEdit(name)
@@ -162,54 +376,129 @@ class PersonDialog(QDialog):
         form = QFormLayout()
         form.addRow("名前", self.name_input)
         form.addRow("続柄", self.relation_input)
+        form.addRow("誕生日", self._build_birth_date_row(birth_date))
         form.addRow("メモ", self.memo_input)
         form.addWidget(self.ok_button)
         self.setLayout(form)
 
+    def _build_birth_date_row(self, birth_date) -> QWidget:
+        """`[2011]年 [5]月 [3]日` の入力欄。
+
+        1つの欄に `YYYY-MM-DD` と打たせると、区切りの書き方（`/` か `-` か）を
+        間違えただけで弾かれる。**年・月・日に分ければ、書式を間違えようがない。**
+
+        `QDateEdit` は「未設定」を表せないので使わない。3つとも空（`0`）が未設定。
+        """
+        year, month, day = split_birth_date(birth_date)
+        self.birth_year = QSpinBox()
+        self.birth_year.setRange(BIRTH_DATE_UNSET, 2200)
+        self.birth_year.setValue(year)
+        self.birth_month = QSpinBox()
+        self.birth_month.setRange(BIRTH_DATE_UNSET, 12)
+        self.birth_month.setValue(month)
+        self.birth_day = QSpinBox()
+        self.birth_day.setRange(BIRTH_DATE_UNSET, 31)
+        self.birth_day.setValue(day)
+
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for spin, unit, width in (
+            (self.birth_year, "年", 80),
+            (self.birth_month, "月", 60),
+            (self.birth_day, "日", 60),
+        ):
+            # 未入力であることが分かるようにする。0 のままだと「0年0月0日」を
+            # 入れたように見える。
+            spin.setSpecialValueText("--")
+            spin.setFixedWidth(width)
+            # 「--」の文字が入った欄は、全選択しておかないと打鍵で置き換わらない
+            # （年齢の入力と同じ。▲を押すしかなくなる）。
+            spin.focusInEvent = _make_select_all_on_focus(spin)
+            layout.addWidget(spin)
+            layout.addWidget(QLabel(unit))
+        layout.addStretch(1)
+        return row
+
     def values(self):
+        """入力された 名前 / 続柄 / メモ / 誕生日 `(年, 月, 日)`。
+
+        誕生日は**打たれた数字のまま**返す。組み立てと検証は呼び出し側で行う。
+        名前が空のときと同じ場所でまとめて弾きたいため。
+        """
         return (
             self.name_input.text().strip(),
             self.relation_input.text().strip(),
             self.memo_input.toPlainText().strip(),
+            (self.birth_year.value(), self.birth_month.value(), self.birth_day.value()),
         )
 
 
-def summarize_selection(face_count: int, shooting_dates: List[str]) -> str:
-    """年齢ダイアログに出す「何に入れるのか」の1行。
+def summarize_selection(face_count: int, shooting_dates: List[Optional[str]]) -> str:
+    """年齢ダイアログに出す「何に入れるのか」の1〜2行。
 
     **1回の入力が選択中の全件に入る**のに、プレビューに出ているのは最後に
     選んだ1枚の撮影日時だけ。撮影年をまたいで選ぶと、画面の日時を見て入れた
     年齢が別の年の顔にも入る。件数と、撮影日時の範囲を見せて気づけるようにする。
 
+    ``shooting_dates`` は**顔1件につき1件**。読めない値（`0000-00-00` など）と
+    撮影日時の無い顔を **`parse_date` で外してから**範囲を作る。外さないと、
+    `_format_timestamp` が「撮影日時: 不明」と出している写真が、同じ画面で
+    日付を持っているように見える。
+
+    **撮影日時の分からない顔があれば、その件数も出す。** 初期値が入らない
+    理由がこれなので、黙っていると「なぜ空欄なのか」が分からない。
+
     1件だけの選択なら、プレビューと食い違わないので出さない。
     """
     if face_count <= 1:
         return ""
-    if not shooting_dates:
+    readable = sorted(value for value in shooting_dates if parse_date(value))
+    unknown = face_count - len(readable)
+
+    if not readable:
         return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時は不明）。"
-    first, last = shooting_dates[0][:10], shooting_dates[-1][:10]
+
+    first, last = readable[0][:10], readable[-1][:10]
     if first == last:
-        return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"
-    # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
-    return (
-        f"{face_count} 件すべてに同じ年齢を入れます。"
-        f"\n撮影日時が {first} 〜 {last} にまたがっています。"
-    )
+        lines = [f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"]
+    else:
+        # QLabel は Markdown を解釈しないので、装飾記号を書かない（そのまま出る）。
+        lines = [
+            f"{face_count} 件すべてに同じ年齢を入れます。",
+            f"撮影日時が {first} 〜 {last} にまたがっています。",
+        ]
+    if unknown:
+        lines.append(f"うち {unknown} 件は撮影日時が分かりません。")
+    return "\n".join(lines)
 
 
 class FaceAgeDialog(QDialog):
-    """撮影時の年齢を任意で入力する。未設定と0歳は区別する。"""
+    """撮影時の年齢を任意で入力する。未設定と0歳は区別する。
 
-    def __init__(self, parent=None, summary: str = ""):
+    ``initial_age`` を渡すと、その値を入れた状態で開く（誕生日と撮影日時から
+    計算した値。`suggested_age`）。**あくまで初期値で、自動保存はしない。**
+    利用者が OK を押して初めて `Face.age` に入る（Issue #48 の判断2）。
+    """
+
+    def __init__(self, parent=None, summary: str = "", initial_age: Optional[int] = None):
         super().__init__(parent)
         self.setWindowTitle("撮影時の年齢")
-        self.summary = summary
         self.age_input = QSpinBox()
         # 最小値を -1 にして「未設定」に割り当てる。0 を特別扱いにすると
         # 0歳の顔を登録できなくなる。
         self.age_input.setRange(-1, 150)
         self.age_input.setSpecialValueText("未設定")
-        self.age_input.setValue(-1)
+        if initial_age is not None and 0 <= initial_age <= 150:
+            self.age_input.setValue(initial_age)
+            # **機械が入れた値だと分かるようにする。** 黙って数字が入っていると、
+            # 利用者が確かめた年齢なのか計算値なのか、あとから区別できない。
+            summary = "\n".join(
+                part for part in (summary, "誕生日から計算した年齢を入れてあります。") if part
+            )
+        else:
+            self.age_input.setValue(-1)
+        self.summary = summary
         # 「未設定」の文字が入ったままなので、全選択しておかないと
         # キーボードから数字を入れられない（▲を押すしかなくなる）。
         _select_on_focus(self.age_input)
@@ -378,11 +667,11 @@ class RegisteredFacesDialog(QDialog):
         face_ids = self._selected_ids()
         if not face_ids:
             return
+        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
         dialog = FaceAgeDialog(
             self,
-            summary=summarize_selection(
-                len(face_ids), db.shooting_dates_for_faces(self.connection, face_ids)
-            ),
+            summary=summarize_selection(len(face_ids), shooting_dates),
+            initial_age=suggested_age(self.person.get("birth_date"), shooting_dates),
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -533,13 +822,24 @@ class MainWindow(QWidget):
     # 人物
     # ------------------------------------------------------------------
 
-    def _reload_person_list(self):
+    def _reload_person_list(self, select_person_id: Optional[int] = None):
+        """人物一覧を作り直す。``select_person_id`` を渡すとその人物を選び直す。
+
+        **選び直さないと、追加・編集した直後に選択が外れる。** `clear()` が
+        選択を落とすので、詳細欄が「人物を選択してください。」に戻り、
+        **プレビューの年齢の行も出ない。** 誕生日を登録した本人には、
+        機能が効いていないように見える。
+        """
         self.person_list.clear()
         for person in db.list_persons(self.connection):
             item = QListWidgetItem(f"{person['name']} ({person.get('relation') or '-'})")
             item.setData(Qt.UserRole, person)
             self.person_list.addItem(item)
-        self.details_label.setText("人物を選択してください。")
+            if select_person_id is not None and person["id"] == select_person_id:
+                self.person_list.setCurrentRow(self.person_list.count() - 1)
+        if self.person_list.currentItem() is None:
+            self.details_label.setText("人物を選択してください。")
+            self._refresh_preview_info()
 
     def _current_person(self) -> Optional[dict]:
         item = self.person_list.currentItem()
@@ -548,6 +848,9 @@ class MainWindow(QWidget):
     def _on_person_selected(self, current: QListWidgetItem, previous: QListWidgetItem = None):
         if current is None:
             self.details_label.setText("人物を選択してください。")
+            # **前の人物の年齢を残さない。** 選択が外れているのに年齢の行が
+            # 出ていると、誰の年齢なのか分からない。
+            self._refresh_preview_info()
             return
         person = current.data(Qt.UserRole)
         manual = db.count_faces(
@@ -557,36 +860,64 @@ class MainWindow(QWidget):
         self.details_label.setText(
             f"名前: {person['name']}\n"
             f"続柄: {person.get('relation') or '-'}\n"
+            # 誕生日を出しておかないと、年齢が出ない理由が画面から分からない。
+            f"誕生日: {person.get('birth_date') or '未設定'}\n"
             f"メモ: {person.get('memo') or '-'}\n"
             f"手動割当: {manual} 件 / 自動割当: {auto} 件"
         )
+        # 人物が変わると年齢の行も変わる。元写真は読み直さない。
+        self._refresh_preview_info()
+
+    def _validated_values(self, dialog: "PersonDialog") -> Optional[tuple]:
+        """人物ダイアログの入力を検証して返す。落ちたら知らせて ``None``。
+
+        名前の検証と誕生日の検証を同じ場所に置く。片方がダイアログの中、
+        もう片方が外にあると、**どこで弾かれたのかを追うのに両方読む**ことになる。
+        """
+        name, relation, memo, birth_parts = dialog.values()
+        if not name:
+            QMessageBox.warning(self, "入力エラー", "名前は必須です。")
+            return None
+        try:
+            birth_date = build_birth_date(*birth_parts)
+        except ValueError as error:
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return None
+        return name, relation, memo, birth_date
 
     def _add_person(self):
         dialog = PersonDialog(self)
         if dialog.exec() != QDialog.Accepted:
             return
-        name, relation, memo = dialog.values()
-        if not name:
-            QMessageBox.warning(self, "入力エラー", "名前は必須です。")
+        values = self._validated_values(dialog)
+        if values is None:
             return
-        db.add_person(self.connection, name, relation, memo)
-        self._reload_person_list()
+        name, relation, memo, birth_date = values
+        person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
         person = self._current_person()
         if person is None:
             return
         dialog = PersonDialog(
-            self, person["name"], person.get("relation") or "", person.get("memo") or ""
+            self,
+            person["name"],
+            person.get("relation") or "",
+            person.get("memo") or "",
+            person.get("birth_date") or "",
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        name, relation, memo = dialog.values()
-        if not name:
-            QMessageBox.warning(self, "入力エラー", "名前は必須です。")
+        values = self._validated_values(dialog)
+        if values is None:
             return
-        db.update_person(self.connection, person["id"], name, relation, memo)
-        self._reload_person_list()
+        name, relation, memo, birth_date = values
+        db.update_person(
+            self.connection, person["id"], name, relation, memo, birth_date=birth_date
+        )
+        # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
+        self._reload_person_list(select_person_id=person["id"])
 
     def _delete_person(self):
         person = self._current_person()
@@ -657,23 +988,44 @@ class MainWindow(QWidget):
     def _selected_face_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
 
+    def _selected_face_and_media(self):
+        """プレビューの対象。選択が無ければ ``(None, None)``。
+
+        複数選んでいるときは**最後に選んだ顔**を出す。
+        """
+        items = self.face_list.selectedItems()
+        if not items:
+            return None, None
+        record = db.get_face(self.connection, items[-1].data(Qt.UserRole)["id"])
+        if not record:
+            return None, None
+        return record, db.get_media_by_id(self.connection, record["media_id"])
+
+    def _refresh_preview_info(self) -> None:
+        """情報欄だけを書き直す。**元写真は読み直さない。**
+
+        人物を選び直すと年齢の行が変わる。ここで画像ごと取り直すと、
+        人物を選ぶたびに NFS（実測 24MB/s）から元写真を1枚読むことになる。
+        """
+        _, media = self._selected_face_and_media()
+        if media:
+            self.preview_info.setText(
+                format_media_info(media, self.source_root, self._current_person())
+            )
+
     def _show_preview(self) -> None:
         """選択中の顔を元写真から切り出して大きく表示する。
 
         サムネイルは160pxまで縮めてあるので、確認には元画像から取り直す。
         """
-        items = self.face_list.selectedItems()
-        if not items:
-            return
-        record = db.get_face(self.connection, items[-1].data(Qt.UserRole)["id"])
-        if not record:
-            return
-        media = db.get_media_by_id(self.connection, record["media_id"])
-        if not media:
+        record, media = self._selected_face_and_media()
+        if not record or not media:
             return
         # 情報は画像より先に出す。**元写真が開けないときこそ、
         # どのフォルダのどのファイルなのかが要る。**
-        self.preview_info.setText(format_media_info(media, self.source_root))
+        self.preview_info.setText(
+            format_media_info(media, self.source_root, self._current_person())
+        )
         bbox = (
             record["bbox_top"],
             record["bbox_right"],
@@ -717,7 +1069,14 @@ class MainWindow(QWidget):
         if not face_ids:
             QMessageBox.information(self, "選択なし", "割り当てる顔を選択してください。")
             return
-        dialog = FaceAgeDialog(self)
+        # **まとめて選ぶのは、この割り当てのときがいちばん多い。** #41 で入れた
+        # 「N件すべてに同じ年齢を入れます」の知らせが、ここには繋がっていなかった。
+        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
+        dialog = FaceAgeDialog(
+            self,
+            summary=summarize_selection(len(face_ids), shooting_dates),
+            initial_age=suggested_age(person.get("birth_date"), shooting_dates),
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         self.assign_faces(face_ids, person["id"], dialog.age())
@@ -763,6 +1122,14 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    window = MainWindow(db_path, source_root=source_root)
+    if not ensure_migrated(db_path):
+        raise SystemExit("移行していないため、起動できません。")
+    try:
+        window = MainWindow(db_path, source_root=source_root)
+    except db.SchemaVersionError as error:
+        # `ensure_migrated` を通っても開けないとき（版が新しすぎる、など）。
+        # **黙って落とさない。** GUI は端末を見ずに起動されることがある。
+        QMessageBox.critical(None, "データベースを開けません", str(error))
+        raise SystemExit(str(error)) from error
     window.show()
     sys.exit(app.exec())

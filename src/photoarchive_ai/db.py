@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 
 import numpy as np
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 EMBEDDING_DIM = 128
 EMBEDDING_DTYPE = np.float32
@@ -46,7 +46,9 @@ SCHEMA = [
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "name TEXT NOT NULL,"
     "relation TEXT,"
-    "memo TEXT"
+    "memo TEXT,"
+    # 生年月日 YYYY-MM-DD。未設定は NULL。撮影時の年齢の計算に使う。
+    "birth_date TEXT"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -126,19 +128,87 @@ def has_any_table(connection: sqlite3.Connection) -> bool:
     return row[0] > 0
 
 
+def expected_columns() -> Dict[str, set]:
+    """現行スキーマが持つ列を、``SCHEMA`` から実際に作って調べる。
+
+    列の一覧をここに書き写すと、**スキーマを変えたときに片方だけ古くなる。**
+    空のデータベースに一度作って読み取れば、正本は ``SCHEMA`` のままになる。
+    """
+    probe = sqlite3.connect(":memory:")
+    try:
+        for statement in SCHEMA:
+            probe.execute(statement)
+        return {
+            table: {row[1] for row in probe.execute(f"PRAGMA table_info({table})")}
+            for table in KNOWN_TABLES
+            if probe.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()[0]
+        }
+    finally:
+        probe.close()
+
+
+def missing_columns(connection: sqlite3.Connection) -> Dict[str, List[str]]:
+    """現行スキーマが要求する列のうち、このDBに**実際に無い**もの。
+
+    **版の数字を信じない。** ``CREATE TABLE IF NOT EXISTS`` は既存のテーブルを
+    変えないので、列が足りないまま版だけ進んだデータベースがありうる
+    （実際に起きた。`create_tables` が移行していないDBに版を刻んでいた）。
+    数字ではなく形を見れば、その状態を検出して直せる。
+    """
+    gaps: Dict[str, List[str]] = {}
+    for table, columns in expected_columns().items():
+        present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if not present:
+            # まだ無いテーブルは `create_tables` が作る。欠けとは数えない。
+            continue
+        missing = sorted(columns - present)
+        if missing:
+            gaps[table] = missing
+    return gaps
+
+
+def describe_missing_columns(gaps: Dict[str, List[str]]) -> str:
+    """欠けている列を `Person.birth_date` の形で並べる。"""
+    return ", ".join(
+        f"{table}.{column}" for table, columns in sorted(gaps.items()) for column in columns
+    )
+
+
+MIGRATE_HINT = "`photoarchive migrate --db <データベース>` を実行してください。"
+
+
 def create_tables(connection: sqlite3.Connection) -> None:
-    """最新スキーマを用意する。旧スキーマのDBは移行を促して中断する。"""
+    """最新スキーマを用意する。旧スキーマのDBは移行を促して中断する。
+
+    **すでにテーブルがあるDBには、版を刻まない。** ``SCHEMA`` は
+    ``CREATE TABLE IF NOT EXISTS`` なので既存のテーブルを変えず、それでいて
+    最後に ``PRAGMA user_version`` を書くと、**中身が古いまま「移行済み」の
+    印だけが付く。** そうなると `migrate` が「すでに最新です」と言って
+    何もしなくなり、**欠けた列は二度と足されない**（実データで発生）。
+    """
     version = get_schema_version(connection)
-    if version == 0 and has_any_table(connection):
-        raise SchemaVersionError(
-            "データベースのスキーマが古い形式です。"
-            "`photoarchive migrate --db <データベース>` を実行してください。"
-        )
     if version > SCHEMA_VERSION:
         raise SchemaVersionError(
             f"データベースのスキーマ({version})がこのアプリケーション"
             f"({SCHEMA_VERSION})より新しいため開けません。"
         )
+    if has_any_table(connection):
+        if version < SCHEMA_VERSION:
+            raise SchemaVersionError(
+                f"データベースのスキーマ({version})が古い形式です"
+                f"（このアプリケーションは {SCHEMA_VERSION}）。{MIGRATE_HINT}"
+            )
+        gaps = missing_columns(connection)
+        if gaps:
+            raise SchemaVersionError(
+                f"データベースの版は {version} ですが、実際の形が追いついていません"
+                f"（欠けている列: {describe_missing_columns(gaps)}）。{MIGRATE_HINT}"
+            )
+    # ここまで来たDBだけが、作成と版の記録を受けてよい。**足りないテーブルは
+    # 作る**（移行の途中でテーブルを組み直す経路が、ここで `Face` を作る）。
     cursor = connection.cursor()
     for statement in SCHEMA:
         cursor.execute(statement)
@@ -322,16 +392,33 @@ def get_media_with_analysis(connection: sqlite3.Connection) -> List[Dict[str, An
 # ---------------------------------------------------------------------------
 
 
+class _KeepBirthDate:
+    """``update_person`` の ``birth_date`` 既定値。「誕生日は触らない」を表す。
+
+    ``None`` は「未設定に戻す」という**指示**なので、既定値として使えない。
+    区別しないと、**名前だけ直すつもりの呼び出しで誕生日が消える。**
+    `KEEP_AGE` とまったく同じ罠（CLAUDE.md §8）。
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - 表示用
+        return "KEEP_BIRTH_DATE"
+
+
+KEEP_BIRTH_DATE = _KeepBirthDate()
+
+
 def add_person(
     connection: sqlite3.Connection,
     name: str,
     relation: Optional[str] = None,
     memo: Optional[str] = None,
+    birth_date: Optional[str] = None,
 ) -> int:
+    """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。"""
     cursor = connection.cursor()
     cursor.execute(
-        "INSERT INTO Person (name, relation, memo) VALUES (?, ?, ?)",
-        (name, relation, memo),
+        "INSERT INTO Person (name, relation, memo, birth_date) VALUES (?, ?, ?, ?)",
+        (name, relation, memo, birth_date),
     )
     connection.commit()
     return cursor.lastrowid
@@ -343,11 +430,24 @@ def update_person(
     name: str,
     relation: Optional[str],
     memo: Optional[str],
+    birth_date: Any = KEEP_BIRTH_DATE,
 ) -> None:
-    connection.execute(
-        "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
-        (name, relation, memo, person_id),
-    )
+    """人物を更新する。
+
+    ``birth_date`` を**省くと触らない**。``None`` は「未設定へ戻す」指示。
+    既定を ``None`` にしていたため、**名前だけ直すつもりの呼び出しで
+    登録済みの誕生日が消えていた**（`assign_faces` の ``age`` と同じ罠）。
+    """
+    if birth_date is KEEP_BIRTH_DATE:
+        connection.execute(
+            "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
+            (name, relation, memo, person_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
+            (name, relation, memo, birth_date, person_id),
+        )
     connection.commit()
 
 
@@ -494,18 +594,27 @@ def _face_filter(
 
 def shooting_dates_for_faces(
     connection: sqlite3.Connection, face_ids: Sequence[int]
-) -> List[str]:
-    """選んだ顔が写っているメディアの撮影日時を、昇順で返す。
+) -> List[Optional[str]]:
+    """選んだ顔**ごと**の撮影日時を、昇順で返す。**顔1件につき1件返す。**
 
     **年齢をまとめて入れるときに、撮影日時がまたがっていないかを見るため。**
-    EXIF の無いメディアは日時を持たないので、返る件数は顔の件数と一致しない。
+
+    **`DISTINCT` で潰さない。撮影日時の無い顔を落とさない。** 潰すと
+    「撮影日時の分からない顔が混ざっている」ことが呼び出し側から消え、
+    **その顔にも別の写真から計算した年齢が黙って入る**（実データでは
+    `Media.shooting_date` が 15.8% 欠けている）。分からないことは
+    ``None`` として伝え、捨てるかどうかは呼び出し側が決める。
+
+    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
+    そのまま返す）。**判断を SQL と Python に割らない**ためで、
+    `gui.parse_date` の1か所に持たせてある。
     """
     if not face_ids:
         return []
     placeholders = ",".join("?" for _ in face_ids)
     rows = connection.execute(
-        "SELECT DISTINCT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
-        f" WHERE f.id IN ({placeholders}) AND m.shooting_date IS NOT NULL"
+        "SELECT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
+        f" WHERE f.id IN ({placeholders})"
         " ORDER BY m.shooting_date",
         tuple(face_ids),
     ).fetchall()
