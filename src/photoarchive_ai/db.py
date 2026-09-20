@@ -57,6 +57,33 @@ SHOOTING_DATE_SORT_KEY = (
     " AND shooting_date NOT LIKE '0000%' THEN shooting_date END"
 )
 
+def folder_expression(column: str = "path") -> str:
+    """``Media.path`` から、それを収めているフォルダを取り出す SQL 式。
+
+    SQLite に ``dirname`` が無いので ``rtrim`` で作る。``replace(path,'/','')``
+    は「そのパスに出てくるスラッシュ以外の文字の集合」なので、``rtrim`` は
+    **最後の ``/`` の手前で必ず止まる。** 末尾の ``/`` は ``substr`` で落とす。
+
+    ``/a/b/c.jpg`` → ``/a/b`` ／ ``c.jpg`` → ``""``（フォルダ無し）。
+
+    **索引もこの式で張る**（`idx_media_folder`）。`SHOOTING_DATE_SORT_KEY` と
+    同じ理由で、**式を書き写さずに必ずこの関数を通すこと。** 綴りが1文字でも
+    ずれると索引が使われなくなる。
+
+    **同じ判断が `folder_of` にもある。** 表示と比較は Python 側で、絞り込みは
+    SQL 側で要るため。**片方だけ直すと絞り込みが黙って外れる**ので、
+    両者が一致することをテストで固定してある。
+    """
+    trimmed = f"rtrim({column}, replace({column}, '/', ''))"
+    return f"substr({trimmed}, 1, length({trimmed}) - 1)"
+
+
+def folder_of(path: str) -> str:
+    """``folder_expression`` の Python 版。**同じ答えを返すこと。**"""
+    head, separator, _ = path.rpartition("/")
+    return head if separator else ""
+
+
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS Media ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -121,6 +148,12 @@ SCHEMA = [
     # 撮影日時の新しい順に顔を並べるため（§10.4）。**この索引が無いと、ページを
     # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
     f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
+    # フォルダで顔を絞るため（§10.4）。**無いと、ページを送るたびに Media を
+    # 全件走査する**（実データ 70,297 件で 1ページ 0.407秒 → 0.017秒）。
+    # **列を足す移行は要らない。** `create_tables` が開くたびに
+    # `CREATE INDEX IF NOT EXISTS` を流すので、既存DBにもその場で張られる
+    # （実データで 2.1 秒・+5MB。`PRAGMA user_version` は 4 のまま）。
+    f"CREATE INDEX IF NOT EXISTS idx_media_folder ON Media({folder_expression()})",
 ]
 
 KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult")
@@ -651,11 +684,62 @@ def count_faces(
     unassigned: bool = False,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    folder: Optional[str] = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
-    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, folder=folder
+    )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
+
+
+def face_ids(
+    connection: sqlite3.Connection,
+    assign_source: Optional[str] = None,
+    person_id: Optional[int] = None,
+    unassigned: bool = False,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
+    folder: Optional[str] = None,
+) -> List[int]:
+    """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
+
+    **まとめて処理する操作のためにある。** `list_faces` はページ単位で読むので、
+    「このフォルダの未割当をすべて除外」のように**ページをまたぐ操作**には使えない。
+    ここは id だけを読むのでサムネイルの BLOB を持ち上げない
+    （実データで最大のフォルダが 1,357 件）。
+    """
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, folder=folder
+    )
+    rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def folder_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """フォルダごとの顔の件数を、**未割当の多い順**に返す。
+
+    `{"folder", "unassigned", "manual", "rejected", "total"}` を持つ。
+
+    **手本（`'manual'`）の件数も返す。** 結婚式や学校行事のフォルダは
+    「ほぼ他人」であって「全部他人」ではなく、家族も写っている。
+    まとめて除外する前に、そこに手本があるかどうかが見えないと押せない。
+
+    実データ（Media 70,297 / Face 58,606）で 1,042 フォルダ・0.27 秒。
+    """
+    folder = folder_expression("m.path")
+    rows = connection.execute(
+        f"SELECT {folder} AS folder,"
+        " SUM(CASE WHEN f.assign_source IS NULL THEN 1 ELSE 0 END) AS unassigned,"
+        " SUM(CASE WHEN f.assign_source = ? THEN 1 ELSE 0 END) AS manual,"
+        " SUM(CASE WHEN f.assign_source = ? THEN 1 ELSE 0 END) AS rejected,"
+        " COUNT(*) AS total"
+        " FROM Media m JOIN Face f ON f.media_id = m.id"
+        " GROUP BY folder ORDER BY unassigned DESC, folder ASC",
+        (ASSIGN_MANUAL, ASSIGN_REJECTED),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _face_filter(
@@ -665,6 +749,7 @@ def _face_filter(
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
     prefix: str = "",
+    folder: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -673,6 +758,10 @@ def _face_filter(
 
     ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
     書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
+
+    ``folder`` は `Media.path` を収めているフォルダ（`folder_expression`）。
+    **結合ではなく副問い合わせで書く。** `list_faces` には `Media` と結合する
+    経路（撮影日時順）としない経路があり、結合で書くと**条件が2通りに割れる。**
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -690,6 +779,12 @@ def _face_filter(
     if max_age is not None:
         clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
         params.append(max_age)
+    if folder is not None:
+        clauses.append(
+            f"{prefix}media_id IN"
+            f" (SELECT id FROM Media WHERE {folder_expression('path')} = ?)"
+        )
+        params.append(folder)
     if not clauses:
         return "", params
     return " WHERE " + " AND ".join(clauses), params
@@ -735,6 +830,7 @@ def list_faces(
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
     order: str = ORDER_QUALITY,
+    folder: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -747,6 +843,9 @@ def list_faces(
     - ``ORDER_QUALITY``: 品質スコアの高い順
     - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
     - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
+
+    ``folder`` を渡すと、そのフォルダに置かれた写真の顔だけに絞る
+    （`folder_expression`）。渡さなければ問い合わせは従来と変わらない。
     """
     columns = list(FACE_LIST_COLUMNS)
     if with_thumbnail:
@@ -754,10 +853,12 @@ def list_faces(
 
     if order == ORDER_SHOT_DESC:
         query, params = _shooting_date_query(
-            columns, assign_source, person_id, unassigned, min_age, max_age
+            columns, assign_source, person_id, unassigned, min_age, max_age, folder
         )
     else:
-        where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+        where, params = _face_filter(
+            assign_source, person_id, unassigned, min_age, max_age, folder=folder
+        )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
             # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
@@ -780,6 +881,7 @@ def _shooting_date_query(
     unassigned: bool,
     min_age: Optional[int],
     max_age: Optional[int],
+    folder: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -790,9 +892,14 @@ def _shooting_date_query(
     **外すと、ページを送るたびに未割当の顔を全件並べ直す**（実データ
     58,547 件で 220〜435ms。固定すると1ページ目 0.6ms）。`EXPLAIN QUERY PLAN`
     に `USE TEMP B-TREE FOR ORDER BY` が出たら、その状態に戻っている。
+
+    **``folder`` を指定したときだけは、この索引を捨てて並べ替える**
+    （`USE TEMP B-TREE FOR ORDER BY` が出る）。対象が `idx_media_folder` で
+    1フォルダ（実データの最大で 1,357 件）に絞られたあとの並べ替えなので、
+    実測 0.017秒で収まる（指定なしは 0.002秒）。
     """
     where, params = _face_filter(
-        assign_source, person_id, unassigned, min_age, max_age, prefix="f."
+        assign_source, person_id, unassigned, min_age, max_age, prefix="f.", folder=folder
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
