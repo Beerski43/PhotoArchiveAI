@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
@@ -296,4 +297,80 @@ def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypa
     assert opened["initial_age"] == 6
     # 取り消したので、年齢は未設定のまま
     assert all(row["age"] is None for row in db.list_faces(connection, person_id=person_id))
+    dialog.close()
+
+
+def _media_with_date(connection, path, shooting_date, file_hash):
+    return db.save_media(
+        connection,
+        {
+            "path": path,
+            "filename": path.rsplit("/", 1)[-1],
+            "type": "image",
+            "file_hash": file_hash,
+            "file_size": 100,
+            "created_time": "2026-01-01T00:00:00",
+            "shooting_date": shooting_date,
+        },
+    )
+
+
+def test_the_unassigned_list_starts_with_the_newest_photo(window):
+    """割り当てる画面は**撮影日時の新しい順**（#53）。
+
+    品質スコア順だと、同じ人の同じ日の写真がページをまたいで散らばる。
+    日付順なら**同じ行事の写真が固まる**ので、まとめて選んで一度に割り当てられる。
+    """
+    connection = window.connection
+    # _seed のメディアは撮影日時を持たない。持たない顔は最後に来るはず
+    for index, date in enumerate(("2012-01-01T00:00:00", "2021-12-31T00:00:00")):
+        media_id = _media_with_date(connection, f"/photos/d{index}.jpg", date, f"h{index}")
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * 128,
+            embed_version="test",
+            thumbnail=b"",
+            # 品質スコアは日付と逆に振る。品質順のままなら並びが変わらない
+            quality_score=100.0 if index == 0 else 1.0,
+        )
+    connection.commit()
+    window._reset_page()
+
+    listed = [
+        db.get_media_by_id(connection, window.face_list.item(row).data(Qt.UserRole)["media_id"])[
+            "shooting_date"
+        ]
+        for row in range(window.face_list.count())
+    ]
+
+    assert listed[0] == "2021-12-31T00:00:00"
+    assert listed[1] == "2012-01-01T00:00:00"
+    # 撮影日時の無い顔は最後にまとまる
+    assert set(listed[2:]) == {None}
+
+
+def test_the_assigned_list_is_ordered_by_age(window):
+    """「割り当て済みを確認」は**年齢順**（#53）。
+
+    成長の順に並ぶので、年齢の入れ間違いや、別人が混ざっているのに気づきやすい。
+    """
+    connection = window.connection
+    person_id = db.add_person(connection, "なつ")
+    face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
+    for face_id, age in zip(face_ids, (8, 2, 5, None, 0)):
+        window.assign_faces([face_id], person_id, age=age)
+
+    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, connection, person)
+
+    ages = [
+        dialog.face_list.item(row).data(Qt.UserRole)["age"]
+        for row in range(dialog.face_list.count())
+    ]
+
+    assert ages[:4] == [0, 2, 5, 8]
+    # **未設定は最後。** 先頭に来ると、年齢順に見ていく邪魔になる
+    assert ages[-1] is None
     dialog.close()

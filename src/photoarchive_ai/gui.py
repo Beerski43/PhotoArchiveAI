@@ -49,17 +49,27 @@ FILTER_REJECTED = "除外済み"
 def _format_timestamp(value: Optional[str]) -> Optional[str]:
     """DB の ISO 文字列を "YYYY-MM-DD HH:MM:SS" にする。読めなければ ``None``。
 
-    **カメラが `0000:00:00 00:00:00` を書くことがある**（実データで Media 55件・
-    顔 33件）。`scanner.extract_exif_datetime` は EXIF を機械的に整形するだけなので、
-    これが `0000-00-00T00:00:00` として保存される。日付として読めないものを
-    そのまま出すと、**撮影日時を持っているように見えてファイル日時の
-    フォールバックも消える**。いちばん手がかりが要る写真で手がかりが減るので、
-    持っていないのと同じ扱いにする。
+    **カメラが壊れた撮影日時を書くことがある。** `scanner.extract_exif_datetime`
+    は EXIF を機械的に整形するだけなので、そのまま保存される。実データでは
+    2種類あった。
+
+    | 保存されている値 | 件数(Media) |
+    |---|---|
+    | `0000-00-00T00:00:00` | 55 |
+    | `TTTT-TT-TTTTT:TT:TT` | 67 |
+
+    日付として読めないものをそのまま出すと、**撮影日時を持っているように見えて
+    ファイル日時のフォールバックも消える**。いちばん手がかりが要る写真で
+    手がかりが減るので、持っていないのと同じ扱いにする。
+
+    **先頭の文字だけを見て弾かない。** `0000` だけを見ていたので
+    `TTTT-TT-TTTTT:TT:TT` が素通りし、画面にそのまま出ていた。
+    読めるかどうかの判断は `parse_date` に任せる（**同じ判断を2か所に
+    書かない**。書くと、片方だけ直したときに表示と年齢が食い違う）。
     """
-    if not value:
+    if parse_date(value) is None:
         return None
-    text = str(value).replace("T", " ")[:19]
-    return None if text.startswith("0000") else text
+    return str(value).replace("T", " ")[:19]
 
 
 def parse_date(value: Optional[str]) -> Optional[date]:
@@ -68,10 +78,16 @@ def parse_date(value: Optional[str]) -> Optional[date]:
     撮影日時（`2017-12-16T18:46:32`）も誕生日（`2011-05-03`）も先頭10文字が
     日付なので、同じ関数で扱える。
 
-    **`0000-00-00` を弾くのがここの役目。** カメラが壊れた EXIF を書くことが
-    あり（実データで Media 55件）、日付として読めないものを通すと、
-    `_format_timestamp` が「撮影日時: 不明」と出している写真に**年齢だけが
-    出る**という食い違いが起きる。
+    **壊れた EXIF を弾くのがここの役目。** カメラが日付にならない値を書くことが
+    あり、実データでは2種類あった（`0000-00-00T00:00:00` が Media 55件、
+    `TTTT-TT-TTTTT:TT:TT` が 67件）。
+
+    **「読める撮影日時か」の判断は、この関数1つに持たせる。** 表示
+    （`_format_timestamp`）・年齢の計算（`calculate_age`）・年齢の初期値
+    （`suggested_age`）・選択の知らせ（`summarize_selection`）が同じ答えを返さないと、
+    「撮影日時: 不明」と出ている写真に年齢だけが出る、といった食い違いが起きる。
+    並び順だけは SQL 側にあるので、`db.SHOOTING_DATE_SORT_KEY` に同じ判断を
+    写してある（**片方だけ直さないこと**）。
     """
     if not value:
         return None
@@ -640,6 +656,9 @@ class RegisteredFacesDialog(QDialog):
             offset=self.page * PAGE_SIZE,
             min_age=minimum,
             max_age=maximum,
+            # **年齢の若い順。** 成長の順に並ぶので、年齢の入れ間違いや、
+            # 別人が混ざっているのに気づきやすい。未設定は最後。
+            order=db.ORDER_AGE,
         )
         _fill_face_list(self.face_list, records)
         self.page_label.setText(f"{self.page + 1} / {pages} ページ（全 {self.total} 件）")
@@ -970,6 +989,9 @@ class MainWindow(QWidget):
             with_thumbnail=True,
             limit=PAGE_SIZE,
             offset=self.page * PAGE_SIZE,
+            # **撮影日時の新しい順。** 同じ行事の写真が固まるので、まとめて
+            # 選んで一度に割り当てられる。撮影日時の無い顔は最後に来る。
+            order=db.ORDER_SHOT_DESC,
             **filters,
         )
         _fill_face_list(self.face_list, records)
