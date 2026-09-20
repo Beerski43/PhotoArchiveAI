@@ -2,7 +2,7 @@ import os
 
 import pytest
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from photoarchive_ai import db
 from photoarchive_ai import gui as photoarchive_gui
@@ -261,3 +261,39 @@ def test_zero_is_stored_as_zero_and_not_as_unset(window):
     window.assign_faces([face_id], person_id, age=0)
 
     assert db.get_face(window.connection, face_id)["age"] == 0
+
+
+def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypatch):
+    """「割り当て済みを確認」から年齢を直すときも、計算値を初期値に入れる。
+
+    こちらだけ手計算のままだと、**あとから直すときにいちばん手間がかかる。**
+    """
+    connection = window.connection
+    # _seed のメディアは撮影日時を持たない。年齢を出すには EXIF が要る。
+    connection.execute("UPDATE Media SET shooting_date = '2017-12-16T18:46:32'")
+    person_id = db.add_person(connection, "なつ", birth_date="2011-05-03")
+    face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
+    window.assign_faces(face_ids, person_id)
+    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, connection, person)
+    dialog.face_list.selectAll()
+
+    opened = {}
+
+    class _FakeAgeDialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            opened["initial_age"] = initial_age
+
+        def exec(self):
+            return QDialog.Rejected
+
+        def age(self):
+            return None
+
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
+    dialog._set_age_selected()
+
+    assert opened["initial_age"] == 6
+    # 取り消したので、年齢は未設定のまま
+    assert all(row["age"] is None for row in db.list_faces(connection, person_id=person_id))
+    dialog.close()

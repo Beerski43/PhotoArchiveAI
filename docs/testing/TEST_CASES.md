@@ -27,6 +27,7 @@
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_registered_faces_dialog_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
+| `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
@@ -163,7 +164,7 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
-### `test_gui_assignment.py` — GUI での割り当て（17件）
+### `test_gui_assignment.py` — GUI での割り当て（18件）
 
 | テスト | 内容 |
 |---|---|
@@ -178,8 +179,9 @@
 | `test_assigning_without_an_age_keeps_the_one_already_recorded` | 年齢を指定しない割り当ては年齢を触らない |
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
+| `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
 
-### `test_gui_person.py` — 人物編集とプレビュー（22件）
+### `test_gui_person.py` — 人物編集とプレビュー（38件）
 
 | テスト | 内容 |
 |---|---|
@@ -205,6 +207,22 @@
 | `test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded` | デコード失敗で上下が別の写真にならない |
 | `test_the_age_dialog_says_how_many_faces_get_the_same_age` | **1回の入力が全件に入る**ことと、撮影日時のまたがりを知らせる |
 | `test_the_summary_reaches_the_age_dialog` | 要約がダイアログに載る |
+| `test_the_age_is_counted_from_the_birthday_not_the_year` | **誕生日を迎える前なら1引く**（年の引き算だけだと1歳ずれる） |
+| `test_the_age_is_not_calculated_when_either_side_is_missing` | 誕生日か撮影日時が欠けたら計算しない |
+| `test_a_broken_exif_date_does_not_produce_an_age` | **「撮影日時: 不明」と出ている写真に年齢だけ出さない**（`0000:00:00`） |
+| `test_a_photo_taken_before_the_birthday_says_so` | 誕生前は行を消さず「誕生前」と出す（選び間違いに気づける） |
+| `test_the_preview_shows_the_age_of_the_selected_person` | 情報欄の最後に「誰が何歳か」を出す |
+| `test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated` | 計算できないときは行そのものを出さない |
+| `test_the_age_line_follows_the_person_selection` | 人物を選び直すと年齢の行が変わる。**元写真は読み直さない**（NFS 律速） |
+| `test_a_birth_date_can_be_registered_and_cleared` | 誕生日の登録と、空欄での未設定へ戻し |
+| `test_an_unreadable_birth_date_is_rejected` | **年月日まで必須。** `2011` や `2011-05` を受け取らない |
+| `test_the_edit_dialog_opens_with_the_stored_birth_date` | 編集ダイアログが今の誕生日で開く |
+| `test_the_person_dialog_round_trips_a_birth_date` | 実物のダイアログが誕生日を持ち帰る |
+| `test_the_person_details_show_the_birth_date` | 人物詳細に誕生日が出る（年齢が出ない理由が分かる） |
+| `test_the_suggested_age_needs_every_selected_face_to_agree` | **食い違うなら初期値を出さない**（1回の入力が全件に入る） |
+| `test_the_age_dialog_opens_with_the_calculated_age` | 計算値を初期値に入れ、計算値だと画面に書く |
+| `test_assigning_faces_offers_the_calculated_age_without_saving_it` | **自動保存はしない。** 取り消せば何も入らない |
+| `test_assigning_several_faces_warns_that_one_age_covers_them_all` | まとめて割り当てるときにも、全件に入る旨とまたがりを知らせる |
 
 ### `test_selection.py` — 抽出とコピー（16件）
 

@@ -24,14 +24,14 @@ def qt_app():
     yield app
 
 
-def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ")):
+def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ", "")):
     """`PersonDialog` の代わり。開いたときの初期値を記録する。"""
 
     class _FakeDialog:
         opened_with = None
 
-        def __init__(self, parent=None, name="", relation="", memo=""):
-            _FakeDialog.opened_with = (name, relation, memo)
+        def __init__(self, parent=None, name="", relation="", memo="", birth_date=""):
+            _FakeDialog.opened_with = (name, relation, memo, birth_date)
 
         def exec(self):
             return QDialog.Accepted if accepted else QDialog.Rejected
@@ -95,7 +95,7 @@ def test_editing_a_person_saves_the_new_values(window, monkeypatch):
     window._edit_person()
 
     # 編集ダイアログは今の値で開く
-    assert dialog.opened_with == ("父", "father", "元のメモ")
+    assert dialog.opened_with == ("父", "father", "元のメモ", "")
     person = db.list_persons(window.connection)[0]
     assert (person["name"], person["relation"], person["memo"]) == (
         "新しい名前",
@@ -117,7 +117,9 @@ def test_cancelling_the_edit_changes_nothing(window, monkeypatch):
 
 def test_an_empty_name_is_rejected(window, monkeypatch):
     monkeypatch.setattr(
-        photoarchive_gui, "PersonDialog", _make_dialog_class(accepted=True, values=("", "", ""))
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("", "", "", "")),
     )
     window.person_list.setCurrentRow(0)
 
@@ -416,3 +418,342 @@ def test_the_summary_reaches_the_age_dialog(window, qt_app):
     ]
     assert any("2 件すべてに同じ年齢を入れます。" in text for text in labels)
     dialog.close()
+
+
+# ---------------------------------------------------------------------------
+# 誕生日と撮影時の年齢（#48）
+# ---------------------------------------------------------------------------
+
+
+def test_the_age_is_counted_from_the_birthday_not_the_year():
+    """**誕生日を迎える前なら1引く。** 年の引き算だけだと1歳ずれる。"""
+    assert photoarchive_gui.calculate_age("2011-05-03", "2017-12-16T18:46:32") == 6
+    # 同じ年でも誕生日の前日なら、まだ歳を取っていない
+    assert photoarchive_gui.calculate_age("2011-05-03", "2018-05-02T09:00:00") == 6
+    assert photoarchive_gui.calculate_age("2011-05-03", "2018-05-03T09:00:00") == 7
+    # 生まれた当日は0歳
+    assert photoarchive_gui.calculate_age("2011-05-03", "2011-05-03T09:00:00") == 0
+
+
+def test_the_age_is_not_calculated_when_either_side_is_missing():
+    """**どちらか一方でも欠けていれば計算しない**（仕様書 §8.4）。
+
+    撮影日時は実データの 15.8% で欠けており、誕生日は登録するまで全員が未設定。
+    """
+    assert photoarchive_gui.calculate_age(None, "2017-12-16T18:46:32") is None
+    assert photoarchive_gui.calculate_age("2011-05-03", None) is None
+    assert photoarchive_gui.calculate_age("", "") is None
+
+
+def test_a_broken_exif_date_does_not_produce_an_age():
+    """カメラが書く `0000:00:00` を、日付として扱わない。
+
+    `_format_timestamp` はこれを「撮影日時: 不明」にしている。ここで通すと、
+    **日時が不明と出ている写真に年齢だけが出る**という食い違いになる。
+    """
+    assert photoarchive_gui.calculate_age("2011-05-03", "0000-00-00T00:00:00") is None
+    assert photoarchive_gui.parse_date("0000-00-00T00:00:00") is None
+    # 日付として読めない値も同じ扱い
+    assert photoarchive_gui.parse_date("いつか") is None
+
+
+def test_a_photo_taken_before_the_birthday_says_so():
+    """**行を消さない。** 人物の選び間違いや日付の誤りに気づけるようにする。"""
+    age = photoarchive_gui.calculate_age("2011-05-03", "2010-01-01T00:00:00")
+
+    assert age is not None and age < 0
+    assert photoarchive_gui.format_age(age) == "誕生前"
+    assert photoarchive_gui.format_age(None) is None
+    assert photoarchive_gui.format_age(0) == "0歳"
+
+
+def test_the_preview_shows_the_age_of_the_selected_person():
+    """情報欄の最後に「誰が何歳か」を出す。"""
+    info = photoarchive_gui.format_media_info(
+        {"path": "/photo/2017/クリスマス/a.JPG", "shooting_date": "2017-12-16T18:46:32"},
+        source_root="/photo",
+        person={"name": "なつ", "birth_date": "2011-05-03"},
+    )
+
+    assert info.splitlines()[-1] == "なつ: 6歳"
+
+
+def test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated():
+    """人物未選択・誕生日未設定・撮影日時なしなら、**行そのものを出さない。**
+
+    「不明」を並べるより、無いほうがよい。
+    """
+    photo = {"path": "/photo/2017/クリスマス/a.JPG", "shooting_date": "2017-12-16T18:46:32"}
+    no_exif = {"path": "/photo/2013/七五三/b.JPG", "shooting_date": None}
+    natsu = {"name": "なつ", "birth_date": "2011-05-03"}
+
+    assert "なつ" not in photoarchive_gui.format_media_info(photo, person=None)
+    assert "歳" not in photoarchive_gui.format_media_info(
+        photo, person={"name": "父", "birth_date": None}
+    )
+    assert "歳" not in photoarchive_gui.format_media_info(no_exif, person=natsu)
+
+
+def test_the_age_line_follows_the_person_selection(window, monkeypatch):
+    """人物を選び直したら年齢の行が入れ替わる。**元写真は読み直さない。**"""
+    connection = window.connection
+    db.update_person(
+        connection, db.list_persons(connection)[0]["id"], "父", "father", "", birth_date="1980-01-01"
+    )
+    db.add_person(connection, "なつ", "daughter", "", birth_date="2011-05-03")
+    window._reload_person_list()
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
+
+    reads = []
+    monkeypatch.setattr(
+        photoarchive_gui.face,
+        "load_face_image_bytes",
+        lambda path, bbox: reads.append(path) or b"",
+    )
+    # 写真は 2017-12-16 撮影（window フィクスチャ）
+    window.person_list.setCurrentRow(0)  # なつ（名前順で先頭）
+    assert window.preview_info.text().splitlines()[-1] == "なつ: 6歳"
+
+    window.person_list.setCurrentRow(1)  # 父
+    assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
+    assert reads == []
+
+
+# ---------------------------------------------------------------------------
+# 誕生日の登録
+# ---------------------------------------------------------------------------
+
+
+def test_a_birth_date_can_be_registered_and_cleared(window, monkeypatch):
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "father", "", " 1980-01-02 ")),
+    )
+    window.person_list.setCurrentRow(0)
+    window._edit_person()
+
+    assert db.list_persons(window.connection)[0]["birth_date"] == "1980-01-02"
+
+    # 空欄は「未設定へ戻す」
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "father", "", "")),
+    )
+    window.person_list.setCurrentRow(0)
+    window._edit_person()
+
+    assert db.list_persons(window.connection)[0]["birth_date"] is None
+
+
+def test_an_unreadable_birth_date_is_rejected(window, monkeypatch):
+    """**年月日まで必須**（Issue #48 の判断3）。月日の分からない誕生日から
+    年齢は出せないので、中途半端に持たない。"""
+    warned = []
+    monkeypatch.setattr(
+        photoarchive_gui.QMessageBox, "warning", lambda *args: warned.append(args[2])
+    )
+    for text in ("1980", "1980-01", "1980/01/02", "きのう"):
+        monkeypatch.setattr(
+            photoarchive_gui,
+            "PersonDialog",
+            _make_dialog_class(accepted=True, values=("父", "father", "", text)),
+        )
+        window.person_list.setCurrentRow(0)
+        window._edit_person()
+
+    assert len(warned) == 4
+    assert all("YYYY-MM-DD" in message for message in warned)
+    # 何も保存されていない（名前も誕生日も元のまま）
+    person = db.list_persons(window.connection)[0]
+    assert person["birth_date"] is None and person["name"] == "父"
+
+
+def test_the_edit_dialog_opens_with_the_stored_birth_date(window, monkeypatch):
+    db.update_person(
+        window.connection,
+        db.list_persons(window.connection)[0]["id"],
+        "父",
+        "father",
+        "元のメモ",
+        birth_date="1980-01-02",
+    )
+    window._reload_person_list()
+    dialog = _make_dialog_class(accepted=False)
+    monkeypatch.setattr(photoarchive_gui, "PersonDialog", dialog)
+    window.person_list.setCurrentRow(0)
+
+    window._edit_person()
+
+    assert dialog.opened_with == ("父", "father", "元のメモ", "1980-01-02")
+
+
+def test_the_person_dialog_round_trips_a_birth_date(qt_app):
+    """実物のダイアログが誕生日を持ち帰ること（フェイクだけでは確かめられない）。"""
+    dialog = photoarchive_gui.PersonDialog(
+        name="なつ", relation="daughter", memo="メモ", birth_date="2011-05-03"
+    )
+
+    assert dialog.values() == ("なつ", "daughter", "メモ", "2011-05-03")
+    dialog.close()
+
+
+def test_the_person_details_show_the_birth_date(window):
+    """登録したことが画面から見えないと、年齢が出ない理由が分からない。"""
+    window.person_list.setCurrentRow(0)
+    assert "誕生日: 未設定" in window.details_label.text()
+
+    db.update_person(
+        window.connection,
+        db.list_persons(window.connection)[0]["id"],
+        "父",
+        "father",
+        "",
+        birth_date="1980-01-02",
+    )
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+
+    assert "誕生日: 1980-01-02" in window.details_label.text()
+
+
+# ---------------------------------------------------------------------------
+# 年齢ダイアログの初期値
+# ---------------------------------------------------------------------------
+
+
+def test_the_suggested_age_needs_every_selected_face_to_agree():
+    """**1回の入力が選択中の全件に入る。** 食い違うなら初期値を出さない。"""
+    # 同じ年に撮られた顔だけなら、その年齢
+    assert photoarchive_gui.suggested_age(
+        "2011-05-03", ["2017-12-16T00:00:00", "2017-12-20T00:00:00"]
+    ) == 6
+    # 年をまたいで選んでいる。片方を初期値にすると黙って間違いが入る
+    assert (
+        photoarchive_gui.suggested_age(
+            "2011-05-03", ["2012-01-01T00:00:00", "2019-08-15T00:00:00"]
+        )
+        is None
+    )
+    # 撮影日時が1件も無い / 誕生日が未設定
+    assert photoarchive_gui.suggested_age("2011-05-03", []) is None
+    assert photoarchive_gui.suggested_age(None, ["2017-12-16T00:00:00"]) is None
+    # 誕生前は初期値にならない（負の値は「未設定」の席）
+    assert photoarchive_gui.suggested_age("2011-05-03", ["2010-01-01T00:00:00"]) is None
+
+
+def test_the_age_dialog_opens_with_the_calculated_age(qt_app):
+    """計算値を初期値に入れる。**機械が入れた値だと分かるようにする。**"""
+    dialog = photoarchive_gui.FaceAgeDialog(initial_age=6)
+    dialog.show()
+    qt_app.processEvents()
+
+    assert dialog.age() == 6
+    labels = [child.text() for child in dialog.findChildren(photoarchive_gui.QLabel)]
+    assert any("誕生日から計算した年齢" in text for text in labels)
+    dialog.close()
+
+    # 計算できなければ、これまで通り「未設定」で開く
+    unset = photoarchive_gui.FaceAgeDialog()
+    assert unset.age() is None
+    labels = [child.text() for child in unset.findChildren(photoarchive_gui.QLabel)]
+    assert not any("誕生日から計算した年齢" in text for text in labels)
+    unset.close()
+
+
+def test_assigning_faces_offers_the_calculated_age_without_saving_it(window, monkeypatch):
+    """**自動保存はしない**（Issue #48 の判断2）。取り消せば何も入らない。"""
+    opened = {}
+
+    class _FakeAgeDialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            opened["summary"] = summary
+            opened["initial_age"] = initial_age
+
+        def exec(self):
+            return QDialog.Rejected
+
+        def age(self):
+            return opened["initial_age"]
+
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
+    db.update_person(
+        window.connection,
+        db.list_persons(window.connection)[0]["id"],
+        "父",
+        "father",
+        "",
+        birth_date="1980-01-02",
+    )
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+
+    window._assign_selected()
+
+    # 写真は 2017-12-16 撮影
+    assert opened["initial_age"] == 37
+    # 取り消したので、顔は未割当のまま
+    assert db.list_faces(window.connection, with_thumbnail=False)[0]["person_id"] is None
+
+
+def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monkeypatch):
+    """#41 で入れた知らせが、**まとめて選ぶことがいちばん多い場所**にも出る。"""
+    connection = window.connection
+    older = db.save_media(
+        connection,
+        {
+            "path": "/photo/2012/a.JPG",
+            "filename": "a.JPG",
+            "type": "image",
+            "file_hash": "hash2",
+            "file_size": 1,
+            "created_time": "2012-01-01T00:00:00",
+            "shooting_date": "2012-01-01T00:00:00",
+        },
+    )
+    db.add_face(
+        connection,
+        media_id=older,
+        bbox=(0, 40, 40, 0),
+        embedding=[0.0] * 128,
+        embed_version="test",
+        thumbnail=b"",
+    )
+    connection.commit()
+    window.reload_faces()
+
+    opened = {}
+
+    class _FakeAgeDialog:
+        def __init__(self, parent=None, summary="", initial_age=None):
+            opened["summary"] = summary
+            opened["initial_age"] = initial_age
+
+        def exec(self):
+            return QDialog.Rejected
+
+        def age(self):
+            return None
+
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
+    db.update_person(
+        connection,
+        db.list_persons(connection)[0]["id"],
+        "父",
+        "father",
+        "",
+        birth_date="1980-01-02",
+    )
+    window._reload_person_list()
+    window.person_list.setCurrentRow(0)
+    window.face_list.selectAll()
+
+    window._assign_selected()
+
+    assert "2 件すべてに同じ年齢を入れます" in opened["summary"]
+    assert "2012-01-01 〜 2017-12-16 にまたがっています" in opened["summary"]
+    # 年をまたいでいるので、初期値は出さない
+    assert opened["initial_age"] is None
