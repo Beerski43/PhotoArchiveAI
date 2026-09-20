@@ -906,8 +906,14 @@ class MainWindow(QWidget):
 
         self.assign_button = QPushButton("選択した顔を割り当て")
         self.reject_button = QPushButton("この顔を除外")
+        # **除外を取り消せるようにする。** 除外した顔は「割り当て済みを確認」に
+        # 出てこない（あちらは人物で絞るが、除外した顔は person_id を持たない）
+        # ので、いったん除外すると**誰かに割り当てる以外に戻す手段が無かった。**
+        # 「決めきれないので保留に戻す」ができない。
+        self.unassign_button = QPushButton("未割当に戻す")
         self.assign_button.clicked.connect(self._assign_selected)
         self.reject_button.clicked.connect(self._reject_selected)
+        self.unassign_button.clicked.connect(self._unassign_selected)
 
         self.prev_button = QPushButton("< 前")
         self.next_button = QPushButton("次 >")
@@ -925,6 +931,7 @@ class MainWindow(QWidget):
         face_actions = QHBoxLayout()
         face_actions.addWidget(self.assign_button)
         face_actions.addWidget(self.reject_button)
+        face_actions.addWidget(self.unassign_button)
         face_actions.addStretch(1)
 
         self.preview_label = QLabel("顔を選ぶと元写真から切り出して表示します。")
@@ -987,6 +994,7 @@ class MainWindow(QWidget):
         self.resize(1100, 720)
 
         self._reload_person_list()
+        self._sync_unassign_button()
         self.reload_faces()
 
     # ------------------------------------------------------------------
@@ -1140,8 +1148,23 @@ class MainWindow(QWidget):
             return {"assign_source": db.ASSIGN_REJECTED}
         return {"unassigned": True}
 
+    def _sync_unassign_button(self) -> None:
+        """いま見ている一覧で「未割当に戻す」が意味を持つかを反映する。
+
+        **隠さずに、押せなくする。** 隠すと「そんな操作は無い」と思われる。
+        押せない理由はツールチップに書く。
+        """
+        showing_unassigned = self.filter_box.currentText() == FILTER_UNASSIGNED
+        self.unassign_button.setEnabled(not showing_unassigned)
+        self.unassign_button.setToolTip(
+            "いま表示しているのは未割当の顔です。戻す先がありません。"
+            if showing_unassigned
+            else "選択した顔を未割当に戻します（除外や自動割当を取り消せます）。"
+        )
+
     def _reset_page(self):
         self.page = 0
+        self._sync_unassign_button()
         self.reload_faces()
 
     def reload_faces(self):
@@ -1306,6 +1329,23 @@ class MainWindow(QWidget):
             finally:
                 progress.finish()
         self._mark_preview_done(f"完了 — {len(face_ids)} 件を {person['name']} に登録しました")
+
+    def _unassign_selected(self):
+        """選んだ顔を未割当へ戻す。**除外の取り消しがこれ。**"""
+        face_ids = self._selected_face_ids()
+        if not face_ids:
+            return
+        with busy_cursor():
+            progress = WorkProgress(self, "未割当に戻しています", len(face_ids))
+            try:
+                db.unassign_faces(self.connection, face_ids, progress=progress)
+                progress.dialog.setLabelText("一覧を作り直しています")
+                QApplication.processEvents()
+                self.reload_faces()
+                self._on_person_selected(self.person_list.currentItem())
+            finally:
+                progress.finish()
+        self._mark_preview_done(f"完了 — {len(face_ids)} 件を未割当に戻しました")
 
     def _reject_selected(self):
         face_ids = self._selected_face_ids()

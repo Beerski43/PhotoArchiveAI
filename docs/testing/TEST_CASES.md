@@ -193,7 +193,7 @@
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
 ### `test_gui_migration.py` — 起動時の移行（7件）
-### `test_gui_assignment.py` — GUI での割り当て（24件）
+### `test_gui_assignment.py` — GUI での割り当て（29件）
 
 | テスト | 内容 |
 |---|---|
@@ -216,6 +216,11 @@
 | `test_the_progress_is_reported_for_every_face` | 進み具合が件数で出る |
 | `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
 | `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
+| `test_a_rejected_face_can_be_put_back_to_unassigned` | **除外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
+| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる |
+| `test_the_unassign_button_is_disabled_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
+| `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
+| `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（57件）
 
