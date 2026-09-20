@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face
+from . import db, face, migration
 from .config import find_settings_path
 
 PAGE_SIZE = 200
@@ -261,6 +261,95 @@ def _make_select_all_on_focus(spin: QSpinBox):
 
     return focus_in
 
+
+
+class MigrationDialog(QDialog):
+    """起動時に「移行が要る」と分かったときに出す確認。
+
+    **端末へ追い出さない。** これまでは「`photoarchive migrate` を実行して
+    ください」と言って終了していたが、GUI しか使わない利用者にとっては
+    そこで手が止まる。**その場で実行できるようにする。**
+
+    何が残って何が消えるかは `migration.describe_for_operator` が作る。
+    CLI と同じ文面を使う（2か所に書くと、片方だけ「破棄します」のまま残る）。
+    """
+
+    def __init__(self, parent=None, summary: str = "", backs_up: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("データベースの移行が必要です")
+        layout = QVBoxLayout(self)
+
+        headline = QLabel("このデータベースは、いまのアプリケーションより古い形です。")
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+
+        detail = QLabel(summary)
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        layout.addWidget(detail)
+
+        if backs_up:
+            note = QLabel("実行する前に、自動でバックアップを取ります。")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
+        buttons = QDialogButtonBox()
+        # **既定のボタンを「実行」にしない。** Enter の連打で、内容を読まないまま
+        # 走り出すのを避ける。
+        self.run_button = buttons.addButton("移行を実行", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.quit_button = buttons.addButton("終了", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._prefer_quit()
+
+    def _prefer_quit(self) -> None:
+        """既定のボタンを「終了」にする。
+
+        `QDialogButtonBox` は表示のたびに既定を付け直すので、`showEvent` でも
+        やり直す。ここを外すと、**Enter の連打で内容を読まないまま走り出す。**
+        """
+        self.run_button.setAutoDefault(False)
+        self.run_button.setDefault(False)
+        self.quit_button.setAutoDefault(True)
+        self.quit_button.setDefault(True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._prefer_quit()
+
+
+def ensure_migrated(database_path: str, parent=None) -> bool:
+    """必要なら移行の確認を出し、実行する。**先へ進んでよいか**を返す。
+
+    移行が要らなければ何も出さずに ``True``。利用者が「終了」を選んだとき、
+    または移行に失敗したときは ``False``。
+    """
+    if not migration.needs_migration(database_path):
+        return True
+
+    dialog = MigrationDialog(parent, summary=migration.describe_for_operator(database_path))
+    if dialog.exec() != QDialog.Accepted:
+        return False
+
+    messages: List[str] = []
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        migration.migrate_database(database_path, log=messages.append)
+    except Exception as error:
+        # **何が起きたかを画面に出す。** 端末を見ずに起動されることがある。
+        detail = [str(error)]
+        if messages:
+            # どこまで進んでいたか（バックアップを取ったかどうかを含む）。
+            detail += ["", "ここまでの記録:"] + messages
+        QMessageBox.critical(parent, "移行できませんでした", "\n".join(detail))
+        return False
+    finally:
+        QApplication.restoreOverrideCursor()
+
+    QMessageBox.information(parent, "移行が完了しました", "\n".join(messages))
+    return True
 
 
 class PersonDialog(QDialog):
@@ -993,11 +1082,13 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
+    if not ensure_migrated(db_path):
+        raise SystemExit("移行していないため、起動できません。")
     try:
         window = MainWindow(db_path, source_root=source_root)
     except db.SchemaVersionError as error:
-        # **黙って落とさない。** GUI は端末を見ずに起動されることがあるので、
-        # 移行が要ることを画面にも出す（CLI は `SystemExit` で同じ文面を出す）。
+        # `ensure_migrated` を通っても開けないとき（版が新しすぎる、など）。
+        # **黙って落とさない。** GUI は端末を見ずに起動されることがある。
         QMessageBox.critical(None, "データベースを開けません", str(error))
         raise SystemExit(str(error)) from error
     window.show()

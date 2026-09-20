@@ -166,6 +166,18 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
+### `test_gui_migration.py` — 起動時の移行（7件）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_current_database_opens_without_asking_anything` | 移行が要らなければ何も出さない |
+| `test_choosing_to_run_migrates_the_database` | 「移行を実行」でその場で移行し、起動を続けられる |
+| `test_the_confirmation_says_what_is_kept` | **何が残るかを見せてから実行する。** 「破棄」と読める案内を出さない |
+| `test_choosing_to_quit_leaves_the_database_alone` | 「終了」ならデータベースに触らない |
+| `test_a_failed_migration_does_not_let_the_window_open` | **失敗を成功のように見せない。** どこまで進んだかも出す |
+| `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
+| `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
+
 ### `test_gui_assignment.py` — GUI での割り当て（18件）
 
 | テスト | 内容 |

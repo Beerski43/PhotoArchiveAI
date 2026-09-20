@@ -14,7 +14,12 @@ from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
 from .face import get_latest_error
 from .logging_setup import setup_logging
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
-from .migration import describe_migration, migrate_database, needs_migration
+from .migration import (
+    describe_for_operator,
+    migrate_database,
+    needs_migration,
+    rebuilds_faces,
+)
 from .scanner import ScanAborted, scan_directory
 from .selection import copy_selected_media, load_rule, select_media
 
@@ -210,22 +215,11 @@ def _run_migrate(args, db_path: str) -> None:
     if not needs_migration(db_path):
         print("スキーマはすでに最新です。移行は不要です。")
         return
-    info = describe_migration(db_path)
-    print(f"移行対象: {db_path}")
-    print(f"  Media {info['media']} 件 / Person {info['persons']} 件 は保持します。")
-    if info.get("rebuilds", True):
-        # 旧スキーマ(v1)からの移行だけが、顔と解析結果を作り直す。
-        print(
-            f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
-            " 顔検出をやり直します。"
-        )
-    else:
-        # **ここで「破棄します」と出してはいけない。** 列を足すだけなので何も消えない。
-        # 消えると読めると、実行をためらって移行が進まなくなる。
-        print(
-            f"  顔データ {info.get('faces_kept', 0)} 件はそのまま残ります"
-            "（列を追加するだけの移行です）。"
-        )
+    # 文面は GUI と共有する。2か所に書くと、片方だけ古くなる。
+    print(describe_for_operator(db_path))
+    # **移行する前に見ておく。** 移行後は版が上がっており、「顔を作り直したか」を
+    # 聞いても必ず False になる。
+    rebuilt = rebuilds_faces(db_path)
     if not args.yes:
         answer = input("続行しますか? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
@@ -236,7 +230,7 @@ def _run_migrate(args, db_path: str) -> None:
         vacuum=not args.no_vacuum,
         log=print,
     )
-    if info.get("rebuilds", True):
+    if rebuilt:
         print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
 
 

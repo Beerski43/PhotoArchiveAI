@@ -126,6 +126,38 @@ def describe_migration(database_path: str) -> Dict[str, Any]:
         connection.close()
 
 
+def describe_for_operator(database_path: str) -> str:
+    """移行する前に利用者へ見せる説明。**CLI と GUI で同じ文面を使う。**
+
+    2か所に書くと、片方だけが「破棄します」のまま残る。何が消えて何が残るかは
+    実行をためらうかどうかを決める情報なので、**voice を1つにしておく。**
+    """
+    info = describe_migration(database_path)
+    lines = [
+        f"移行対象: {database_path}",
+        f"  Media {info['media']} 件 / Person {info['persons']} 件 は保持します。",
+    ]
+    if info.get("rebuilds", True):
+        # 旧スキーマ(v1)からの移行だけが、顔と解析結果を作り直す。
+        lines.append(
+            f"  顔データ {info['faces_to_drop']} 件と解析結果 {info['analysis_to_drop']} 件は破棄し、"
+            " 顔検出をやり直します。"
+        )
+    else:
+        # **ここで「破棄します」と出してはいけない。** 列を足すだけなので何も消えない。
+        # 消えると読めると、実行をためらって移行が進まなくなる。
+        lines.append(
+            f"  顔データ {info.get('faces_kept', 0)} 件はそのまま残ります"
+            "（列を追加するだけの移行です）。"
+        )
+    return "\n".join(lines)
+
+
+def rebuilds_faces(database_path: str) -> bool:
+    """この移行が顔を作り直すか（v1 からの移行だけが該当）。"""
+    return bool(describe_migration(database_path).get("rebuilds", True))
+
+
 def needs_migration(database_path: str) -> bool:
     """移行が要るか。**版の数字だけでなく、実際の形も見る。**
 
