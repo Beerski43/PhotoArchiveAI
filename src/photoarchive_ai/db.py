@@ -492,6 +492,26 @@ def _face_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
+def shooting_dates_for_faces(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> List[str]:
+    """選んだ顔が写っているメディアの撮影日時を、昇順で返す。
+
+    **年齢をまとめて入れるときに、撮影日時がまたがっていないかを見るため。**
+    EXIF の無いメディアは日時を持たないので、返る件数は顔の件数と一致しない。
+    """
+    if not face_ids:
+        return []
+    placeholders = ",".join("?" for _ in face_ids)
+    rows = connection.execute(
+        "SELECT DISTINCT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
+        f" WHERE f.id IN ({placeholders}) AND m.shooting_date IS NOT NULL"
+        " ORDER BY m.shooting_date",
+        tuple(face_ids),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
 def list_faces(
     connection: sqlite3.Connection,
     assign_source: Optional[str] = None,
