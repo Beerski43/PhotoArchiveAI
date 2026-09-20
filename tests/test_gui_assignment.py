@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from photoarchive_ai import db
@@ -125,6 +126,59 @@ def test_face_age_dialog_keeps_zero_distinct_from_unset():
     assert dialog.age() == 0
     dialog.age_input.setValue(12)
     assert dialog.age() == 12
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"), [("5", 5), ("12", 12), ("0", 0), ("150", 150)]
+)
+def test_the_age_can_be_typed_straight_from_the_keyboard(qt_app, typed, expected):
+    """**キーボードで数字を打てること。**
+
+    `setSpecialValueText` を使っているので、入力欄には数字ではなく「未設定」と
+    いう**文字**が入っている。そのまま数字を打つと "未設定5" になって検証に
+    落ち、**何も起きない。** 利用者からは「▲を押さないと入力できない」と
+    見える（実際にそう報告された）。
+
+    0歳と150歳（範囲の両端）も打てることまで見る。
+    """
+    dialog = photoarchive_gui.FaceAgeDialog()
+    dialog.show()
+    qt_app.processEvents()
+
+    QTest.keyClicks(dialog.age_input, typed)
+
+    assert dialog.age() == expected
+    dialog.close()
+
+
+def test_typing_nothing_leaves_the_age_unset(qt_app):
+    """打鍵しなければ「未設定」のまま。全選択しても値を変えない。"""
+    dialog = photoarchive_gui.FaceAgeDialog()
+    dialog.show()
+    qt_app.processEvents()
+
+    assert dialog.age() is None
+    assert dialog.age_input.text() == "未設定"
+    dialog.close()
+
+
+def test_the_age_filter_can_also_be_typed(window, qt_app):
+    """年齢の絞り込みも同じ作りなので、同じように打てること。
+
+    「指定なし」の文字が入っている点は年齢の入力と同じ。片方だけ直すと、
+    次に触った人が「こちらは打てるのに、あちらは打てない」と混乱する。
+    """
+    person_id = db.add_person(window.connection, "父")
+    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
+    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
+    dialog.show()
+    qt_app.processEvents()
+
+    dialog.min_age.setFocus()
+    QTest.keyClicks(dialog.min_age, "3")
+
+    assert dialog.min_age.value() == 3
+    dialog.close()
 
 
 def test_registered_faces_dialog_pages_through_every_assigned_face(window, monkeypatch):
