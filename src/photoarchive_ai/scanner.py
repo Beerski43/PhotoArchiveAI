@@ -13,6 +13,7 @@
 
 import hashlib
 import logging
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 from PIL import ExifTags, Image
 
 from . import db, face, scoring
+from .logging_setup import setup_logging
 
 logger = logging.getLogger("photoarchive.scanner")
 
@@ -30,6 +32,14 @@ VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 COMMIT_INTERVAL = 50
 #: 実体が消えたと判断した行がこの割合を超えたら、取り違えを疑って中断する
 PRUNE_ABORT_RATIO = 0.2
+#: ワーカープロセスの起こし方。**fork にしない。**
+#: scan は DB 接続を開いたままプールを作るため、fork だと全ワーカーが親の
+#: SQLite 接続と WAL の共有メモリを複製して持つ。ワーカー自身は DB に触らない
+#: が、子の終了時に引き継いだ接続の後始末が親の書き込みと競合し、
+#: `database disk image is malformed` でインデックスが壊れる(Issue #35)。
+#: SQLite は接続を fork() をまたいで持ち越すことを禁じている。
+#: spawn の子は白紙のインタプリタとして始まるので、親の fd を引き継がない。
+WORKER_START_METHOD = "spawn"
 #: 更新時刻の比較許容差(秒)。NFS やタイムゾーンの丸めで全件が
 #: 「変更あり」に倒れると、数時間のハッシュ再計算が走ってしまう。
 MTIME_TOLERANCE_SECONDS = 1.0
@@ -123,8 +133,8 @@ def analyze_file(
     ``known_hash`` と食い違ったとき(＝中身が変わったとき)だけ。
     """
     path = Path(path_str)
-    # 前のファイルのエラーを引きずらない。並列実行では fork 時の値が
-    # 全ワーカーに複製されるので、消さないと無関係なファイルに付く。
+    # 前のファイルのエラーを引きずらない。1つのワーカーが続けて何件も
+    # 処理するので、消さないと無関係なファイルにエラーが付く。
     face.clear_latest_error()
     result: Dict[str, Any] = {
         "path": str(path),
@@ -195,6 +205,22 @@ def analyze_file(
 
 def _analyze_file_task(task: Tuple[str, bool, Optional[str], bool]) -> Dict[str, Any]:
     return analyze_file(*task)
+
+
+def _start_worker(
+    log_file: Optional[str], log_level: str, extra: Optional[Callable[[], None]]
+) -> None:
+    """ワーカープロセスの入口。**ログを張り直してから仕事を始める。**
+
+    ``spawn`` の子は白紙のインタプリタとして始まるので、親が付けたログの
+    ハンドラを持っていない。張り直さないと、子が出した警告は `logging` の
+    lastResort 経由で書式なしの stderr へ漏れ、**ログファイルには1行も
+    残らない**（進捗表示にも混ざる）。消えるのは「どのファイルがなぜ
+    読めなかったか」の記録そのもの。
+    """
+    setup_logging(log_file, log_level)
+    if extra is not None:
+        extra()
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +343,24 @@ def scan_directory(
     force_prune: bool = False,
     force_rescan: bool = False,
     allow_missing_embeddings: bool = False,
+    log_file: Optional[str] = None,
+    log_level: str = "WARNING",
+    worker_initializer: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
-    """ディレクトリを走査し、メディアの登録と顔検出を行う。"""
+    """ディレクトリを走査し、メディアの登録と顔検出を行う。
+
+    ``log_file`` / ``log_level`` は **ワーカープロセスのため**にある。
+    ``spawn`` の子は白紙で始まり、親が付けたログのハンドラを引き継がない。
+    渡さないと「どのファイルがなぜ読めなかったか」が並列実行のときだけ
+    ログに残らなくなる。親自身のログは呼び出し側が設定しておくこと。
+
+    ``worker_initializer`` も同じ理由の差し込み口で、各ワーカーの入口で
+    一度だけ呼ばれる。テストがフェイクの検出器を子へ入れるのに使う。
+    pickle できる必要があるため、モジュール直下の関数を渡すこと。
+
+    **どちらも ``workers`` が2以上のときだけ効く。** ``workers=1`` は同じ
+    プロセスで処理するので、ワーカーの入口そのものが無い。
+    """
     root = Path(source_dir).resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -396,7 +438,12 @@ def scan_directory(
 
     if total:
         if workers > 1:
-            with ProcessPoolExecutor(max_workers=workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                mp_context=multiprocessing.get_context(WORKER_START_METHOD),
+                initializer=_start_worker,
+                initargs=(log_file, log_level, worker_initializer),
+            ) as executor:
                 for position, result in enumerate(
                     executor.map(_analyze_file_task, tasks, chunksize=4), start=1
                 ):

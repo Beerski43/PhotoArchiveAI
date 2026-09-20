@@ -12,6 +12,7 @@ from .converter import convert_heic_files
 from .db import SchemaVersionError, ensure_database
 from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
 from .face import get_latest_error
+from .logging_setup import setup_logging
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
 from .migration import describe_migration, migrate_database, needs_migration
 from .scanner import ScanAborted, scan_directory
@@ -19,23 +20,14 @@ from .selection import copy_selected_media, load_rule, select_media
 
 
 def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") -> logging.Logger:
-    """Set up file logging for the CLI and all photoarchive children."""
-    logger = logging.getLogger("photoarchive")
-    level = getattr(logging, log_level.upper(), None)
-    if not isinstance(level, int):
-        raise ValueError(f"Invalid log level: {log_level}")
-    logger.setLevel(level)
-    logger.handlers.clear()
+    """このプロセスのログ出力先を決める。
 
-    if log_file:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(level)
-        file_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        file_handler.setFormatter(file_format)
-        logger.addHandler(file_handler)
-
-    return logger
+    **ワーカープロセスのぶんはここでは面倒を見ない。** `spawn` の子は
+    白紙で始まるので、子の入口（`scanner._start_worker`）が
+    `logging_setup.setup_logging` を自分で呼び直す。実体を
+    `logging_setup` へ置いているのはそのため。
+    """
+    return setup_logging(log_file, log_level)
 
 
 _progress_started = False
@@ -256,6 +248,8 @@ def _run_scan(args, settings) -> None:
                     current, total, detail, prefix="Scanning", error=get_latest_error()
                 ),
                 workers=max(1, args.workers),
+                log_file=str(log_file),
+                log_level=args.log_level,
                 prune=not args.no_prune,
                 force_prune=args.force_prune,
                 force_rescan=args.force_rescan,
