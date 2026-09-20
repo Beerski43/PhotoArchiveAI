@@ -49,66 +49,64 @@ def check_working_tree() -> list[str]:
     return ["コミットしていない変更が残っている"]
 
 
-def check_unmerged_branches() -> list[str]:
-    """`develop` に入っていない作業が、どこかに浮いていないか。"""
-    section(f"{INTEGRATION_BRANCH} に入っていない作業")
+def unmerged_branches() -> dict[str, list[str]]:
+    """`develop` に入っていない作業を {ブランチ名: コミット} で返す。"""
     run("git", "fetch", "--quiet", "--prune")
     code, out = run(
         "git", "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"
     )
     if code != 0:
-        print("  ブランチを読めなかった")
-        return []
+        return {}
 
-    warnings = []
-    seen = set()
+    found: dict[str, list[str]] = {}
     for ref in out.splitlines():
         name = ref.removeprefix("origin/")
-        if name in {INTEGRATION_BRANCH, "main", "HEAD"} or name in seen:
+        if name in {INTEGRATION_BRANCH, "main", "HEAD"} or name in found:
             continue
-        seen.add(name)
-        code, commits = run(
-            "git", "log", "--oneline", f"origin/{INTEGRATION_BRANCH}..{ref}"
-        )
-        if code != 0 or not commits:
-            continue
-        count = len(commits.splitlines())
-        print(f"  {ref}  ({count} コミット)")
-        for line in commits.splitlines():
-            print(f"      {line}")
-        warnings.append(f"{ref} が {INTEGRATION_BRANCH} に入っていない")
-    if not warnings:
+        code, commits = run("git", "log", "--oneline", f"origin/{INTEGRATION_BRANCH}..{ref}")
+        if code == 0 and commits:
+            found[name] = commits.splitlines()
+    return found
+
+
+def check_branches_have_pull_requests(branches: dict[str, list[str]]) -> list[str]:
+    """浮いているブランチに PR があるか。
+
+    **PR があれば、作業は見える場所にある。** 問題なのは PR が無いまま
+    push されているもので、それは誰の目にも触れない。
+    """
+    section(f"{INTEGRATION_BRANCH} に入っていない作業")
+    if not branches:
         print("  なし")
-    return warnings
-
-
-def check_pull_requests(unmerged: list[str]) -> list[str]:
-    """浮いているブランチに PR があるか。**無ければ、それが申し送りの対象。**"""
-    section("未マージのブランチと PR の対応")
-    code, out = run("gh", "pr", "list", "--state", "open", "--json", "number,title,headRefName")
-    if code != 0:
-        print("  gh を使えないので確認を飛ばす（認証切れかも）")
-        return []
-    try:
-        prs = json.loads(out or "[]")
-    except json.JSONDecodeError:
-        print("  gh の出力を読めなかった")
         return []
 
-    heads = {pr["headRefName"]: pr for pr in prs}
-    for pr in prs:
-        print(f"  PR #{pr['number']}  {pr['headRefName']}  {pr['title']}")
-    if not prs:
-        print("  open な PR は無い")
+    code, out = run("gh", "pr", "list", "--state", "open", "--json", "number,headRefName")
+    heads: dict[str, int] = {}
+    gh_available = code == 0
+    if gh_available:
+        try:
+            heads = {pr["headRefName"]: pr["number"] for pr in json.loads(out or "[]")}
+        except json.JSONDecodeError:
+            gh_available = False
 
     warnings = []
-    for text in unmerged:
-        branch = text.split(" ")[0].removeprefix("origin/")
-        if branch not in heads:
+    for name, commits in sorted(branches.items()):
+        if not gh_available:
+            label = "PR は確認できず（gh を使えない）"
+        elif name in heads:
+            label = f"PR #{heads[name]} あり"
+        else:
+            label = "**PR が無い**"
+        print(f"  {name}  ({len(commits)} コミット) — {label}")
+        for line in commits:
+            print(f"      {line}")
+        if gh_available and name not in heads:
             warnings.append(
-                f"**{branch} は push されているのに PR が無い。**"
+                f"{name} は push されているのに PR が無い。"
                 " 申し送り（docs/history/details/）に状態を書くこと"
             )
+    if not gh_available:
+        print("  gh を使えないので、PR の有無は確認していない（認証切れかも）")
     return warnings
 
 
@@ -127,9 +125,9 @@ def check_handoff_note() -> list[str]:
 def main() -> int:
     warnings: list[str] = []
     warnings += check_working_tree()
-    unmerged = check_unmerged_branches()
-    warnings += unmerged
-    warnings += check_pull_requests(unmerged)
+    # 未マージそのものは異常ではない（作業中なら当たり前）。
+    # **PR が無いまま浮いていること**だけを気にする。
+    warnings += check_branches_have_pull_requests(unmerged_branches())
     warnings += check_handoff_note()
 
     print("\n" + "-" * 60)
