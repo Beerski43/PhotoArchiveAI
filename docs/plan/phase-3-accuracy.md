@@ -7,28 +7,40 @@
 
 ## いまの実データの状態
 
-`data/photoarchive.db`（スキーマ版 2）を 2026-09-19 に数えたもの。
+`data/photoarchive.db`（スキーマ版 2、359MB）を 2026-09-20 に数えたもの。
+**数えるコマンドは下に置いた。古くなるので、読むときは自分で数え直すこと。**
 
 | 見たもの | 値 |
 |---|---|
 | `Media` 登録済み | 70,297 件 |
-| うち未スキャン（`face_count IS NULL`） | 69,347 件 |
-| 検出済みの顔 | 837 件 |
+| うち未スキャン（`face_count IS NULL`） | **0 件（全件スキャン完了）** |
+| 検出済みの顔 | 58,606 件 |
 | 登録済みの人物 | 5 名 |
-| 手動割り当て（`assign_source = 'manual'`） | **0 件** |
+| 手動割り当て（`assign_source = 'manual'`） | 8 件（手順2を開始したところ） |
+
+```bash
+sqlite3 data/photoarchive.db "
+SELECT 'media', COUNT(*) FROM Media;
+SELECT 'unscanned', COUNT(*) FROM Media WHERE face_count IS NULL;
+SELECT 'faces', COUNT(*) FROM Face;
+SELECT 'manual', COUNT(*) FROM Face WHERE assign_source='manual';"
+```
 
 ## 手順
 
-1. **全件スキャン**（tmux 推奨。中断しても続きから再開できる）
-2. **GUI で人物ごとに20〜50枚を割り当てる**
-3. `match --dry-run` で距離の分布を見る
-4. **`evaluate` で取りこぼし率を実測し、閾値を確定する**
-5. `selection.py` の `family_only` の決着
-6. `Person.name` の UNIQUE 制約の要否
-7. `data/photoarchive.db.bak-pre28`（773MB）を消してよいか判断する
+| # | 手順 | 状態 |
+|---|---|---|
+| 1 | 全件スキャン | **完了**（2026-09-20。#39 でDB破損の欠陥を直したうえで実施） |
+| 2 | GUI で人物ごとに20〜50枚を割り当てる | **着手中**（手動割り当て 8 件） |
+| 3 | `match --dry-run` で距離の分布を見る | 未着手 |
+| 4 | `evaluate` で取りこぼし率を実測し、閾値を確定する | 未着手（**道具は #40 で用意済み**） |
+| 5 | `selection.py` の `family_only` の決着 | 未着手 |
+| 6 | `Person.name` の UNIQUE 制約の要否 | 未着手 |
+| 7 | `data/photoarchive.db.bak-pre28`（739MB）を消してよいか判断する | **判断待ち**（手順1が終わったので判断できる） |
 
-手順1と2は実データと人手が要る。手順4の**道具だけ先に作った**ので、手本が
-入り次第そのまま数字が出る。
+**いまは手順2。** 人手の作業で、ここが進まないと手順3以降は測れない。
+手順2を楽にするための GUI 改善（#41 完了、#48 着手中）を Phase 4 から
+先行して入れている。
 
 ## 手順4 — 取りこぼし率の測り方（実装済み）
 

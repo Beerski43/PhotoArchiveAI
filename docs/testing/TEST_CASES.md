@@ -287,6 +287,25 @@ CLAUDE.md §5 で「最終行を PR 本文に貼る」ことを必須にした�
 pytest 出力から件数と所要時間を読めること、`0 passed / 0 failed` を
 成功のように見せないこと。
 
+### `test_plan_stays_true.py` — 実装プランが実態からずれない（10件）
+
+**プランは黙って古くなる。** 誰かが嘘を書くのではなく、実装だけ進んで文書が
+置き去りになる。読んで矛盾に気づくには実態を知っている必要があるので、
+レビューでも落ちる。形だけでも機械で見張る。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_worklog_entries_are_newest_first` | **先頭が最新**（`CLAUDE.md` §1 の前提） |
+| `test_every_phase_document_linked_from_the_roadmap_exists` | ROADMAP のリンク切れ |
+| `test_a_phase_document_is_linked_from_the_roadmap` | 書いたのに張り忘れた文書 |
+| `test_a_phase_that_has_started_names_its_issue` | 着手済みのフェーズに Issue 番号がある |
+| `test_a_real_data_count_in_a_plan_document_is_dated_or_recountable` | **実データの件数に日付か数え直す手段がある**（4件、文書ごと） |
+| `test_every_handoff_note_is_linked_from_the_worklog` | 迷子の申し送りを作らない |
+| `test_the_checks_would_catch_a_plan_that_drifted` | 番人自身が働く |
+
+git と GitHub の状態（PR の無いブランチなど）は `scripts/check_handoff.py`。
+回帰テストには入れていない（ネットワークが要るため）。
+
 ### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
 
 `CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
