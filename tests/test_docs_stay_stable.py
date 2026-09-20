@@ -60,3 +60,71 @@ def test_the_format_used_in_the_documents_is_allowed():
     allowed = "回帰テスト: N passed / M failed (X.XXs) 実行日: YYYY-MM-DD"
 
     assert not [label for pattern, label in FORBIDDEN if pattern.search(allowed)]
+
+
+# ---------------------------------------------------------------------------
+# スキルが指す CLAUDE.md の節が実在すること
+# ---------------------------------------------------------------------------
+
+SECTION_REFERENCE = re.compile(r"`?CLAUDE\.md`?\s*(?:の)?\s*§\s*([0-9]+(?:\.[0-9]+)*)")
+
+
+def _claude_md_sections() -> set:
+    """`CLAUDE.md` の見出しが持つ節番号。"""
+    text = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    sections = set()
+    for line in text.splitlines():
+        match = re.match(r"#+\s+([0-9]+(?:\.[0-9]+)*)[.．]?\s", line)
+        if match:
+            number = match.group(1)
+            sections.add(number)
+            # 「§3」で §3.3 を含む節全体を指すことがあるので、親も登録する
+            while "." in number:
+                number = number.rsplit(".", 1)[0]
+                sections.add(number)
+    return sections
+
+
+def _documents_that_reference_claude_md():
+    for path in sorted(REPO_ROOT.glob(".claude/skills/*/SKILL.md")):
+        yield path
+    for path in sorted((REPO_ROOT / "docs").rglob("*.md")):
+        yield path
+
+
+def test_a_skill_does_not_point_at_a_section_that_does_not_exist():
+    """**「詳細は §N を見よ」が切れていないこと。**
+
+    スキルや文書から `CLAUDE.md` の節を指している箇所がある。節を足したり
+    番号を振り直したりすると、**指し先が黙ってずれる。** 読み手は
+    「そんな節は無い」ことにも気づけない（`test_plan_stays_true.py` が
+    フェーズ文書のリンクを見張っているのと同じ理由）。
+    """
+    sections = _claude_md_sections()
+    broken = []
+    for path in _documents_that_reference_claude_md():
+        text = path.read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            for referenced in SECTION_REFERENCE.findall(line):
+                if referenced not in sections:
+                    relative = path.relative_to(REPO_ROOT)
+                    broken.append(f"{relative}:{number}  §{referenced}  {line.strip()}")
+
+    assert not broken, (
+        "CLAUDE.md に無い節を指している。節を足したか、番号を振り直したはず。\n"
+        f"いまある節: {', '.join(sorted(sections))}\n  " + "\n  ".join(broken)
+    )
+
+
+def test_the_section_check_would_catch_a_dangling_pointer():
+    """この番人自身が働くことを確かめる。"""
+    sections = _claude_md_sections()
+
+    # 実在する節は拾えている（§3.3 はこの検査を足した回に増えた節）
+    assert {"3", "3.2", "3.3", "4", "5", "8"} <= sections
+    # 指し先の取り出しが効いている
+    assert SECTION_REFERENCE.findall("`CLAUDE.md` §3.3 と CLAUDE.md の §99.9") == [
+        "3.3",
+        "99.9",
+    ]
+    assert "99.9" not in sections

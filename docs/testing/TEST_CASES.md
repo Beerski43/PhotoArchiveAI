@@ -404,12 +404,18 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
 
-### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（4件）
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（6件）
 
 `CLAUDE.md` と `README.md` に、テストの件数や成功件数が書かれていないことを
 見る。書いてしまうと**関係のない変更のたびに更新が要り**、忘れれば
 いちばんよく読まれる2つの文書が静かに嘘になる。番人自身が働くことも
 確かめている（数字を戻すと落ちること、`N passed / M failed` の書式は通ること）。
+
+**スキルや文書が指す `CLAUDE.md` の節が実在すること**も見る
+（`test_a_skill_does_not_point_at_a_section_that_does_not_exist`）。節を足したり
+番号を振り直したりすると指し先が黙ってずれ、読み手は**そんな節が無いことにも
+気づけない**。フェーズ文書のリンクを見張っているのと同じ理由
+（`test_plan_stays_true.py`）。
 
 ### `test_system.py` — 通し（2件、`system` マーカー）
 
