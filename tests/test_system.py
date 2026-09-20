@@ -90,7 +90,7 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         photoarchive_gui.PersonDialog,
         "values",
-        lambda self: ("Test Person", "family", "test memo", "2011-05-03"),
+        lambda self: ("Test Person", "family", "test memo", (2011, 5, 3)),
     )
     window._add_person()
     persons = db.list_persons(window.connection)

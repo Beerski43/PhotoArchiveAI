@@ -406,3 +406,88 @@ def test_migrating_a_version_2_database_twice_changes_nothing(tmp_path):
     result = migrate_database(str(database), vacuum=False, make_backup=False)
 
     assert result["migrated"] is False
+
+
+# ---------------------------------------------------------------------------
+# 版だけが進むのを防ぐ（実データで起きた）
+# ---------------------------------------------------------------------------
+
+
+def test_opening_an_old_database_does_not_stamp_it_as_current(tmp_path):
+    """**移行していないDBに、版の印だけを付けない。**
+
+    `SCHEMA` は `CREATE TABLE IF NOT EXISTS` なので既存のテーブルを変えない。
+    それなのに最後へ `PRAGMA user_version` を書くと、**中身は版2のまま
+    「版3」の印が付く。** そうなると `migrate` が「すでに最新です」と言って
+    何もせず、**欠けた列は二度と足されない。**
+
+    実データで起きた。GUI で誕生日を入れても、次に開くと空欄に戻っていた
+    （保存が `no such column: birth_date` で静かに落ちていた）。
+    """
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+
+    with pytest.raises(db.SchemaVersionError) as error:
+        db.ensure_database(str(database))
+
+    assert "migrate" in str(error.value)
+    # **印を付けずに断ること。** 付けてしまうと、この後 migrate が効かない
+    connection = sqlite3.connect(str(database))
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    connection.close()
+    assert needs_migration(str(database)) is True
+
+
+def test_a_database_whose_version_ran_ahead_is_still_repaired(tmp_path):
+    """**版の数字ではなく、実際の形を見る。**
+
+    すでに印だけ付いてしまったデータベース（実データがこの状態だった）を、
+    `migrate` が直せること。数字しか見ないと「最新です」と答えて、
+    **直す手立てが無くなる。**
+    """
+    database = tmp_path / "stamped.db"
+    _build_v2_database(database)
+    connection = sqlite3.connect(str(database))
+    connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
+    connection.commit()
+    connection.close()
+
+    assert needs_migration(str(database)) is True
+    # **この状態のDBを黙って使わせない。** 実データがこうなっており、GUI の
+    # 保存が `no such column` で静かに落ちていた
+    with pytest.raises(db.SchemaVersionError) as error:
+        db.ensure_database(str(database))
+    assert "Person.birth_date" in str(error.value)
+
+    messages = []
+    migrate_database(str(database), make_backup=False, log=messages.append)
+
+    connection = sqlite3.connect(str(database))
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(Person)")}
+    faces = connection.execute("SELECT COUNT(*) FROM Face").fetchone()[0]
+    connection.close()
+    assert "birth_date" in columns
+    # **顔を巻き込まない。** 版は3のままなので、再構築の経路へ落ちてはいけない
+    assert faces == 3
+    assert any("列が足りていません" in message for message in messages)
+
+    # 直ったので、今度は普通に開ける
+    db.ensure_database(str(database)).close()
+    assert needs_migration(str(database)) is False
+
+
+def test_the_expected_columns_come_from_the_schema_itself(tmp_path):
+    """列の一覧を別に書き写さないこと。**写すと片方だけ古くなる。**"""
+    expected = db.expected_columns()
+
+    assert "birth_date" in expected["Person"]
+    # `SCHEMA` から実際に作って読んでいるので、DDL と食い違いようがない
+    database = tmp_path / "fresh.db"
+    connection = db.ensure_database(str(database))
+    try:
+        for table, columns in expected.items():
+            present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            assert present == columns
+        assert db.missing_columns(connection) == {}
+    finally:
+        connection.close()
