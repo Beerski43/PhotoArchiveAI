@@ -84,6 +84,81 @@
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
+### `test_reembed.py` — 特徴量の作り直し（13件）
+
+**ここが壊れると、手作業で積み上げた手本と除外が消える。**
+
+| テスト | 内容 |
+|---|---|
+| `test_reembed_leaves_every_assignment_alone` | **手本・除外・年齢に触らない。** `scan --force-rescan` との決定的な違い |
+| `test_the_original_photo_is_never_read` | **元写真を読まない**（NFS の 441GB を読み直さない） |
+| `test_faces_already_on_the_current_version_are_left_out` | 版が一致する顔は対象外 |
+| `test_running_twice_does_nothing_the_second_time` | 2回目は空振り（＝再開できることの裏返し） |
+| `test_a_limit_stops_early_and_the_rest_is_picked_up_next_time` | **止めた時点までが残る**（塊ごとに確定） |
+| `test_thumbnails_that_are_too_small_are_skipped_and_counted` | **小さすぎる顔を引き伸ばさない。** 版が古いまま残り照合の対象外 |
+| `test_faces_without_a_thumbnail_are_not_counted_as_targets` | 材料が無いものを分母に入れない |
+| `test_the_iterator_does_not_skip_rows_while_they_are_being_rewritten` | **`OFFSET` で送ると顔を飛ばす**（キーセット法で進む） |
+| `test_a_dry_run_writes_nothing` | `--dry-run` はDBに書かない |
+| `test_the_summary_says_what_was_left_behind` | 残したものを報告する |
+| `test_progress_reaches_the_end` | 分母に届く |
+| `test_match_only_sees_the_current_version` | **版の違う特徴量が照合に混ざらない** |
+| `test_a_face_keeps_matching_itself_after_the_rebuild` | 作り直した手本で紐づけが成り立つ |
+
+### `test_matcher_metrics.py` — 距離尺度がモデルの属性であること（10件）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_defaults_come_from_the_active_model` | **閾値もマージンも書き写さない** |
+| `test_euclidean_distances_are_the_plain_geometry` | dlib の尺度 |
+| `test_cosine_distances_ignore_the_length_of_the_vector` | **L2 正規化してから比べる** |
+| `test_cosine_distances_stay_inside_the_expected_range` | 0〜2 に収める（丸め誤差で負にしない） |
+| `test_a_zero_vector_does_not_divide_by_zero` | 壊れた特徴量が来ても落ちない |
+| `test_an_unknown_metric_is_refused` | **尺度を黙って既定にしない** |
+| `test_the_metric_defaults_to_the_active_model` | 省略時はいま使うモデルの尺度 |
+| `test_the_histogram_cap_follows_the_metric` | 分布の刻みの上限も尺度で変わる |
+| `test_every_known_model_has_a_usable_description` | 記述の取りこぼしを防ぐ |
+| `test_an_unknown_version_cannot_be_resolved` | 知らない版は引けない |
+
+### `test_face_alignment.py` — 5点整列（7件）
+
+**整列は1位正解率で +16.6pt を持っている。** 静かに壊れるとモデルを替えた意味が半分消える。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_transform_puts_a_rotated_face_back_on_the_template` | 相似変換がテンプレートへ重なる |
+| `test_the_transform_never_mirrors_the_face` | **鏡像を許さない**（左右の取り違えを隠す） |
+| `test_the_eyes_and_the_mouth_corners_are_swapped_together` | **片方だけ入れ替えると対応が崩れる** |
+| `test_points_already_in_order_are_left_alone` | 並びが正しいものは触らない |
+| `test_landmarks_are_scaled_to_pixels` | FaceMesh の相対座標を画素へ |
+
+### `test_dates.py` — 日付の読み取りと年齢（19件）
+
+| テスト | 内容 |
+|---|---|
+| `test_readable_dates_are_parsed`（3件） | 撮影日時・誕生日の両方の形 |
+| `test_broken_values_are_treated_as_missing`（7件） | `0000-00-00` と `TTTT-TT-TT` の両方 |
+| `test_the_length_of_a_broken_value_is_not_a_safe_check` | **長さでは弾けない**ことを数字で固定 |
+| `test_age_is_counted_from_the_birthday`（4件） | 誕生日前は上げない。誕生前は負 |
+| `test_the_age_is_not_guessed_when_something_is_missing`（4件） | 片方でも欠けたら計算しない |
+| `test_the_gui_still_exposes_the_same_functions` | **`gui.parse_date` が同一物であること**（写しではない） |
+| `test_the_sql_side_keeps_the_same_judgement` | **SQL 側の写しと答えがそろう**（表示と並び順が食い違わない） |
+
+### `test_fetch_models.py` — モデルの取得（9件）
+
+**ネットワークには触らない。** 取得を差し替えて、sha256 の検証と「置かない」判断を見る。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_sha256_of_a_file_is_computed_in_blocks` | 174MB を一度にメモリへ載せない |
+| `test_a_matching_file_is_left_alone` | 一致すれば取得しない |
+| `test_a_file_with_the_wrong_contents_is_reported_not_replaced` | **勝手に取り直さない**（利用者が置いたものを消さない） |
+| `test_force_replaces_the_file` | `--force` なら取り直す |
+| `test_a_download_that_does_not_match_is_never_placed` | **期待と違うものを置かない。** すり替わると結果だけが静かに変わる |
+| `test_a_member_is_taken_out_of_the_archive` | ZIP から認識用の1本だけ取り出す |
+| `test_check_only_never_downloads` | `--check` は取得しない |
+| `test_main_reports_a_failure_with_a_non_zero_code` | 失敗を終了コードで返す |
+| `test_the_arcface_entry_matches_what_face_py_looks_for` | **取得する名前と本体が探す名前をそろえる** |
+
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
 | テスト | 内容 |

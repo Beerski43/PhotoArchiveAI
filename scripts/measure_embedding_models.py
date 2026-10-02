@@ -55,15 +55,13 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from photoarchive_ai import db, face, scoring  # noqa: E402
+from photoarchive_ai import db, face  # noqa: E402
 
-# **「読める撮影日時か」の判断を、ここで書き直さない。**
+# **「読める撮影日時か」の判断を、ここで書き直さない。** 正本は `dates.parse_date`。
 # このリポジトリは同じ判断を2か所に持ったせいで2度壊れている
 # （`0000-00-00` だけを見ていて `TTTT-TT-TTTTT:TT:TT` が素通りした）。
 # `"TTTT-TT-TTTTT:TT:TT"[:10]` は**10文字あるので長さでは弾けない。**
-# 判断の正本は `gui.parse_date`。GUI を読み込む重さを払ってでも、
-# 3つ目の写しを作らない。
-from photoarchive_ai.gui import parse_date  # noqa: E402
+from photoarchive_ai.dates import parse_date  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 距離尺度
@@ -71,29 +69,6 @@ from photoarchive_ai.gui import parse_date  # noqa: E402
 
 EUCLIDEAN = "euclidean"
 COSINE = "cosine"
-
-#: ArcFace の入力は 112x112。整列のテンプレートは InsightFace と同じ5点。
-#: 並びは (画面左の目, 画面右の目, 鼻, 画面左の口角, 画面右の口角)。
-ARCFACE_INPUT_SIZE = 112
-ARCFACE_TEMPLATE = np.array(
-    [
-        [38.2946, 51.6963],
-        [73.5318, 51.5014],
-        [56.0252, 71.7366],
-        [41.5493, 92.3655],
-        [70.7299, 92.2041],
-    ],
-    dtype=np.float64,
-)
-
-#: FaceMesh(468点) から5点を作る。目は目尻と目頭の中点にする。
-#: 口角の 61 / 291 は `scoring.estimate_smile_score` が使っているものと同じ。
-FACEMESH_LEFT_EYE = (33, 133)
-FACEMESH_RIGHT_EYE = (362, 263)
-FACEMESH_NOSE = 1
-FACEMESH_MOUTH_LEFT = 61
-FACEMESH_MOUTH_RIGHT = 291
-
 
 def normalize_rows(matrix: np.ndarray) -> np.ndarray:
     """各行を L2 正規化する。長さ0の行はそのまま返す（0除算を避ける）。"""
@@ -222,94 +197,6 @@ def threshold_sweep(
 
 
 # ---------------------------------------------------------------------------
-# 5点整列
-# ---------------------------------------------------------------------------
-
-
-def order_five_points(points: np.ndarray) -> np.ndarray:
-    """5点を、テンプレートと同じ「画面左が先」の並びにそろえる。
-
-    **MediaPipe の添字の左右と、画面の左右は一致する保証がない**（鏡像の
-    写真や、正面でない顔がある）。テンプレートは0番目の x が1番目より小さい
-    前提なので、目の左右が逆なら**口角も一緒に入れ替える**。片方だけ入れ替えると
-    対応が崩れ、整列が鏡像になる。
-    """
-    points = np.asarray(points, dtype=np.float64).copy()
-    if points[0][0] > points[1][0]:
-        points[[0, 1]] = points[[1, 0]]
-        points[[3, 4]] = points[[4, 3]]
-    return points
-
-
-def similarity_transform(source: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """``source`` を ``target`` に重ねる相似変換（回転＋等倍＋平行移動）の 2x3 行列。
-
-    Umeyama の閉じた式で解く。**RANSAC を使わない**（5点しかないので、
-    乱数に結果が左右されると測定が再現しなくなる）。鏡像は許さない。
-    """
-    source = np.asarray(source, dtype=np.float64)
-    target = np.asarray(target, dtype=np.float64)
-    source_mean = source.mean(axis=0)
-    target_mean = target.mean(axis=0)
-    source_centered = source - source_mean
-    target_centered = target - target_mean
-    covariance = (target_centered.T @ source_centered) / len(source)
-    u_matrix, singular, vt_matrix = np.linalg.svd(covariance)
-    correction = np.ones(2)
-    if np.linalg.det(u_matrix @ vt_matrix) < 0:
-        # 鏡像になる解。最も小さい特異値の符号を反転して、回転だけに戻す。
-        correction[1] = -1.0
-    rotation = u_matrix @ np.diag(correction) @ vt_matrix
-    variance = source_centered.var(axis=0).sum()
-    scale = 1.0 if variance == 0 else float((singular * correction).sum() / variance)
-    translation = target_mean - scale * rotation @ source_mean
-    matrix = np.zeros((2, 3), dtype=np.float64)
-    matrix[:, :2] = scale * rotation
-    matrix[:, 2] = translation
-    return matrix
-
-
-def five_points_from_landmarks(landmarks, width: int, height: int) -> np.ndarray:
-    """FaceMesh の468点から、整列に使う5点を画素座標で取り出す。"""
-
-    def point(index: int) -> np.ndarray:
-        mark = landmarks[index]
-        return np.array([mark.x * width, mark.y * height], dtype=np.float64)
-
-    def eye(pair: Tuple[int, int]) -> np.ndarray:
-        return (point(pair[0]) + point(pair[1])) / 2.0
-
-    return order_five_points(
-        np.array(
-            [
-                eye(FACEMESH_LEFT_EYE),
-                eye(FACEMESH_RIGHT_EYE),
-                point(FACEMESH_NOSE),
-                point(FACEMESH_MOUTH_LEFT),
-                point(FACEMESH_MOUTH_RIGHT),
-            ]
-        )
-    )
-
-
-def detect_five_points(rgb: np.ndarray) -> Optional[np.ndarray]:
-    """サムネイルから5点を取る。取れなければ ``None``。"""
-    mesh = scoring._load_mediapipe_face_mesh()
-    if mesh is None:
-        return None
-    try:
-        results = mesh.process(rgb)
-        if not getattr(results, "multi_face_landmarks", None):
-            return None
-        height, width = rgb.shape[:2]
-        return five_points_from_landmarks(
-            results.multi_face_landmarks[0].landmark, width, height
-        )
-    except Exception:  # pragma: no cover - 環境依存
-        return None
-
-
-# ---------------------------------------------------------------------------
 # 手本の読み出し
 # ---------------------------------------------------------------------------
 
@@ -420,8 +307,6 @@ class ArcFaceEmbedder:
     ``(x - 127.5) / 127.5``、NCHW。
     """
 
-    INPUT_MEAN = 127.5
-    INPUT_STD = 127.5
 
     def __init__(self, model_path: Path, align: bool):
         import onnxruntime
@@ -438,15 +323,15 @@ class ArcFaceEmbedder:
     def _prepare(self, rgb: np.ndarray) -> np.ndarray:
         import cv2
 
-        size = ARCFACE_INPUT_SIZE
+        size = face.ARCFACE_INPUT_SIZE
         if self.align:
-            points = detect_five_points(rgb)
+            points = face.detect_five_points(rgb)
             if points is None:
                 # 整列できない顔。**捨てずに縮小で通し、件数を数える。**
                 # 捨てると (c) と (d) で母集団が変わり、比べられなくなる。
                 self.fallbacks += 1
             else:
-                matrix = similarity_transform(points, ARCFACE_TEMPLATE)
+                matrix = face.similarity_transform(points, face.ARCFACE_TEMPLATE)
                 return cv2.warpAffine(rgb, matrix, (size, size), flags=cv2.INTER_LINEAR)
         return cv2.resize(rgb, (size, size), interpolation=cv2.INTER_LINEAR)
 
@@ -455,7 +340,7 @@ class ArcFaceEmbedder:
         if rgb is None:
             return None
         prepared = self._prepare(rgb).astype(np.float32)
-        blob = (prepared - self.INPUT_MEAN) / self.INPUT_STD
+        blob = (prepared - face.ARCFACE_INPUT_MEAN) / face.ARCFACE_INPUT_STD
         blob = np.transpose(blob, (2, 0, 1))[None, ...]
         output = self.session.run(None, {self.input_name: blob})[0]
         return np.asarray(output[0], dtype=np.float32)

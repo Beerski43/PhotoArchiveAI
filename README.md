@@ -61,12 +61,10 @@ GUIを通常のデスクトップで起動するには、X11またはWaylandの�
 
 加えて、人物の識別に使う次のライブラリも `requirements.txt` と `pyproject.toml` の両方に記載しています。
 
-- `dlib`: 128次元の顔特徴量の生成
+- `dlib`: 旧い特徴量モデル（2026-10-02 に ArcFace へ替えたため、いまは使っていない）
 - `face_recognition_models`: dlib の学習済みモデルデータ。GitHubからインストール（モデルファイルの置き場所としてのみ使い、import はしない）
 
-`onnxruntime` は `requirements.txt` にだけ入れています。**アプリ本体は使いません**
-（`scripts/measure_embedding_models.py` で特徴量モデルを比べるためだけのもの）。
-そのため `pyproject.toml` の実行時依存には入れていません。
+- `onnxruntime`: ArcFace（512次元の顔特徴量）の推論。**モデル本体は別途取得します**（下記）
 
 通常は以下で全Python依存をインストールできます。
 
@@ -87,34 +85,33 @@ python -m pip install git+https://github.com/ageitgey/face_recognition_models
 
 このパッケージは **モデルファイルの置き場所としてのみ** 使用し、Pythonモジュールとしては読み込みません。`face_recognition_models/__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では `ModuleNotFoundError` になるためです。モデルを別の場所に置く場合は、環境変数 `PHOTOARCHIVE_DLIB_MODEL_DIR` か `config/app_settings.json` の `dlib_model_dir` でディレクトリを指定してください。
 
-### 特徴量モデルの比較に使う ONNX（任意）
+### 顔特徴量のモデル（ArcFace）の取得 — **必須**
 
-`scripts/measure_embedding_models.py` は、現行の dlib と ArcFace を比べます。
-**この比較をしないなら設置は不要**で、アプリの動作には影響しません。
-
-ArcFace の認識モデルを `models/w600k_r50.onnx` に置きます。InsightFace の
-`buffalo_l` パックから、認識用の1本だけを取り出して使います。
+顔の識別には ArcFace（512次元）を使います。**モデル本体は git 管理外**なので、
+次のコマンドで `models/` に取得してください。
 
 ```bash
-cd ${REPO_DIR} && mkdir -p models
-curl -L -o /tmp/buffalo_l.zip \
-  https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
-python -c "import zipfile; zipfile.ZipFile('/tmp/buffalo_l.zip').extract('w600k_r50.onnx', 'models/')"
-sha256sum models/w600k_r50.onnx
-# 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43
+cd ${REPO_DIR}
+source .venv/bin/activate
+python scripts/fetch_models.py
 ```
 
-**`insightface` パッケージは入れません。** モデル動物園と GPU 版の
-`onnxruntime` を引き込むため、ONNX 1本と `onnxruntime` だけで動かしています。
+**sha256 を検証して置きます**（一致しないものは置きません）。すでにあって
+一致すれば何もしません。取り直すときは `--force`、検証だけなら `--check`。
 
-`models/` は git 管理外です（dlib の `.dat` を手置きする場合の探索先と同じ扱い）。
-モデルが無い場合、比較スクリプトは理由を報告に書いて dlib のぶんだけを測ります。
+- 取得するのは `models/w600k_r50.onnx`（174MB）。InsightFace の `buffalo_l`
+  配布物から**認識用の1本だけ**を取り出したものです
+- **`insightface` パッケージは入れません。** モデル動物園と GPU 版の
+  `onnxruntime` を引き込むため、ONNX 1本と `onnxruntime` だけで動かしています
+- `models/` は git 管理外です（dlib の `.dat` を手置きする場合の探索先と同じ扱い）。
+  環境変数 `PHOTOARCHIVE_ONNX_MODEL_DIR` で別の場所を指定できます
+- **モデルが無いと `scan` と `reembed` は開始前に中断します**（顔は検出されるのに
+  特徴量が保存されない状態を避けるため）
 
-```bash
-python scripts/measure_embedding_models.py --db data/photoarchive.db
-```
-
-測定結果は [docs/history/details/2026-10-02-embedding-model-comparison.md](docs/history/details/2026-10-02-embedding-model-comparison.md) にあります。
+**2026-10-02 に dlib ResNet から替えました。** 実データの手本126件で1位正解率
+69.8% → 95.2%。測定は
+[docs/history/details/2026-10-02-embedding-model-comparison.md](docs/history/details/2026-10-02-embedding-model-comparison.md)。
+比べ直すときは `python scripts/measure_embedding_models.py --db data/photoarchive.db`。
 
 SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` などはPython標準ライブラリのため、個別インストールは不要です。
 
@@ -195,6 +192,27 @@ photoarchive scan --force-rescan
 ログは `data/logs/scan_*.log` に出力されます。ログレベルは `--log-level` で `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` を指定できます（既定は `WARNING`）。
 
 途中で中断しても、顔検出が終わったメディアは記録済みなので、再実行すれば続きから再開します。
+
+### 補足. 特徴量モデルを替えたとき（`reembed`）
+
+アプリケーションを新しくして**顔特徴量のモデルが替わった**場合、既存の顔の
+特徴量を作り直す必要があります。
+
+```bash
+photoarchive reembed --db data/photoarchive.db --dry-run   # 件数と見積り
+photoarchive reembed --db data/photoarchive.db
+```
+
+- **保存済みのサムネイルから作り直すので、元写真を読みません。**
+  実データ（顔 58,606 件）で約 142 分です
+- **GUI で割り当てた顔・除外した顔・入力した年齢は残ります。**
+  書き換えるのは特徴量とその版だけです
+- **途中で止めても、もう一度実行すれば続きから再開します**
+- 終わったら `photoarchive match` をやり直してください（手本の特徴量も
+  作り直されているため）
+
+**`photoarchive scan --force-rescan` は使わないでください。** あちらは顔の行を
+消して作り直すので、**手作業で割り当てた顔が消えます。**
 
 ### 5. GUI で人物登録と顔の割り当て
 
@@ -372,7 +390,8 @@ PhotoArchiveAI/
 - Pillow: 画像処理
 - pillow-heif: HEIC/HEIF画像の読み込み
 - mediapipe: 顔検出と表情のランドマーク
-- dlib: 128次元の顔特徴量（人物の識別）
+- onnxruntime + ArcFace: 512次元の顔特徴量（人物の識別）
+- dlib: 旧い特徴量モデル（2026-10-02 まで使用）
 - face_recognition_models: dlib の学習済みモデルデータ（import はしない）
 - opencv-python: 画像/動画読み込みと品質評価
 - numpy: 数値処理

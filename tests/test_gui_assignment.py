@@ -50,8 +50,8 @@ def _seed(connection, count: int) -> None:
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.0] * 128,
-            embed_version="test",
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             thumbnail=b"",
             quality_score=float(index),
         )
@@ -345,8 +345,8 @@ def test_the_unassigned_list_starts_with_the_newest_photo(window):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.0] * 128,
-            embed_version="test",
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             thumbnail=b"",
             # 品質スコアは日付と逆に振る。品質順のままなら並びが変わらない
             quality_score=100.0 if index == 0 else 1.0,

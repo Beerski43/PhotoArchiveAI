@@ -207,14 +207,14 @@ def test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces(tmp_path, ca
                 "created_time": "2026-01-01T00:00:00",
             },
         )
-        vector = np.zeros(128, dtype=np.float32)
+        vector = np.zeros(db.EMBEDDING_DIM, dtype=np.float32)
         vector[0] = offset
         db.add_face(
             connection,
             media_id=media,
             bbox=(0, 10, 10, 0),
             embedding=vector,
-            embed_version="test",
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=person,
             assign_source=db.ASSIGN_MANUAL,
         )
@@ -254,14 +254,14 @@ def test_the_same_threshold_given_twice_is_counted_once(tmp_path, capsys):
                 "created_time": "2026-01-01T00:00:00",
             },
         )
-        vector = np.zeros(128, dtype=np.float32)
+        vector = np.zeros(db.EMBEDDING_DIM, dtype=np.float32)
         vector[0] = offset
         db.add_face(
             connection,
             media_id=media,
             bbox=(0, 10, 10, 0),
             embedding=vector,
-            embed_version="test",
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=person,
             assign_source=db.ASSIGN_MANUAL,
         )

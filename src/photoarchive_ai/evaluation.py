@@ -66,6 +66,7 @@ def evaluate_match(
     connection,
     thresholds: Sequence[float] = DEFAULT_THRESHOLDS,
     margin: float = DEFAULT_MARGIN,
+    metric: Optional[str] = None,
     keep_same_media: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
@@ -108,7 +109,7 @@ def evaluate_match(
 
     for start in range(0, total, EVAL_CHUNK_SIZE):
         stop = min(start + EVAL_CHUNK_SIZE, total)
-        distances = _distances(faces.embeddings[start:stop], faces.embeddings)
+        distances = _distances(faces.embeddings[start:stop], faces.embeddings, metric)
         for offset in range(stop - start):
             index = start + offset
             truth = int(person_ids[index])

@@ -3,15 +3,23 @@
 役割を2つに絞っている。
 
 1. MediaPipe による顔検出 (``detect_faces``)
-2. dlib の ResNet による128次元の顔特徴量生成 (``compute_embedding``)
+2. 顔特徴量の生成 (``compute_embedding`` / ``compute_embedding_from_face_image``)
 
 人物への紐づけはここでは行わない。``scan`` が顔を貯め、GUI が人物へ割り当て、
 ``match`` が残りを自動で紐づける、という順序を守るため。
 
-**重要**: 検出した矩形をそのまま dlib に渡すと、パディングの取り方の違いだけで
+**どのモデルを使うかは :mod:`embedding` が持つ**（次元数・距離尺度・閾値も）。
+2026-10-02 に dlib ResNet(128次元・ユークリッド) から ArcFace(512次元・コサイン)
+へ替えた。実データの手本126件で1位正解率 69.8% → 95.2%。
+
+**重要1**: 検出した矩形をそのままモデルに渡すと、パディングの取り方の違いだけで
 特徴量の距離が別人判定の閾値と同じオーダー(実測 0.03〜0.57)で動く。矩形の正規化
 は必ず :func:`face_rect` に集約し、規約を変えるときは :data:`EMBED_VERSION` を
-上げて再スキャン対象にすること。
+上げること（**再スキャンではなく ``photoarchive reembed`` で作り直す**）。
+
+**重要2**: ArcFace は 112x112 のテンプレートに5点を合わせる前提で学習されている。
+**整列を省くと 95.2% → 78.6% に落ちる**（現行 dlib をサムネイルから作り直した
+82.5% にも負ける）。:func:`align_for_arcface` を通さずに推論しないこと。
 """
 
 import importlib.util
@@ -26,6 +34,8 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 from PIL import Image
+
+from . import embedding
 
 try:  # HEIC/HEIF を Pillow で開けるようにする
     from pillow_heif import register_heif_opener
@@ -70,8 +80,23 @@ VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 # 同等で、0.4 以上は急激に悪化した(0.6 では別人同士の誤一致率が 47〜59%)。
 EMBED_PADDING = 0.25
 EMBED_MIN_FACE_PX = 60
-EMBED_VERSION = "dlib_resnet_v1/sp5/pad0.25/full"
-DETECTOR_VERSION = f"mediapipe_fd1/{EMBED_VERSION}"
+
+#: いま使う特徴量モデルの版。`Face.embed_version` に入り、**照合の絞り込みにも
+#: 使う**（別の埋め込み空間の特徴量を混ぜて距離を取るのは常に誤り）。
+EMBED_VERSION = embedding.ACTIVE.version
+
+#: 検出器の版。**`EMBED_VERSION` を内包させない。**
+#:
+#: 以前は `f"mediapipe_fd1/{EMBED_VERSION}"` と連結しており、特徴量の規約を
+#: 変えるだけで `Media.detector_version` が不一致になって**再検出**が走った。
+#: サムネイルから特徴量を作り直せるようになった（`photoarchive reembed`）ので、
+#: その必要がなくなった。**検出結果（矩形・サムネイル）は作り直さない。**
+#:
+#: 実データの `Media.detector_version` は 70,297 件すべてが連結された古い形を
+#: 持っている。**素朴に文字列を変えると全件が不一致になり、441GB を NFS
+#: （実測 24MB/s）から読み直すことになる。** 比較の側を
+#: `detector_version_of` で正規化して、古い値と揃える。
+DETECTOR_VERSION = "mediapipe_fd1"
 
 THUMBNAIL_MAX_SIZE = 160
 THUMBNAIL_QUALITY = 85
@@ -80,10 +105,68 @@ DLIB_MODEL_DIR_ENV = "PHOTOARCHIVE_DLIB_MODEL_DIR"
 SHAPE_PREDICTOR_FILE = "shape_predictor_5_face_landmarks.dat"
 FACE_RECOGNITION_FILE = "dlib_face_recognition_resnet_model_v1.dat"
 
+#: ArcFace の ONNX。`models/` に手置きする（README の手順、`scripts/fetch_models.py`)。
+ONNX_MODEL_DIR_ENV = "PHOTOARCHIVE_ONNX_MODEL_DIR"
+ARCFACE_FILE = "w600k_r50.onnx"
+
+#: ArcFace の入力。InsightFace の `ArcFaceONNX` と同じ前処理にそろえる。
+ARCFACE_INPUT_SIZE = 112
+ARCFACE_INPUT_MEAN = 127.5
+ARCFACE_INPUT_STD = 127.5
+
+#: 5点整列のテンプレート（112x112）。InsightFace と同じ。
+#: 並びは (画面左の目, 画面右の目, 鼻, 画面左の口角, 画面右の口角)。
+ARCFACE_TEMPLATE = np.array(
+    [
+        [38.2946, 51.6963],
+        [73.5318, 51.5014],
+        [56.0252, 71.7366],
+        [41.5493, 92.3655],
+        [70.7299, 92.2041],
+    ],
+    dtype=np.float64,
+)
+
+#: FaceMesh(468点) から5点を作る添字。目は目尻と目頭の中点にする。
+#: 口角の 61 / 291 は `scoring.estimate_smile_score` が使うものと同じ。
+FACEMESH_LEFT_EYE = (33, 133)
+FACEMESH_RIGHT_EYE = (362, 263)
+FACEMESH_NOSE = 1
+FACEMESH_MOUTH_LEFT = 61
+FACEMESH_MOUTH_RIGHT = 291
+
 _face_detection = None
 _face_detection_initialized = False
 _dlib_models = None
 _dlib_models_initialized = False
+_arcface_session = None
+_arcface_session_initialized = False
+
+#: 5点が取れずに縮小で通した顔の数。**捨てずに数える。**
+#: `reembed` が最後にまとめて報告する。
+_alignment_fallbacks = 0
+
+
+def detector_version_of(stored: Optional[str]) -> Optional[str]:
+    """保存された検出器の版から、**検出器の部分だけ**を取り出す。
+
+    古い連結形（`mediapipe_fd1/dlib_resnet_v1/sp5/pad0.25/full`）と新しい形
+    （`mediapipe_fd1`）を同じ値に揃える。**これが無いと、特徴量モデルを
+    替えただけで実データ 70,297 件すべてが再検出の対象になる。**
+    """
+    if not stored:
+        return stored
+    return stored.split("/", 1)[0]
+
+
+def alignment_fallbacks() -> int:
+    """5点が取れずに縮小で通した顔の数。"""
+    return _alignment_fallbacks
+
+
+def reset_alignment_fallbacks() -> None:
+    global _alignment_fallbacks
+    _alignment_fallbacks = 0
 
 
 @contextmanager
@@ -304,12 +387,16 @@ def has_dlib_models() -> bool:
 
 
 def embedding_available() -> bool:
-    """顔特徴量を実際に生成できるか。
+    """**いま使うモデルで**顔特徴量を実際に生成できるか。
 
-    ``has_dlib_models`` はファイルの所在しか見ないので、dlib の読み込み
-    そのものが失敗する場合を捕まえられない。``scan`` はこちらを使う。
+    ファイルの所在を見るだけでは、モデルの読み込みそのものが失敗する場合を
+    捕まえられない。``scan`` と ``reembed`` はこちらを使い、作れないなら
+    始める前に中断する（顔は検出されるのに特徴量が NULL のまま
+    「スキャン済み」として記録される事故を防ぐ）。
     """
-    return _load_dlib_models() is not None
+    if embedding.ACTIVE is embedding.DLIB_RESNET:
+        return _load_dlib_models() is not None
+    return _load_arcface_session() is not None
 
 
 def _load_dlib_models():
@@ -337,10 +424,13 @@ def _load_dlib_models():
 def reset_model_cache() -> None:
     """テストからモデルを差し替えるためにキャッシュを捨てる。"""
     global _dlib_models, _dlib_models_initialized, _face_detection, _face_detection_initialized
+    global _arcface_session, _arcface_session_initialized
     _dlib_models = None
     _dlib_models_initialized = False
     _face_detection = None
     _face_detection_initialized = False
+    _arcface_session = None
+    _arcface_session_initialized = False
 
 
 def face_rect(
@@ -365,31 +455,247 @@ def face_rect(
     return new_left, new_top, new_right, new_bottom
 
 
+# ---------------------------------------------------------------------------
+# 5点整列（ArcFace の前処理）
+# ---------------------------------------------------------------------------
+
+
+def order_five_points(points: np.ndarray) -> np.ndarray:
+    """5点を、テンプレートと同じ「画面左が先」の並びにそろえる。
+
+    **MediaPipe の添字の左右と、画面の左右は一致する保証がない**（鏡像の写真や、
+    正面でない顔がある）。テンプレートは0番目の x が1番目より小さい前提なので、
+    目の左右が逆なら**口角も一緒に入れ替える。** 片方だけ入れ替えると対応が
+    崩れ、整列が鏡像になる。
+    """
+    points = np.asarray(points, dtype=np.float64).copy()
+    if points[0][0] > points[1][0]:
+        points[[0, 1]] = points[[1, 0]]
+        points[[3, 4]] = points[[4, 3]]
+    return points
+
+
+def similarity_transform(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """``source`` を ``target`` に重ねる相似変換（回転＋等倍＋平行移動）の 2x3 行列。
+
+    Umeyama の閉じた式で解く。**RANSAC を使わない**（5点しかないので、乱数に
+    結果が左右されると同じ写真から同じ特徴量が出なくなる）。**鏡像は許さない。**
+    許すと左右の取り違えを整列が「直して」隠してしまう。
+    """
+    source = np.asarray(source, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    source_mean = source.mean(axis=0)
+    target_mean = target.mean(axis=0)
+    source_centered = source - source_mean
+    target_centered = target - target_mean
+    covariance = (target_centered.T @ source_centered) / len(source)
+    u_matrix, singular, vt_matrix = np.linalg.svd(covariance)
+    correction = np.ones(2)
+    if np.linalg.det(u_matrix @ vt_matrix) < 0:
+        # 鏡像になる解。最も小さい特異値の符号を反転して、回転だけに戻す。
+        correction[1] = -1.0
+    rotation = u_matrix @ np.diag(correction) @ vt_matrix
+    variance = source_centered.var(axis=0).sum()
+    scale = 1.0 if variance == 0 else float((singular * correction).sum() / variance)
+    matrix = np.zeros((2, 3), dtype=np.float64)
+    matrix[:, :2] = scale * rotation
+    matrix[:, 2] = target_mean - scale * rotation @ source_mean
+    return matrix
+
+
+def five_points_from_landmarks(landmarks, width: int, height: int) -> np.ndarray:
+    """FaceMesh の468点から、整列に使う5点を画素座標で取り出す。"""
+
+    def point(index: int) -> np.ndarray:
+        mark = landmarks[index]
+        return np.array([mark.x * width, mark.y * height], dtype=np.float64)
+
+    def eye(pair: Tuple[int, int]) -> np.ndarray:
+        return (point(pair[0]) + point(pair[1])) / 2.0
+
+    return order_five_points(
+        np.array(
+            [
+                eye(FACEMESH_LEFT_EYE),
+                eye(FACEMESH_RIGHT_EYE),
+                point(FACEMESH_NOSE),
+                point(FACEMESH_MOUTH_LEFT),
+                point(FACEMESH_MOUTH_RIGHT),
+            ]
+        )
+    )
+
+
+def detect_five_points(rgb: np.ndarray) -> Optional[np.ndarray]:
+    """顔画像から整列用の5点を取る。取れなければ ``None``。
+
+    FaceMesh は `scoring` と同じものを使う（**新しい依存を増やさない**）。
+    """
+    from . import scoring
+
+    mesh = scoring._load_mediapipe_face_mesh()
+    if mesh is None:
+        return None
+    try:
+        with _suppress_mediapipe_output():
+            results = mesh.process(np.ascontiguousarray(rgb))
+        if not getattr(results, "multi_face_landmarks", None):
+            return None
+        height, width = rgb.shape[:2]
+        return five_points_from_landmarks(
+            results.multi_face_landmarks[0].landmark, width, height
+        )
+    except Exception as error:  # pragma: no cover - 環境依存
+        logger.debug("Landmark detection for alignment failed: %s", error)
+        return None
+
+
+def align_for_arcface(rgb: np.ndarray) -> np.ndarray:
+    """顔画像を ArcFace の 112x112 テンプレートへ整列する。
+
+    **5点が取れなければ縮小で通し、件数を数える。** 捨てると、整列できる顔だけで
+    精度を語ることになる（実データの手本126件では14件が整列できなかった）。
+    **整列は +16.6pt を持っている**ので、落ちた件数は把握しておく必要がある。
+    """
+    global _alignment_fallbacks
+    size = ARCFACE_INPUT_SIZE
+    points = detect_five_points(rgb)
+    if points is None:
+        _alignment_fallbacks += 1
+        return cv2.resize(rgb, (size, size), interpolation=cv2.INTER_LINEAR)
+    matrix = similarity_transform(points, ARCFACE_TEMPLATE)
+    return cv2.warpAffine(rgb, matrix, (size, size), flags=cv2.INTER_LINEAR)
+
+
+# ---------------------------------------------------------------------------
+# 特徴量
+# ---------------------------------------------------------------------------
+
+
 def compute_embedding(
     rgb: np.ndarray,
     face_location: Tuple[int, int, int, int],
 ) -> Optional[np.ndarray]:
-    """顔の128次元特徴量を返す。小さすぎる顔やモデル不在の場合は None。"""
-    models = _load_dlib_models()
-    if models is None:
-        return None
+    """元写真と顔の位置から特徴量を作る。小さすぎる顔やモデル不在なら ``None``。
+
+    いま使うモデルは `embedding.ACTIVE`。**次元数も距離尺度もそこに書いてある。**
+    """
     height, width = rgb.shape[:2]
     left, top, right, bottom = face_rect(face_location, width, height)
     if min(right - left, bottom - top) < EMBED_MIN_FACE_PX:
         logger.debug("Face too small for embedding: %s", face_location)
+        return None
+    if embedding.ACTIVE is embedding.DLIB_RESNET:
+        return _compute_dlib_embedding(rgb, (left, top, right, bottom))
+    return compute_embedding_from_face_image(rgb[top:bottom, left:right])
+
+
+def compute_embedding_from_face_image(face_rgb: np.ndarray) -> Optional[np.ndarray]:
+    """**切り出し済みの顔画像**から特徴量を作る。
+
+    `photoarchive reembed` が保存済みサムネイルから作り直すのに使う。
+    **元写真を読まずに済むのがこの入口の目的**（実データの元写真は NFS 上で
+    読み直すと 5.1 時間かかる）。
+
+    サムネイルは検出矩形の生クロップなので、**ここでは `face_rect` を通さない。**
+    通すと二重にパディングすることになる。
+    """
+    if face_rgb is None or face_rgb.size == 0:
+        return None
+    if embedding.ACTIVE is embedding.DLIB_RESNET:
+        height, width = face_rgb.shape[:2]
+        return _compute_dlib_embedding(face_rgb, (0, 0, width, height))
+    return _compute_arcface_embedding(face_rgb)
+
+
+def _compute_dlib_embedding(
+    rgb: np.ndarray, rect: Tuple[int, int, int, int]
+) -> Optional[np.ndarray]:
+    """dlib ResNet の128次元特徴量。``rect`` は ``(left, top, right, bottom)``。"""
+    models = _load_dlib_models()
+    if models is None:
         return None
     try:
         import dlib  # type: ignore
 
         shape_predictor, recognition_model = models
         image = np.ascontiguousarray(rgb)
-        rectangle = dlib.rectangle(left, top, right, bottom)
+        rectangle = dlib.rectangle(*rect)
         shape = shape_predictor(image, rectangle)
         descriptor = recognition_model.compute_face_descriptor(image, shape, 0)
         return np.asarray(descriptor, dtype=np.float32)
     except Exception as error:
         logger.exception("dlib embedding failed: %s", error)
         _set_latest_error(f"Embedding failed: {error}")
+        return None
+
+
+def _compute_arcface_embedding(face_rgb: np.ndarray) -> Optional[np.ndarray]:
+    """ArcFace の512次元特徴量。**5点整列してから推論する。**
+
+    前処理は InsightFace の ``ArcFaceONNX`` と同じ。入力は **RGB**、
+    ``(x - 127.5) / 127.5``、NCHW。
+    """
+    session = _load_arcface_session()
+    if session is None:
+        return None
+    try:
+        aligned = align_for_arcface(np.ascontiguousarray(face_rgb)).astype(np.float32)
+        blob = (aligned - ARCFACE_INPUT_MEAN) / ARCFACE_INPUT_STD
+        blob = np.transpose(blob, (2, 0, 1))[None, ...]
+        name = session.get_inputs()[0].name
+        output = session.run(None, {name: blob})[0]
+        return np.asarray(output[0], dtype=np.float32)
+    except Exception as error:
+        logger.exception("ArcFace embedding failed: %s", error)
+        _set_latest_error(f"Embedding failed: {error}")
+        return None
+
+
+def _resolve_arcface_path() -> Path:
+    """ArcFace の ONNX を探す。探索順は dlib のモデルと同じ考え方。
+
+    1. 環境変数 ``PHOTOARCHIVE_ONNX_MODEL_DIR``
+    2. 環境変数 ``PHOTOARCHIVE_DLIB_MODEL_DIR``（同じ置き場にまとめる運用）
+    3. リポジトリ直下の ``models/``
+    """
+    candidates = []
+    for variable in (ONNX_MODEL_DIR_ENV, DLIB_MODEL_DIR_ENV):
+        value = os.environ.get(variable)
+        if value:
+            candidates.append(Path(value))
+    candidates.append(Path(__file__).resolve().parents[2] / "models")
+    for candidate in candidates:
+        if (candidate / ARCFACE_FILE).is_file():
+            return candidate / ARCFACE_FILE
+    raise FileNotFoundError(
+        f"ArcFace のモデルが見つかりません。{ARCFACE_FILE} を models/ に置いてください。"
+        " `python scripts/fetch_models.py` で取得できます"
+        f"（環境変数 {ONNX_MODEL_DIR_ENV} でディレクトリを指定することもできます）。"
+    )
+
+
+def _load_arcface_session():
+    """onnxruntime のセッションを返す。失敗時は ``None``。"""
+    global _arcface_session, _arcface_session_initialized
+    if _arcface_session_initialized:
+        return _arcface_session
+    _arcface_session_initialized = True
+    try:
+        import onnxruntime
+
+        options = onnxruntime.SessionOptions()
+        options.log_severity_level = 3
+        _arcface_session = onnxruntime.InferenceSession(
+            str(_resolve_arcface_path()),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        return _arcface_session
+    except Exception as error:
+        logger.exception("ArcFace model initialization failed: %s", error)
+        _set_latest_error(f"ArcFace model unavailable: {error}")
+        _arcface_session = None
         return None
 
 
