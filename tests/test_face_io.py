@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from photoarchive_ai import face
+from photoarchive_ai import embedding, face
 from tests.helpers import write_black_image, write_image, write_video
 
 
@@ -163,14 +163,45 @@ def test_face_rect_stays_inside_the_image():
     assert 0 <= top < bottom <= height
 
 
-def test_embed_version_records_the_padding():
-    """パディングを変えたら `EMBED_VERSION` も上げる、という約束の見張り。
+def test_embed_version_comes_from_the_active_model():
+    """**版の文字列はモデルの記述が持つ。** `face` 側で組み立て直さない。
 
-    規約を変えると特徴量の距離が別人判定の閾値と同じオーダーで動く。版が
-    据え置かれると、古い特徴量と新しい特徴量が同じ版として混ざってしまう。
+    版が据え置かれると、古い特徴量と新しい特徴量が同じ版として混ざり、
+    **別の埋め込み空間の距離を比べてしまう。**
     """
-    assert f"pad{face.EMBED_PADDING}" in face.EMBED_VERSION
-    assert face.EMBED_VERSION in face.DETECTOR_VERSION
+    assert face.EMBED_VERSION == embedding.ACTIVE.version
+    # 作り方が版に出ていること（モデル名と前処理が読み取れる）
+    assert "arcface" in face.EMBED_VERSION
+    assert "5pt" in face.EMBED_VERSION
+
+
+def test_the_detector_version_no_longer_contains_the_embedding_version():
+    """**検出器の版に特徴量の版を内包させない。**
+
+    以前は `mediapipe_fd1/<EMBED_VERSION>` と連結していたため、**特徴量を
+    替えるだけで実データ 70,297 件すべてが再検出の対象になった**（441GB を
+    NFS から読み直す）。特徴量は `reembed` がサムネイルから作り直すので、
+    検出をやり直す必要はない。
+    """
+    assert face.EMBED_VERSION not in face.DETECTOR_VERSION
+    assert face.DETECTOR_VERSION == "mediapipe_fd1"
+
+
+def test_old_concatenated_detector_versions_do_not_trigger_a_rescan():
+    """**実データに入っている古い形が、再検出の対象にならないこと。**
+
+    実データの `Media.detector_version` は 70,297 件すべてが
+    `mediapipe_fd1/dlib_resnet_v1/sp5/pad0.25/full`。ここが崩れると
+    NFS から 441GB を読み直すことになる。
+    """
+    stored = "mediapipe_fd1/dlib_resnet_v1/sp5/pad0.25/full"
+    assert face.detector_version_of(stored) == face.DETECTOR_VERSION
+    # 新しい形もそのまま通る
+    assert face.detector_version_of("mediapipe_fd1") == face.DETECTOR_VERSION
+    # 検出器そのものが変わったときは一致しない
+    assert face.detector_version_of("retinaface_v1/arcface") != face.DETECTOR_VERSION
+    # 未スキャンの NULL は NULL のまま返す（判定は呼び出し側に任せる）
+    assert face.detector_version_of(None) is None
 
 
 # ---------------------------------------------------------------------------

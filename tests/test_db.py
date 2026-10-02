@@ -66,8 +66,8 @@ def test_person_crud_and_face_assignment(tmp_path: Path):
             connection,
             media_id=media_id,
             bbox=(10, 110, 110, 10),
-            embedding=[0.5] * 128,
-            embed_version="test",
+            embedding=[0.5] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             thumbnail=b"jpeg",
             quality_score=42.0,
         )
@@ -102,7 +102,7 @@ def test_deleting_media_cascades_to_faces_and_results(tmp_path: Path):
             media_id=media_id,
             bbox=(0, 10, 10, 0),
             embedding=None,
-            embed_version="test",
+            embed_version=db.embedding_model.ACTIVE.version,
         )
         db.save_media_scores(connection, media_id, 10.0, 20.0)
         connection.commit()
@@ -152,8 +152,8 @@ def test_load_manual_embeddings_pairs_vectors_with_person_ids(tmp_path: Path):
                 connection,
                 media_id=media_id,
                 bbox=(0, 10, 10, 0),
-                embedding=[0.1] * 128,
-                embed_version="test",
+                embedding=[0.1] * db.EMBEDDING_DIM,
+                embed_version=db.embedding_model.ACTIVE.version,
                 person_id=alice,
                 assign_source=db.ASSIGN_MANUAL,
             )
@@ -161,8 +161,8 @@ def test_load_manual_embeddings_pairs_vectors_with_person_ids(tmp_path: Path):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.9] * 128,
-            embed_version="test",
+            embedding=[0.9] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=bob,
             assign_source=db.ASSIGN_MANUAL,
         )
@@ -171,15 +171,15 @@ def test_load_manual_embeddings_pairs_vectors_with_person_ids(tmp_path: Path):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.5] * 128,
-            embed_version="test",
+            embedding=[0.5] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=bob,
             assign_source=db.ASSIGN_AUTO,
         )
         connection.commit()
 
         matrix, person_ids = db.load_manual_embeddings(connection)
-        assert matrix.shape == (4, 128)
+        assert matrix.shape == (4, db.EMBEDDING_DIM)
         assert list(person_ids) == [alice, alice, alice, bob]
     finally:
         connection.close()
@@ -246,8 +246,8 @@ def test_shooting_dates_come_back_one_per_face(tmp_path: Path):
                     connection,
                     media_id=media_id,
                     bbox=(0, 10, 10, 0),
-                    embedding=[0.0] * 128,
-                    embed_version="test",
+                    embedding=[0.0] * db.EMBEDDING_DIM,
+                    embed_version=db.embedding_model.ACTIVE.version,
                 )
             )
         connection.commit()
@@ -327,8 +327,8 @@ def _seed_for_ordering(connection):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.0] * 128,
-            embed_version="test",
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             thumbnail=b"",
             quality_score=quality,
         )
@@ -450,8 +450,8 @@ def test_pagination_does_not_repeat_or_skip_a_face(tmp_path: Path):
                 connection,
                 media_id=media_id,
                 bbox=(0, 10, 10, 0),
-                embedding=[0.0] * 128,
-                embed_version="test",
+                embedding=[0.0] * db.EMBEDDING_DIM,
+                embed_version=db.embedding_model.ACTIVE.version,
                 quality_score=1.0,
             )
             for _ in range(5)
@@ -504,8 +504,8 @@ def test_a_broken_exif_date_does_not_take_over_the_newest_page(tmp_path: Path):
                 connection,
                 media_id=media_id,
                 bbox=(0, 10, 10, 0),
-                embedding=[0.0] * 128,
-                embed_version="test",
+                embedding=[0.0] * db.EMBEDDING_DIM,
+                embed_version=db.embedding_model.ACTIVE.version,
                 quality_score=1.0,
             )
         connection.commit()
@@ -573,8 +573,8 @@ def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path
                 connection,
                 media_id=media_id,
                 bbox=(0, 10, 10, 0),
-                embedding=[0.0] * 128,
-                embed_version="test",
+                embedding=[0.0] * db.EMBEDDING_DIM,
+                embed_version=db.embedding_model.ACTIVE.version,
             )
             for _ in range(count)
         ]

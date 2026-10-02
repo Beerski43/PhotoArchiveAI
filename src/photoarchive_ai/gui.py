@@ -40,6 +40,12 @@ from PySide6.QtWidgets import (
 from . import db, face, migration
 from .config import find_settings_path
 
+# **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
+# `gui.parse_date` を参照している呼び出しとテストを壊さないため。
+# **この module に写しを作らないこと**（`db.SHOOTING_DATE_SORT_KEY` が
+# SQL 側の写しで、そちらと食い違うと表示と並び順がずれる）。
+from .dates import calculate_age, parse_date  # noqa: F401
+
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
@@ -72,47 +78,6 @@ def _format_timestamp(value: Optional[str]) -> Optional[str]:
     if parse_date(value) is None:
         return None
     return str(value).replace("T", " ")[:19]
-
-
-def parse_date(value: Optional[str]) -> Optional[date]:
-    """`YYYY-MM-DD` で始まる文字列を日付にする。読めなければ ``None``。
-
-    撮影日時（`2017-12-16T18:46:32`）も誕生日（`2011-05-03`）も先頭10文字が
-    日付なので、同じ関数で扱える。
-
-    **壊れた EXIF を弾くのがここの役目。** カメラが日付にならない値を書くことが
-    あり、実データでは2種類あった（`0000-00-00T00:00:00` が Media 55件、
-    `TTTT-TT-TTTTT:TT:TT` が 67件）。
-
-    **「読める撮影日時か」の判断は、この関数1つに持たせる。** 表示
-    （`_format_timestamp`）・年齢の計算（`calculate_age`）・年齢の初期値
-    （`suggested_age`）・選択の知らせ（`summarize_selection`）が同じ答えを返さないと、
-    「撮影日時: 不明」と出ている写真に年齢だけが出る、といった食い違いが起きる。
-    並び順だけは SQL 側にあるので、`db.SHOOTING_DATE_SORT_KEY` に同じ判断を
-    写してある（**片方だけ直さないこと**）。
-    """
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(str(value)[:10])
-    except ValueError:
-        return None
-
-
-def calculate_age(birth_date: Optional[str], shooting_date: Optional[str]) -> Optional[int]:
-    """その写真が撮られた時点の年齢。誕生日を迎える前なら1引く。
-
-    **どちらか一方でも欠けていれば計算しない**（仕様書 §8.4）。撮影日時は
-    実データの 15.8% で欠けており、誕生日は登録するまで全員が未設定。
-
-    撮影日が誕生日より前なら**負の数**を返す。行を消さずに「誕生前」と出して、
-    **人物の選び間違いや日付の誤りに気づける**ようにするため。
-    """
-    born = parse_date(birth_date)
-    taken = parse_date(shooting_date)
-    if born is None or taken is None:
-        return None
-    return taken.year - born.year - ((taken.month, taken.day) < (born.month, born.day))
 
 
 def format_age(age: Optional[int]) -> Optional[str]:

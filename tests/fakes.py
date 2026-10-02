@@ -92,18 +92,36 @@ _install_fake_mediapipe_modules()
 
 
 def fake_embedding_for(image_region: np.ndarray) -> np.ndarray:
-    """顔画像の内容から決まる128次元ベクトルを作る。
+    """顔画像の内容から決まる特徴量ベクトルを作る。
 
     同じ見た目なら同じベクトル、違う見た目なら離れたベクトルになる必要がある
     (そうでないと matcher のテストが書けない)。ここでは領域の平均色をそのまま
     座標にして、色が近い顔ほど距離が近くなるようにしている。
+
+    **次元数はモデルの記述から引く**（dlib 128 / ArcFace 512）。書き写すと、
+    モデルを替えたときにここだけ古くなって `encode_embedding` に弾かれる。
     """
     if image_region.size == 0:
         mean = np.zeros(3, dtype=np.float64)
     else:
         mean = np.asarray(image_region, dtype=np.float64).reshape(-1, 3).mean(axis=0) / 255.0
-    vector = np.zeros(128, dtype=np.float32)
+    return _vector_from_mean(mean)
+
+
+def _vector_from_mean(mean: np.ndarray) -> np.ndarray:
+    """平均色からベクトルを組む。
+
+    **4番目の要素に 1.0 を置くのは、コサイン距離のため。** 平均色だけを座標に
+    すると、(0.5,0.5,0.5) と (1.0,1.0,1.0) が**同じ向き**になってコサイン距離 0
+    になり、「色が違えば別人」という前提が崩れる。定数を1つ足すと向きが分かれる。
+    **ユークリッド距離は定数の分がちょうど打ち消すので、dlib を使うテストの
+    距離は1つも変わらない。**
+    """
+    from photoarchive_ai import embedding
+
+    vector = np.zeros(embedding.ACTIVE.dimensions, dtype=np.float32)
     vector[0:3] = mean
+    vector[3] = 1.0
     return vector
 
 
@@ -121,6 +139,33 @@ class _FakeRecognitionModel:
         return fake_embedding_for(region)
 
 
+class _FakeArcFaceInput:
+    name = "input.1"
+
+
+class _FakeArcFaceSession:
+    """onnxruntime の ``InferenceSession`` のフェイク。
+
+    実物の ONNX（174MB）をテストで読むと重く、環境にも左右される。
+    **実装が呼ぶ形（`get_inputs()[0].name` と `run(None, {name: blob})`）を
+    そのまま真似る。**
+
+    返す値は**渡された blob の内容から決める**。`(x - 127.5) / 127.5` で
+    正規化された NCHW の配列から平均色を戻すので、dlib のフェイクと同じく
+    「色が同じなら同一人物」が成り立つ。
+    """
+
+    def get_inputs(self):
+        return [_FakeArcFaceInput()]
+
+    def run(self, _output_names, feeds):
+        blob = np.asarray(next(iter(feeds.values())), dtype=np.float64)
+        # (1, 3, H, W) → チャンネルごとの平均を 0.0-1.0 の色に戻す
+        channel_mean = blob[0].reshape(blob.shape[1], -1).mean(axis=1)
+        mean = (channel_mean * 127.5 + 127.5) / 255.0
+        return [_vector_from_mean(mean)[None, :]]
+
+
 def install_fake_backends() -> None:
     """フェイクの mediapipe と dlib を、このプロセスへ入れる。
 
@@ -131,6 +176,12 @@ def install_fake_backends() -> None:
 
     _install_fake_mediapipe_modules()
     face._load_dlib_models = lambda: (_FakeShapePredictor(), _FakeRecognitionModel())
+    face._load_arcface_session = lambda: _FakeArcFaceSession()
+    # **5点は取れないことにして、縮小の経路を通す。** フェイクの FaceMesh は
+    # 既定で全点を (0.5, 0.5) に返すので、整列に使うと退化した変換になり、
+    # 画像の端が黒く埋まって「色が同じなら同一人物」が崩れる。整列そのものは
+    # `tests/test_face_alignment.py` が単体で確かめている。
+    face.detect_five_points = lambda _rgb: None
     face.EMBED_MIN_FACE_PX = 4
     face.reset_model_cache()
     scoring.reset_model_cache()
