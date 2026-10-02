@@ -142,7 +142,9 @@ def test_a_slow_command_does_not_block_the_check():
     5/5 は PR の前に必ず通る。`git fetch` が返らないと、画面には
     `=== 5/5 引き継ぎの状態 ===` が出たきり何も起きない。
     """
-    code, _, err = check_handoff.run("sleep", "5", timeout=0.5)
+    # **待ち時間は短くてよい。** 見ているのは終了コードと文面で、待った長さ自体
+    # ではない。回帰テストは繰り返し流すものなので 10 秒以内に収める（CLAUDE.md §5）。
+    code, _, err = check_handoff.run("sleep", "5", timeout=0.2)
 
     assert code == 124
     assert "返らなかった" in err
