@@ -514,6 +514,8 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | `test_a_branch_with_an_open_pull_request_is_not_a_warning` | PR があれば鳴らさない |
 | `test_a_documented_branch_without_a_pull_request_is_not_a_warning` | 申し送りに書いてあれば鳴らさない |
 | `test_an_undocumented_branch_without_a_pull_request_is_a_warning` | PR も申し送りも無いものだけ鳴らす（#48 の形） |
+| `test_a_branch_name_next_to_japanese_punctuation_is_still_found` | **端を削る方式では取りこぼす。** 全角括弧が直後に付くと一致せず、書いてあるのに「浮いている」と鳴った |
+| `test_the_branch_name_does_not_swallow_the_text_after_it` | 逆に後ろの文を名前に巻き込まないこと |
 | `test_a_slow_command_does_not_block_the_check` | **繋がらない環境で止まらない**（10秒で打ち切る） |
 | `test_the_output_streams_are_not_mixed` | stdout と stderr を分ける |
 | `test_offline_does_not_touch_the_remote` | `--offline` は `git fetch` を呼ばない |
