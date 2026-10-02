@@ -64,6 +64,10 @@ GUIを通常のデスクトップで起動するには、X11またはWaylandの�
 - `dlib`: 128次元の顔特徴量の生成
 - `face_recognition_models`: dlib の学習済みモデルデータ。GitHubからインストール（モデルファイルの置き場所としてのみ使い、import はしない）
 
+`onnxruntime` は `requirements.txt` にだけ入れています。**アプリ本体は使いません**
+（`scripts/measure_embedding_models.py` で特徴量モデルを比べるためだけのもの）。
+そのため `pyproject.toml` の実行時依存には入れていません。
+
 通常は以下で全Python依存をインストールできます。
 
 ```bash
@@ -82,6 +86,35 @@ python -m pip install git+https://github.com/ageitgey/face_recognition_models
 ```
 
 このパッケージは **モデルファイルの置き場所としてのみ** 使用し、Pythonモジュールとしては読み込みません。`face_recognition_models/__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では `ModuleNotFoundError` になるためです。モデルを別の場所に置く場合は、環境変数 `PHOTOARCHIVE_DLIB_MODEL_DIR` か `config/app_settings.json` の `dlib_model_dir` でディレクトリを指定してください。
+
+### 特徴量モデルの比較に使う ONNX（任意）
+
+`scripts/measure_embedding_models.py` は、現行の dlib と ArcFace を比べます。
+**この比較をしないなら設置は不要**で、アプリの動作には影響しません。
+
+ArcFace の認識モデルを `models/w600k_r50.onnx` に置きます。InsightFace の
+`buffalo_l` パックから、認識用の1本だけを取り出して使います。
+
+```bash
+cd /home/suu/github/PhotoArchiveAI && mkdir -p models
+curl -L -o /tmp/buffalo_l.zip \
+  https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+python -c "import zipfile; zipfile.ZipFile('/tmp/buffalo_l.zip').extract('w600k_r50.onnx', 'models/')"
+sha256sum models/w600k_r50.onnx
+# 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43
+```
+
+**`insightface` パッケージは入れません。** モデル動物園と GPU 版の
+`onnxruntime` を引き込むため、ONNX 1本と `onnxruntime` だけで動かしています。
+
+`models/` は git 管理外です（dlib の `.dat` を手置きする場合の探索先と同じ扱い）。
+モデルが無い場合、比較スクリプトは理由を報告に書いて dlib のぶんだけを測ります。
+
+```bash
+python scripts/measure_embedding_models.py --db data/photoarchive.db
+```
+
+測定結果は [docs/history/details/2026-10-02-embedding-model-comparison.md](docs/history/details/2026-10-02-embedding-model-comparison.md) にあります。
 
 SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` などはPython標準ライブラリのため、個別インストールは不要です。
 
