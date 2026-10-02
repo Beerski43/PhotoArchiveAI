@@ -508,6 +508,113 @@ def format_report(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# 同じ写真に写る顔のペアでの他人誤認率
+# ---------------------------------------------------------------------------
+
+#: 他人誤認率を測るときに振る閾値。
+CONFUSION_THRESHOLDS = (0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80)
+
+#: ペアの分類。
+LABELLED_DIFFERENT = "手本どうし・別人"
+LABELLED_SAME = "手本どうし・同一人物"
+ASSUMED_DIFFERENT = "片方以上が未割当（別人と仮定）"
+
+
+def same_photo_pairs(database_path: str, version: str, metric: str) -> Dict[str, List[float]]:
+    """**同じ写真に写る2つの顔**のペアの距離を、分類ごとに集める。
+
+    仕様書 §8.3 の dlib の表と**同じ数え方**。本番の `match` が解くのは
+    「未割当（大半が他人）を手本と照合する」問題なので、**手本どうしの測定では
+    実害が出る誤りを測れない。** ここが他人誤認率のいちばん近い代理。
+
+    **「同じ写真なら別人」は仮定で、外れることがある**（鏡・ポスター・壁の
+    写真立て・顔でないものの誤検出）。外れたぶんは誤りに数えられるので、
+    **この率は実際より高めに出る。**
+
+    ただし dlib の測定より1つ改善してある。**両方が手本で同じ人物のペアは、
+    本当に同一人物なので誤りに数えない**（分類を分けて返す）。
+
+    版が一致する特徴量だけを読む（`reembed` の途中は混在する）。
+    """
+    connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT f.id, f.media_id, f.person_id, f.assign_source, f.embedding"
+            " FROM Face f"
+            " WHERE f.embedding IS NOT NULL AND f.embed_version = ?"
+            " AND f.media_id IN (SELECT media_id FROM Face WHERE embedding IS NOT NULL"
+            "                    AND embed_version = ?"
+            "                    GROUP BY media_id HAVING COUNT(*) >= 2)"
+            " ORDER BY f.media_id, f.id",
+            (version, version),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    by_media: Dict[int, List[sqlite3.Row]] = {}
+    for row in rows:
+        by_media.setdefault(row["media_id"], []).append(row)
+
+    buckets: Dict[str, List[float]] = {
+        LABELLED_DIFFERENT: [],
+        LABELLED_SAME: [],
+        ASSUMED_DIFFERENT: [],
+    }
+    for faces in by_media.values():
+        if len(faces) < 2:
+            continue
+        matrix = np.vstack([db.decode_embedding(row["embedding"]) for row in faces])
+        distances = distance_matrix(matrix, metric)
+        for i in range(len(faces)):
+            for j in range(i + 1, len(faces)):
+                left, right = faces[i], faces[j]
+                both_manual = (
+                    left["assign_source"] == db.ASSIGN_MANUAL
+                    and right["assign_source"] == db.ASSIGN_MANUAL
+                )
+                if both_manual and left["person_id"] == right["person_id"]:
+                    key = LABELLED_SAME
+                elif both_manual:
+                    key = LABELLED_DIFFERENT
+                else:
+                    key = ASSUMED_DIFFERENT
+                buckets[key].append(float(distances[i][j]))
+    return buckets
+
+
+def format_same_photo_report(buckets: Dict[str, List[float]], version: str, metric: str) -> str:
+    lines = [
+        "# 同じ写真に写る顔のペアでの他人誤認率",
+        "",
+        f"版 `{version}` / 尺度 {'コサイン' if metric == COSINE else 'ユークリッド'}。",
+        "",
+        "**仕様書 §8.3 の dlib の表と同じ数え方。** 「同じ写真なら別人」は仮定で、",
+        "鏡・ポスター・誤検出で外れる。外れたぶんは誤りに数えられるので、",
+        "**この率は実際より高めに出る。**",
+        "",
+        "| ペアの種類 | 件数 | " + " | ".join(f"≤{t:.2f}" for t in CONFUSION_THRESHOLDS) + " |",
+        "|---|---|" + "---|" * len(CONFUSION_THRESHOLDS),
+    ]
+    for key in (ASSUMED_DIFFERENT, LABELLED_DIFFERENT, LABELLED_SAME):
+        values = buckets[key]
+        if not values:
+            lines.append(f"| {key} | 0 | " + " | ".join("—" for _ in CONFUSION_THRESHOLDS) + " |")
+            continue
+        cells = [
+            f"{sum(1 for v in values if v <= t) / len(values) * 100:.2f}%"
+            for t in CONFUSION_THRESHOLDS
+        ]
+        lines.append(f"| {key} | {len(values):,} | " + " | ".join(cells) + " |")
+    lines.append("")
+    lines.append(
+        f"**`{LABELLED_SAME}` の行は誤りではなく「拾えた」ほうの数字**"
+        "（同じ写真に同じ人が2回写っている、本当に同一人物のペア）。"
+    )
+    return "\n".join(lines)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -519,12 +626,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="ArcFace の ONNX。無ければ (a)(b) だけ測る",
     )
     parser.add_argument("--limit", type=int, help="先頭 N 件だけ測る（動作確認用）")
+    parser.add_argument(
+        "--same-photo-pairs",
+        action="store_true",
+        help="**保存済みの特徴量**で、同じ写真に写る顔のペアの他人誤認率を測る"
+        "（モデルは要らない。仕様書 §8.3 の dlib の表と同じ数え方）。",
+    )
     args = parser.parse_args(argv)
 
     database = Path(args.db)
     if not database.exists():
         print(f"データベースが見つかりません: {database}", file=sys.stderr)
         return 1
+
+    if args.same_photo_pairs:
+        from photoarchive_ai import embedding as embedding_model
+
+        version, metric = embedding_model.ACTIVE.version, embedding_model.ACTIVE.metric
+        report = format_same_photo_report(
+            same_photo_pairs(str(database), version, metric), version, metric
+        )
+        if args.report:
+            Path(args.report).write_text(report, encoding="utf-8")
+            print(f"報告を書き出しました: {args.report}")
+        else:
+            print(report)
+        return 0
 
     records = load_manual_faces(str(database))
     if args.limit:

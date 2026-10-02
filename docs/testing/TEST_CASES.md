@@ -449,7 +449,7 @@ editable install のときだけ出すこと（通常のインストールでは
 `vacuum=False` / `make_backup=False`、進捗メッセージ、空のファイルへの
 スキーマ作成、存在しないDBを指したときのエラー。
 
-### `test_embedding_measurement.py` — 特徴量モデルの比較（30件＋`models` 1件）
+### `test_embedding_measurement.py` — 特徴量モデルの比較と他人誤認率（29件＋`models` 1件）
 
 **測定の道具がおかしいと、間違った結論で全件再計算に進む。**
 
@@ -483,6 +483,10 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_report_survives_an_empty_gap` | 手本が少なく片側が0件でも落ちない |
 | `test_main_refuses_a_database_that_is_not_there` | DB が無ければ理由を言って終了 |
 | `test_main_writes_a_report_and_notes_the_missing_model` | モデル不在を報告に書き残す |
+| `test_same_photo_pairs_separate_labelled_from_assumed` | **「同じ写真なら別人」は仮定。** 手本どうしのペアと分けて数える。**同一人物のペアを誤りに数えない** |
+| `test_photos_with_a_single_face_are_ignored` | 1枚1顔の写真はペアにならない |
+| `test_faces_on_another_version_are_left_out` | **版の違う特徴量を混ぜない** |
+| `test_the_report_keeps_the_assumption_visible` | 報告に「高めに出る」断り書きを残す |
 | `test_the_real_arcface_returns_512_dimensions`（`models`） | 実物の ONNX が 512次元を返す（環境依存・合否に含めない） |
 
 ### `test_worklog_archive.py` — 作業履歴の切り出し（16件）
