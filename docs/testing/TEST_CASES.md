@@ -374,6 +374,42 @@ editable install のときだけ出すこと（通常のインストールでは
 `vacuum=False` / `make_backup=False`、進捗メッセージ、空のファイルへの
 スキーマ作成、存在しないDBを指したときのエラー。
 
+### `test_embedding_measurement.py` — 特徴量モデルの比較（30件＋`models` 1件）
+
+**測定の道具がおかしいと、間違った結論で全件再計算に進む。**
+
+| テスト | 内容 |
+|---|---|
+| `test_euclidean_and_cosine_are_both_supported` | dlib はユークリッド、ArcFace はコサイン |
+| `test_cosine_ignores_the_length_of_the_vector` | **L2 正規化してから比べる**。長さに左右されない |
+| `test_an_unknown_metric_is_refused` | **尺度を黙って既定にしない**（dlib の尺度を他モデルに当てる事故を防ぐ） |
+| `test_top1_accuracy_excludes_faces_from_the_same_photo` | **同じ写真の顔を候補から外す。** 外さないと正解率が水増しされる（0% が 40% に見える） |
+| `test_top1_accuracy_reports_nothing_when_every_face_shares_one_photo` | 評価できる顔が無ければ件数0を返す |
+| `test_pairs_are_split_into_within_event_and_across_events` | **プールした平均を出さない。** ここを混ぜたのが 9/20 の読み違いの原因 |
+| `test_faces_without_a_readable_date_are_left_out_of_both_sides` | **分からないものをどちらかに混ぜない**（未割当の 10.4% が該当） |
+| `test_pairs_from_the_same_photo_are_skipped` | ペアの集計でも同じ写真を外す |
+| `test_the_gap_is_how_far_strangers_sit_from_the_same_person`（2件） | 差の定義と、片側が空のとき |
+| `test_the_sweep_finds_a_threshold_that_separates`（2件） | 閾値の振り方と、振れないとき |
+| `test_the_transform_puts_a_rotated_face_back_on_the_template` | 5点整列の相似変換。**整列が +16.6pt を持っている** |
+| `test_the_transform_never_mirrors_the_face` | **鏡像を許さない**（左右の取り違えを整列が隠してしまう） |
+| `test_the_eyes_and_the_mouth_corners_are_swapped_together` | **片方だけ入れ替えると対応が崩れる** |
+| `test_points_already_in_order_are_left_alone` | 並びが正しいものは触らない |
+| `test_landmarks_are_scaled_to_pixels` | FaceMesh の相対座標を画素へ直す |
+| `test_manual_faces_are_read_without_writing_to_the_database` | **実データに書かない**（`mode=ro` で開く） |
+| `test_an_event_is_a_folder_and_a_day` | 行事＝フォルダ×日。**`TTTT-TT-TT` は10文字あるので長さで弾けない** |
+| `test_folder_of_strips_the_file_name` | フォルダの取り出し |
+| `test_the_thumbnail_is_the_only_image_source` | **元写真を読まない**（NFS 再読み込み 5.1時間を避ける） |
+| `test_measure_counts_what_it_could_not_embed` | **作れなかった顔を黙って落とさない**（母集団が変わると比較が成り立たない） |
+| `test_measure_gives_up_when_fewer_than_two_faces_remain` | 2件未満では測らない |
+| `test_the_stored_embedding_variant_uses_the_value_in_the_database` | (a) の経路 |
+| `test_dlib_can_be_recomputed_from_the_thumbnail` | (b) の経路。サムネイルだけで作り直せる |
+| `test_arcface_is_skipped_when_the_model_is_absent` | **モデルが無いときに黙って (a)(b) だけ出さない。** 理由を残す |
+| `test_the_report_lists_every_variant_and_both_kinds_of_gap` | 報告に両方の差と、距離を直接比べない断り書きが載る |
+| `test_the_report_survives_an_empty_gap` | 手本が少なく片側が0件でも落ちない |
+| `test_main_refuses_a_database_that_is_not_there` | DB が無ければ理由を言って終了 |
+| `test_main_writes_a_report_and_notes_the_missing_model` | モデル不在を報告に書き残す |
+| `test_the_real_arcface_returns_512_dimensions`（`models`） | 実物の ONNX が 512次元を返す（環境依存・合否に含めない） |
+
 ### `test_worklog_archive.py` — 作業履歴の切り出し（16件）
 
 直近20件を残して年ごとに切り出すこと、索引の作り直し、冪等性、`--check`。
