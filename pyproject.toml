@@ -19,6 +19,9 @@ dependencies = [
     "mediapipe==0.10.21",
     "opencv-python>=4.8",
     "numpy>=1.26",
+    # ArcFace(512次元)の推論。モデル本体(.onnx)は models/ へ手置きする
+    # (scripts/fetch_models.py)。GPU 版は入れない。
+    "onnxruntime>=1.17",
     "PyYAML>=6.0"
 ]
 

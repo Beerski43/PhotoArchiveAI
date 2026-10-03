@@ -98,7 +98,7 @@ GUI で人物を選べないので手本にならないが、`match` の候補�
 
 ## 手順5 — `family_only` の決着
 
-閾値 0.4 で切ると `assign_score`（`distance_to_similarity`）の下限が 33.3 に
+閾値で切ると `assign_score`（`distance_to_similarity`）に下限ができ（ArcFace 0.45 では 55.0 に）
 なるため、`family_score > 0.0` という条件が「割り当てが1つでもあれば通る」と
 同じ意味になっている。手順4で閾値が決まってから、しきい値そのものを見直す。
 

@@ -228,15 +228,29 @@ def test_migrate_refuses_a_database_that_does_not_exist(tmp_path):
 
 
 def test_embedding_blob_roundtrip():
-    values = [index / 128.0 for index in range(128)]
+    """**次元数はモデルの記述から引く。** 書き写すとモデルを替えたときに腐る。"""
+    size = db.EMBEDDING_DIM
+    values = [index / size for index in range(size)]
     blob = db.encode_embedding(values)
-    assert len(blob) == 128 * 4
+    assert len(blob) == size * 4
     restored = db.decode_embedding(blob)
-    assert restored.shape == (128,)
+    assert restored.shape == (size,)
     assert restored[0] == 0.0
-    assert abs(float(restored[127]) - values[127]) < 1e-6
+    assert abs(float(restored[-1]) - values[-1]) < 1e-6
     assert db.encode_embedding(None) is None
     assert db.decode_embedding(None) is None
+
+
+def test_an_embedding_of_the_wrong_size_is_refused():
+    """**次元の違う特徴量を黙って保存しない。**
+
+    モデルを替えた直後は古い版の顔が残っている。混ざったまま照合すると
+    `np.vstack` が落ちるか、次元が同じモデル同士なら**黙って無意味な距離**が出る。
+    """
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        db.encode_embedding([0.0] * (db.EMBEDDING_DIM - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +287,8 @@ def _build_v2_database(path):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.0] * 128,
-            embed_version="test",
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=person_id if index == 0 else None,
             assign_source=db.ASSIGN_MANUAL if index == 0 else None,
         )
@@ -540,8 +554,8 @@ def _build_v3_database(path):
             connection,
             media_id=media_id,
             bbox=(0, 10, 10, 0),
-            embedding=[0.0] * 128,
-            embed_version="test",
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
             person_id=person_id,
             assign_source=db.ASSIGN_MANUAL,
         )

@@ -142,7 +142,9 @@ def test_a_slow_command_does_not_block_the_check():
     5/5 は PR の前に必ず通る。`git fetch` が返らないと、画面には
     `=== 5/5 引き継ぎの状態 ===` が出たきり何も起きない。
     """
-    code, _, err = check_handoff.run("sleep", "5", timeout=0.5)
+    # **待ち時間は短くてよい。** 見ているのは終了コードと文面で、待った長さ自体
+    # ではない。回帰テストは繰り返し流すものなので 10 秒以内に収める（CLAUDE.md §5）。
+    code, _, err = check_handoff.run("sleep", "5", timeout=0.2)
 
     assert code == 124
     assert "返らなかった" in err
@@ -199,3 +201,64 @@ def test_the_working_tree_is_shown_but_not_warned_about(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "ROADMAP.md" in out
     assert "正常" in out
+
+
+def test_a_branch_name_next_to_japanese_punctuation_is_still_found(tmp_path, monkeypatch):
+    """**端を削る方式では取りこぼす。**
+
+    実際に起きた: 申し送りに `` `feature/#59_arcface-embeddings`（**PR はまだ…`` と
+    書いたが、空白で切って端の記号を削る実装だったため、**全角括弧が直後に付くと
+    名前が一致せず**、書いてあるのに「浮いている」と鳴った。
+    **偽の警告は隣の本物ごと読まれなくなる。**
+    """
+    notes = tmp_path / "details"
+    notes.mkdir()
+    (notes / "handoff.md").write_text(
+        "| ブランチ | `feature/#59_arcface-embeddings`（**PR はまだ出していない**） |\n"
+        "- `feature/#1_plain` は普通に書いた場合。\n"
+        "**feature/#2_bold**、feature/#3_comma、feature/#4_period。\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_handoff, "DETAILS_DIR", notes)
+
+    found = check_handoff.branches_mentioned_in_handoff_notes()
+
+    assert "feature/#59_arcface-embeddings" in found
+    assert "feature/#1_plain" in found
+    assert "feature/#2_bold" in found
+    assert "feature/#3_comma" in found
+    assert "feature/#4_period" in found
+
+
+def test_the_branch_name_does_not_swallow_the_text_after_it(tmp_path, monkeypatch):
+    """逆に、後ろの文を名前に巻き込まないこと（巻き込むと一致しない）。"""
+    notes = tmp_path / "details"
+    notes.mkdir()
+    (notes / "handoff.md").write_text(
+        "feature/#5_x のあとに文が続く。feature/#6_y/with/slashes も拾う。\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_handoff, "DETAILS_DIR", notes)
+
+    found = check_handoff.branches_mentioned_in_handoff_notes()
+
+    assert found == {"feature/#5_x", "feature/#6_y/with/slashes"}
+
+
+def test_a_branch_name_at_the_end_of_an_english_sentence(tmp_path, monkeypatch):
+    """**末尾の記号を名前に含めない。** `feature/#59_x.` では一致しない。
+
+    日本語の文書では「。」なので実害は稀だが、英語の文末で起きる
+    （PR #60 の指摘5）。
+    """
+    notes = tmp_path / "details"
+    notes.mkdir()
+    (notes / "handoff.md").write_text(
+        "See feature/#59_x. Next, feature/#60_y, then feature/#61_z-ok works.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_handoff, "DETAILS_DIR", notes)
+
+    found = check_handoff.branches_mentioned_in_handoff_notes()
+
+    assert found == {"feature/#59_x", "feature/#60_y", "feature/#61_z-ok"}

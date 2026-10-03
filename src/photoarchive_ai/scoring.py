@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from . import embedding
 from .face import _suppress_mediapipe_output
 
 logger = logging.getLogger("photoarchive.scoring")
@@ -17,7 +18,10 @@ logger = logging.getLogger("photoarchive.scoring")
 _face_mesh = None
 _face_mesh_initialized = False
 
-SIMILARITY_REFERENCE_DISTANCE = 0.6
+#: `distance_to_similarity` が 0 を返す距離。**モデルの属性。書き写さない。**
+#: 尺度がモデルごとに違う（dlib のユークリッドは実質 0〜1.5、ArcFace の
+#: コサインは 0〜2.0）ので、固定すると類似度の意味がモデルで変わる。
+SIMILARITY_REFERENCE_DISTANCE = embedding.ACTIVE.similarity_reference
 
 
 def _load_mediapipe_face_mesh():

@@ -308,6 +308,8 @@ photoarchive-gui   人物の登録 + 検出済みの顔を人物へ手動で割�
 match         手動割り当てを手本に、残りの顔を自動で紐づけ
   ↓
 select        ルールに従って抽出しコピー
+
+reembed       （保守）特徴量モデルを替えたときだけ。サムネイルから作り直す
 ```
 
 **この順序が設計の核心。** 人物を登録する前に自動紐づけを走らせてはいけない。
@@ -318,9 +320,12 @@ select        ルールに従って抽出しコピー
 | ファイル | 役割 |
 |---|---|
 | `db.py` | スキーマと永続化。スキーマ版は `SCHEMA_VERSION` |
+| `embedding.py` | **特徴量モデルの記述**（次元数・距離尺度・閾値・版）。`ACTIVE` がいま使うもの |
 | `migration.py` | 旧スキーマからの移行（テーブル再構築方式） |
 | `scanner.py` | 走査・差分判定・顔検出の呼び出し・消えた行の削除 |
-| `face.py` | 顔検出(MediaPipe)と顔特徴量(dlib)。**矩形の正規化は `face_rect` に集約** |
+| `face.py` | 顔検出(MediaPipe)と顔特徴量(ArcFace)。**矩形の正規化は `face_rect`、整列は `align_for_arcface` に集約** |
+| `reembed.py` | 保存済みサムネイルから特徴量だけを作り直す（`photoarchive reembed`） |
+| `dates.py` | **日付の読み取りと年齢の計算。** 「読める撮影日時か」の判断の正本 |
 | `scoring.py` | 笑顔・画質のスコア（FaceMesh） |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
 | `evaluation.py` | 手本を1件ずつ抜いて、自動紐づけの取りこぼし率と誤一致率を実測 |
@@ -336,8 +341,12 @@ select        ルールに従って抽出しコピー
   区別が差分スキャンの土台なので、勝手に 0 で埋めない。
 - `Face.assign_source`: `NULL`=未割当 / `'manual'`=手動 / `'auto'`=自動 /
   `'rejected'`=除外。**手本にしてよいのは `'manual'` だけ。**
-- `Face.embedding`: float32×128 のBLOB。小さすぎる顔は `NULL`。
-- `Face.bbox_*`: **検出器が返した生の矩形。** dlib に渡す正規化後の矩形ではない。
+- `Face.embedding`: float32 のBLOB。**次元数はモデルが決める**
+  （`embedding.ACTIVE.dimensions`。ArcFace は512）。小さすぎる顔は `NULL`。
+- `Face.embed_version`: 特徴量の作り方。**照合はこれが一致する顔だけを見る。**
+  記録用ではない。別の埋め込み空間の距離を比べるのは常に誤りで、
+  `reembed` の途中は必ず混在する。
+- `Face.bbox_*`: **検出器が返した生の矩形。** モデルに渡す正規化後の矩形ではない。
 - `AnalysisResult`: `smile_score` / `quality_score` は `scan` が、
   `family_score` は `match` が書く。互いに潰さないこと（UPSERTを使う）。
 
@@ -351,13 +360,36 @@ select        ルールに従って抽出しコピー
 
 ## 8. 踏みやすい落とし穴
 
+- **特徴量モデルを替えたら `reembed` で作り直す。`scan --force-rescan` を使わない。**
+  後者は顔の行を消して作り直すので、**GUI で積み上げた手動割り当てと除外が消える。**
+  `reembed` は `Face.embedding` と `Face.embed_version` だけを書き、サムネイルから
+  作るので**元写真（NFS 上の 441GB）を読まない。**
+- **`DETECTOR_VERSION` に特徴量の版を内包させない。** 以前は
+  `f"mediapipe_fd1/{EMBED_VERSION}"` と連結しており、**特徴量を替えるだけで
+  実データの Media 全件が再検出の対象になった**（441GB の読み直し）。実データには
+  連結された古い値が入っているので、比較は `face.detector_version_of` で
+  正規化する。**この関数を外さないこと。**
+- **次元数・距離尺度・閾値を書き写さない。** `embedding.ACTIVE` から引く。
+  以前は次元数が `db.py`、閾値が `matcher.py`、類似度の基準が `scoring.py` に
+  散っていて、**モデルを替えるとどれか1つが古いまま残る**形だった。
+  **dlib はユークリッド、ArcFace はコサイン。** 0.4 を他のモデルへ持ち込まない。
+- **ArcFace は5点整列を省くと大きく落ちる**（現行 dlib をサムネイルから作り直した
+  ものにも負ける）。`align_for_arcface` を通さずに推論しないこと。整列の変換は
+  **閉じた式で解く**（RANSAC だと乱数で揺れ、同じ写真から同じ特徴量が出ない）。
 - **`face_recognition` パッケージを import しない。** `face_recognition_models`
   の `__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では
   `ModuleNotFoundError` になる（Issue #10 の原因）。モデルのパスは
   `importlib.util.find_spec` で取り出す（モジュールを実行しないので踏まない）。
 - **顔の矩形の正規化規約を変えない。** パディングの取り方を 0% → 25% に
   変えるだけで特徴量の距離が 0.03〜0.57 動く（別人判定の閾値と同じオーダー）。
-  変える場合は `face.EMBED_VERSION` を上げて再スキャン対象にすること。
+  変える場合は `embedding.ACTIVE.version` を上げて、`reembed` で作り直すこと
+  （**再スキャンではない。** 上記）。
+  - **例外: ArcFace では `scan`（25%パディング・元解像度）と `reembed`
+    （サムネイル・パディング無し）が同じ版に同居している。** 5点整列が違いを
+    吸収するため。**測って許した**（同じ顔の距離は中央 0.090 だが、8% は
+    閾値を超える。1位正解率はどちらも 95.2%）。詳細は仕様書 §7.6。
+    **経路ごとに版を分けないこと** — 分けると新しく scan した顔と reembed した
+    顔が互いに見えなくなる
 - **顔の一覧を全件読まない。** サムネイルのBLOBを全件読むと数百MBになり、
   GUIが固まる。必ず `LIMIT` / `OFFSET` でページ単位に読む。
   **ページャの無い一覧を作らない。**
@@ -387,6 +419,11 @@ select        ルールに従って抽出しコピー
   発生。GUI で入れた誕生日が黙って保存されなかった）。**移行が要るかどうかは、
   版と実際の列の両方で見る**（`db.missing_columns`）。列の一覧は `SCHEMA` から
   作って読み取ること。書き写すと、スキーマを変えたときに片方だけ古くなる。
+- **「読める撮影日時か」の判断は `dates.parse_date` に1つだけ持つ。**
+  この罠でこのリポジトリは2度壊れている（`0000-00-00` だけを見ていて
+  `TTTT-TT-TTTTT:TT:TT` が素通りした）。**`"TTTT-TT-TTTTT:TT:TT"[:10]` は
+  10文字あるので、長さでは弾けない。** 並び順だけは SQL 側に写しが1つある
+  （`db.SHOOTING_DATE_SORT_KEY`）。**片方だけ直さないこと。**
 - **`db.assign_faces` の `age` は `KEEP_AGE` が既定。** `None` は
   「未設定に戻す」という指示であって「触らない」ではない。
   **`db.update_person` の `birth_date`（`KEEP_BIRTH_DATE`）も同じ。**

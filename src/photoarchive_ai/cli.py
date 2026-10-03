@@ -14,6 +14,8 @@ from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
 from .face import get_latest_error
 from .logging_setup import setup_logging
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
+from .reembed import format_summary as format_reembed_summary
+from .reembed import reembed_faces
 from .migration import (
     describe_for_operator,
     migrate_database,
@@ -147,6 +149,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_log_level(scan_parser)
 
+    reembed_parser = subparsers.add_parser(
+        "reembed",
+        help="Rebuild face embeddings from the stored thumbnails (no source files are read).",
+    )
+    reembed_parser.add_argument("--db", help="SQLite database path.")
+    reembed_parser.add_argument(
+        "--yes", action="store_true", help="Do not ask for confirmation."
+    )
+    reembed_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="対象の件数と見積り時間だけを出し、データベースには書かない。",
+    )
+    reembed_parser.add_argument(
+        "--limit", type=int, help="先頭 N 件だけ作り直す（動作確認用）。"
+    )
+    _add_log_level(reembed_parser)
+
     convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
     convert_parser.add_argument("--source", help="Directory to convert recursively.")
 
@@ -235,6 +255,40 @@ def _run_migrate(args, db_path: str) -> None:
     )
     if rebuilt:
         print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
+
+
+def _run_reembed(args, db_path: str) -> None:
+    """保存済みサムネイルから特徴量を作り直す。
+
+    **元写真を読まない。** 実データでは全件 約158分（実測 162ms/件。NFS の
+    読み直しは0）。見積りは `--dry-run` が実際に作って測るので、ここは目安。
+    **割り当てには触らない**ので、手本と除外はそのまま残る。
+    """
+    log_file = Path("data/logs") / f"reembed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = _setup_logging(log_file, args.log_level)
+    _reset_progress_state()
+    with ensure_database(db_path) as connection:
+        preview = reembed_faces(connection, dry_run=True)
+        print(format_reembed_summary(preview))
+        if preview["target"] == 0:
+            print("作り直す顔はありません（すべて最新の版です）。")
+            return
+        if args.dry_run:
+            return
+        if not args.yes:
+            answer = input("続行しますか? [y/N]: ")
+            if answer.strip().lower() not in {"y", "yes"}:
+                raise SystemExit("作り直しを中止しました。")
+        logger.info("Reembed started. Log file: %s", log_file)
+        summary = reembed_faces(
+            connection,
+            progress_callback=lambda current, total, detail: _emit_progress(
+                current, total, detail, prefix="Reembedding", error=get_latest_error()
+            ),
+            limit=args.limit,
+        )
+    print(format_reembed_summary(summary))
+    print("次の手順: photoarchive match で自動の紐づけをやり直してください。")
 
 
 def _run_scan(args, settings) -> None:
@@ -377,6 +431,10 @@ def main() -> None:
 
         if args.command == "scan":
             _run_scan(args, settings)
+            return
+
+        if args.command == "reembed":
+            _run_reembed(args, db_path)
             return
 
         if args.command == "convert-heic":

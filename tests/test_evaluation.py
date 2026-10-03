@@ -18,6 +18,13 @@ from photoarchive_ai.evaluation import (
     format_report,
 )
 
+#: **このファイルのテストはユークリッド距離を前提に座標を組んでいる。**
+#: いま使うモデル(ArcFace)はコサイン距離なので、`metric` を明示して渡す。
+#: ここで試しているのは matcher の**判断の仕組み**（閾値・マージン・手本の
+#: 選び方・冪等性）で、尺度に依存しない。尺度そのものは
+#: `test_matcher_metrics.py` で確かめる。
+EUCLIDEAN = db.embedding_model.METRIC_EUCLIDEAN
+
 
 @pytest.fixture()
 def connection(tmp_path):
@@ -41,7 +48,7 @@ def _add_media(connection, index: int) -> int:
 
 
 def _vector(*values) -> np.ndarray:
-    vector = np.zeros(128, dtype=np.float32)
+    vector = np.zeros(db.EMBEDDING_DIM, dtype=np.float32)
     vector[: len(values)] = values
     return vector
 
@@ -52,7 +59,7 @@ def _add_face(connection, media_id, vector, person_id, assign_source=db.ASSIGN_M
         media_id=media_id,
         bbox=(0, 10, 10, 0),
         embedding=vector,
-        embed_version="test",
+        embed_version=db.embedding_model.ACTIVE.version,
         person_id=person_id,
         assign_source=assign_source,
     )
@@ -87,7 +94,7 @@ def _two_people_in_separate_photos(connection, spread=0.01):
 def test_a_face_returns_to_its_own_person_when_the_teachers_are_close(connection):
     _two_people_in_separate_photos(connection, spread=0.01)
 
-    summary = evaluate_match(connection, thresholds=[0.4])
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
 
     assert summary["teachers"] == 6
     assert summary["evaluated"] == 6
@@ -107,7 +114,7 @@ def test_lowering_the_threshold_turns_correct_answers_into_missed_ones(connectio
     """
     _two_people_in_separate_photos(connection, spread=0.2)
 
-    summary = evaluate_match(connection, thresholds=[0.1, 0.5])
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.1, 0.5])
 
     tight, loose = _row(summary, 0.1), _row(summary, 0.5)
     assert tight[MISSED] > loose[MISSED]
@@ -127,7 +134,7 @@ def test_a_face_that_lands_on_another_person_is_counted_as_wrong_not_missed(conn
     ):
         _add_face(connection, _add_media(connection, index), _vector(value, 0.0), person)
 
-    summary = evaluate_match(connection, thresholds=[0.4])
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
 
     row = _row(summary, 0.4)
     # 1.00 に置いた Alice の顔は、自分の手本(0.0)より Bob の手本のほうが近い。
@@ -150,8 +157,8 @@ def test_a_teacher_in_the_same_photo_is_not_allowed_to_answer_for_the_face(conne
     for index, offset in enumerate((0.0, 0.01), start=2):
         _add_face(connection, _add_media(connection, index), _vector(5.0 + offset, 0.0), bob)
 
-    excluded = evaluate_match(connection, thresholds=[0.4])
-    kept = evaluate_match(connection, thresholds=[0.4], keep_same_media=True)
+    excluded = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+    kept = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4], keep_same_media=True)
 
     # 既定では Alice の2枚は手本を失い、評価から外れる。
     assert excluded["skipped"] == 2
@@ -171,7 +178,7 @@ def test_a_person_with_a_single_teacher_is_left_out_instead_of_counted_as_missed
     lonely = db.add_person(connection, "Carol")
     _add_face(connection, _add_media(connection, 99), _vector(0.0, 5.0), lonely)
 
-    summary = evaluate_match(connection, thresholds=[0.4])
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
 
     assert summary["teachers"] == 7
     assert summary["evaluated"] == 6
@@ -189,8 +196,8 @@ def test_the_margin_leaves_a_face_between_two_people_unassigned(connection):
     ):
         _add_face(connection, _add_media(connection, index), _vector(value, 0.0), person)
 
-    generous = evaluate_match(connection, thresholds=[0.4], margin=0.0)
-    strict = evaluate_match(connection, thresholds=[0.4], margin=0.5)
+    generous = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4], margin=0.0)
+    strict = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4], margin=0.5)
 
     assert _row(strict, 0.4)[MISSED] == strict["evaluated"]
     assert _row(generous, 0.4)[MISSED] == 0
@@ -212,14 +219,14 @@ def test_automatic_assignments_are_not_used_as_the_answer_key(connection):
         assign_source=db.ASSIGN_AUTO,
     )
 
-    summary = evaluate_match(connection, thresholds=[0.4])
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
 
     assert summary["teachers"] == 2
     assert summary["teachers_per_person"] == {alice: 2}
 
 
 def test_a_database_without_any_assigned_face_says_what_to_do(connection):
-    summary = evaluate_match(connection)
+    summary = evaluate_match(connection, metric=EUCLIDEAN)
 
     assert summary["teachers"] == 0
     assert summary["evaluated"] == 0
@@ -230,7 +237,7 @@ def test_a_database_without_any_assigned_face_says_what_to_do(connection):
 def test_the_report_shows_each_threshold_and_each_person(connection):
     alice, bob = _two_people_in_separate_photos(connection, spread=0.01)
 
-    report = format_report(evaluate_match(connection, thresholds=[0.4, 0.45]))
+    report = format_report(evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4, 0.45]))
 
     assert "0.40" in report and "0.45" in report
     assert "Alice" in report and "Bob" in report
@@ -246,7 +253,7 @@ def test_the_report_tells_the_user_when_nothing_could_be_evaluated(connection):
         person = db.add_person(connection, name)
         _add_face(connection, _add_media(connection, index), _vector(index * 1.0, 0.0), person)
 
-    report = format_report(evaluate_match(connection, thresholds=[0.4]))
+    report = format_report(evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4]))
 
     assert "2枚以上" in report
     assert "%" not in report
@@ -265,7 +272,7 @@ def test_the_person_column_lines_up_when_names_mix_japanese_and_ascii(connection
             media = _add_media(connection, index)
             _add_face(connection, media, _vector(len(name) + step * 0.01, 0.0), person)
 
-    report = format_report(evaluate_match(connection, thresholds=[0.4]))
+    report = format_report(evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4]))
     lines = [line for line in report.splitlines() if "父" in line or "Grandma" in line]
 
     assert len(lines) == 2
@@ -308,7 +315,7 @@ def test_evaluate_leaves_every_row_untouched(connection):
 
     before = snapshot()
 
-    evaluate_match(connection)
+    evaluate_match(connection, metric=EUCLIDEAN)
 
     assert snapshot() == before
     # family_score を潰していないことまで押さえる（scan と match が互いの値を
