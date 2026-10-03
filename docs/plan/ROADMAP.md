@@ -143,7 +143,7 @@ Phase 0 と同じ Issue で進めるが、コミットは分ける。
    1件ずつ抜いて測る（**道具は実装済み**）。**モデルを替えたら閾値も尺度ごと
    変わる**（ArcFace はコサイン距離）
 6. `selection.py` の `family_only` の決着。閾値 0.4 で切ると `assign_score` の下限が
-   33.3 になるため、`family_score > 0.0` が「割り当てが1つでもあれば通る」に
+   下限を持つため（ArcFace 0.45 では 55.0）、`family_score > 0.0` が「割り当てが1つでもあれば通る」に
    なっている
 7. `Person.name` の UNIQUE 制約の要否（入れるなら既存DBの移行が必要）
 8. `data/photoarchive.db.bak-pre28`（773MB、#28 の移行前バックアップ）を
