@@ -113,7 +113,13 @@ def _needs_face_scan(record: Optional[Dict[str, Any]], force_rescan: bool) -> bo
         return True
     if record.get("face_count") is None:
         return True
-    return record.get("detector_version") != face.DETECTOR_VERSION
+    # **保存された値を正規化して比べる。** 古い値は特徴量の版まで連結された
+    # 形（`mediapipe_fd1/dlib_resnet_v1/...`）で、実データ 70,297 件すべてが
+    # これ。素朴に比べると**特徴量モデルを替えただけで全件が再検出になり、
+    # 441GB を NFS から読み直す**ことになる。特徴量は `reembed` が
+    # サムネイルから作り直すので、再検出は要らない。
+    stored = face.detector_version_of(record.get("detector_version"))
+    return stored != face.DETECTOR_VERSION
 
 
 # ---------------------------------------------------------------------------

@@ -84,6 +84,96 @@
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
+### `test_fakes_stay_installed.py` — 回帰テストが実物のモデルを要らないこと（2件）
+
+**作者の手元だけ通って他の環境で落ちる**のを防ぐ。実際に起きた（PR #60 の指摘1）。
+
+| テスト | 内容 |
+|---|---|
+| `test_no_unmarked_test_file_undoes_the_fakes` | **`monkeypatch.undo()` を `models` マーカーの外で使わない。** conftest のフェイクまで巻き戻り、実物の ONNX を読みに行く |
+| `test_the_marked_file_really_carries_the_marker` | 免除した側が本当にマーカーを持っていること（免除リストを抜け道にしない） |
+
+**実行時に捕まえる番人は置けない**（`monkeypatch.undo()` は番人ごと巻き戻す。実測）。
+だから静的に見張る。
+
+### `test_reembed.py` — 特徴量の作り直し（15件）
+
+**ここが壊れると、手作業で積み上げた手本と除外が消える。**
+
+| テスト | 内容 |
+|---|---|
+| `test_too_small_thumbnails_do_not_keep_the_rebuild_unfinished` | **小さすぎる顔が作り直しを永遠に「途中」にしない。** 版を据え置くと毎回「もう一度実行すれば」と誤って案内する |
+| `test_a_face_that_could_not_be_embedded_keeps_a_null_embedding` | 作れなかったことを「いまのモデルで作れなかった」として記録する（版を進めて特徴量 NULL） |
+| `test_reembed_leaves_every_assignment_alone` | **手本・除外・年齢に触らない。** `scan --force-rescan` との決定的な違い |
+| `test_the_original_photo_is_never_read` | **元写真を読まない**（NFS の 441GB を読み直さない） |
+| `test_faces_already_on_the_current_version_are_left_out` | 版が一致する顔は対象外 |
+| `test_running_twice_does_nothing_the_second_time` | 2回目は空振り（＝再開できることの裏返し） |
+| `test_a_limit_stops_early_and_the_rest_is_picked_up_next_time` | **止めた時点までが残る**（塊ごとに確定） |
+| `test_thumbnails_that_are_too_small_are_skipped_and_counted` | **小さすぎる顔を引き伸ばさない。** 版が古いまま残り照合の対象外 |
+| `test_faces_without_a_thumbnail_are_not_counted_as_targets` | 材料が無いものを分母に入れない |
+| `test_the_iterator_does_not_skip_rows_while_they_are_being_rewritten` | **`OFFSET` で送ると顔を飛ばす**（キーセット法で進む） |
+| `test_a_dry_run_writes_nothing` | `--dry-run` はDBに書かない |
+| `test_the_summary_says_what_was_left_behind` | 残したものを報告する |
+| `test_progress_reaches_the_end` | 分母に届く |
+| `test_match_only_sees_the_current_version` | **版の違う特徴量が照合に混ざらない** |
+| `test_a_face_keeps_matching_itself_after_the_rebuild` | 作り直した手本で紐づけが成り立つ |
+
+### `test_matcher_metrics.py` — 距離尺度がモデルの属性であること（11件）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_assign_score_floor_matches_the_documented_formula` | **仕様書の式と実装がずれない。** 基準距離を書き写していたため既定を変えたとき式だけ残った |
+| `test_the_defaults_come_from_the_active_model` | **閾値もマージンも書き写さない** |
+| `test_euclidean_distances_are_the_plain_geometry` | dlib の尺度 |
+| `test_cosine_distances_ignore_the_length_of_the_vector` | **L2 正規化してから比べる** |
+| `test_cosine_distances_stay_inside_the_expected_range` | 0〜2 に収める（丸め誤差で負にしない） |
+| `test_a_zero_vector_does_not_divide_by_zero` | 壊れた特徴量が来ても落ちない |
+| `test_an_unknown_metric_is_refused` | **尺度を黙って既定にしない** |
+| `test_the_metric_defaults_to_the_active_model` | 省略時はいま使うモデルの尺度 |
+| `test_the_histogram_cap_follows_the_metric` | 分布の刻みの上限も尺度で変わる |
+| `test_every_known_model_has_a_usable_description` | 記述の取りこぼしを防ぐ |
+| `test_an_unknown_version_cannot_be_resolved` | 知らない版は引けない |
+
+### `test_face_alignment.py` — 5点整列（7件）
+
+**整列は1位正解率で +16.6pt を持っている。** 静かに壊れるとモデルを替えた意味が半分消える。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_transform_puts_a_rotated_face_back_on_the_template` | 相似変換がテンプレートへ重なる |
+| `test_the_transform_never_mirrors_the_face` | **鏡像を許さない**（左右の取り違えを隠す） |
+| `test_the_eyes_and_the_mouth_corners_are_swapped_together` | **片方だけ入れ替えると対応が崩れる** |
+| `test_points_already_in_order_are_left_alone` | 並びが正しいものは触らない |
+| `test_landmarks_are_scaled_to_pixels` | FaceMesh の相対座標を画素へ |
+
+### `test_dates.py` — 日付の読み取りと年齢（19件）
+
+| テスト | 内容 |
+|---|---|
+| `test_readable_dates_are_parsed`（3件） | 撮影日時・誕生日の両方の形 |
+| `test_broken_values_are_treated_as_missing`（7件） | `0000-00-00` と `TTTT-TT-TT` の両方 |
+| `test_the_length_of_a_broken_value_is_not_a_safe_check` | **長さでは弾けない**ことを数字で固定 |
+| `test_age_is_counted_from_the_birthday`（4件） | 誕生日前は上げない。誕生前は負 |
+| `test_the_age_is_not_guessed_when_something_is_missing`（4件） | 片方でも欠けたら計算しない |
+| `test_the_gui_still_exposes_the_same_functions` | **`gui.parse_date` が同一物であること**（写しではない） |
+| `test_the_sql_side_keeps_the_same_judgement` | **SQL 側の写しと答えがそろう**（表示と並び順が食い違わない） |
+
+### `test_fetch_models.py` — モデルの取得（9件）
+
+**ネットワークには触らない。** 取得を差し替えて、sha256 の検証と「置かない」判断を見る。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_sha256_of_a_file_is_computed_in_blocks` | 174MB を一度にメモリへ載せない |
+| `test_a_matching_file_is_left_alone` | 一致すれば取得しない |
+| `test_a_file_with_the_wrong_contents_is_reported_not_replaced` | **勝手に取り直さない**（利用者が置いたものを消さない） |
+| `test_force_replaces_the_file` | `--force` なら取り直す |
+| `test_a_download_that_does_not_match_is_never_placed` | **期待と違うものを置かない。** すり替わると結果だけが静かに変わる |
+| `test_a_member_is_taken_out_of_the_archive` | ZIP から認識用の1本だけ取り出す |
+| `test_check_only_never_downloads` | `--check` は取得しない |
+| `test_main_reports_a_failure_with_a_non_zero_code` | 失敗を終了コードで返す |
+| `test_the_arcface_entry_matches_what_face_py_looks_for` | **取得する名前と本体が探す名前をそろえる** |
+
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
 | テスト | 内容 |
@@ -144,7 +234,7 @@
 | `test_smile_score_is_zero_when_no_face_mesh_is_found` ほか2件 | 顔なし・モデル不在・空の矩形 |
 | `test_quality_combines_brightness_and_face_size` | 明るさ×60 + 顔の面積比×40 |
 | `test_a_dark_face_only_earns_the_size_part` ほか3件 | 暗い顔、面積比の頭打ち、大小関係、空の矩形 |
-| `test_distance_to_similarity`（5件） | 距離 0.6 を基準にした 0-100 への変換とクリップ |
+| `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
 ### `test_matcher.py` — 自動割り当て（11件）
@@ -374,7 +464,7 @@ editable install のときだけ出すこと（通常のインストールでは
 `vacuum=False` / `make_backup=False`、進捗メッセージ、空のファイルへの
 スキーマ作成、存在しないDBを指したときのエラー。
 
-### `test_embedding_measurement.py` — 特徴量モデルの比較（30件＋`models` 1件）
+### `test_embedding_measurement.py` — 特徴量モデルの比較と他人誤認率（29件＋`models` 1件）
 
 **測定の道具がおかしいと、間違った結論で全件再計算に進む。**
 
@@ -408,6 +498,10 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_report_survives_an_empty_gap` | 手本が少なく片側が0件でも落ちない |
 | `test_main_refuses_a_database_that_is_not_there` | DB が無ければ理由を言って終了 |
 | `test_main_writes_a_report_and_notes_the_missing_model` | モデル不在を報告に書き残す |
+| `test_same_photo_pairs_separate_labelled_from_assumed` | **「同じ写真なら別人」は仮定。** 手本どうしのペアと分けて数える。**同一人物のペアを誤りに数えない** |
+| `test_photos_with_a_single_face_are_ignored` | 1枚1顔の写真はペアにならない |
+| `test_faces_on_another_version_are_left_out` | **版の違う特徴量を混ぜない** |
+| `test_the_report_keeps_the_assumption_visible` | 報告に「高めに出る」断り書きを残す |
 | `test_the_real_arcface_returns_512_dimensions`（`models`） | 実物の ONNX が 512次元を返す（環境依存・合否に含めない） |
 
 ### `test_worklog_archive.py` — 作業履歴の切り出し（16件）
@@ -435,6 +529,9 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | `test_a_branch_with_an_open_pull_request_is_not_a_warning` | PR があれば鳴らさない |
 | `test_a_documented_branch_without_a_pull_request_is_not_a_warning` | 申し送りに書いてあれば鳴らさない |
 | `test_an_undocumented_branch_without_a_pull_request_is_a_warning` | PR も申し送りも無いものだけ鳴らす（#48 の形） |
+| `test_a_branch_name_at_the_end_of_an_english_sentence` | **末尾の記号を名前に含めない**（`feature/#59_x.` では一致しない） |
+| `test_a_branch_name_next_to_japanese_punctuation_is_still_found` | **端を削る方式では取りこぼす。** 全角括弧が直後に付くと一致せず、書いてあるのに「浮いている」と鳴った |
+| `test_the_branch_name_does_not_swallow_the_text_after_it` | 逆に後ろの文を名前に巻き込まないこと |
 | `test_a_slow_command_does_not_block_the_check` | **繋がらない環境で止まらない**（10秒で打ち切る） |
 | `test_the_output_streams_are_not_mixed` | stdout と stderr を分ける |
 | `test_offline_does_not_touch_the_remote` | `--offline` は `git fetch` を呼ばない |

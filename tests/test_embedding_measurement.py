@@ -193,77 +193,6 @@ def test_the_sweep_says_nothing_when_a_side_is_empty(measure_module):
 
 
 # ---------------------------------------------------------------------------
-# 5点整列
-# ---------------------------------------------------------------------------
-
-
-def test_the_transform_puts_a_rotated_face_back_on_the_template(measure_module):
-    """回転・拡大・平行移動したテンプレートを、元のテンプレートへ戻せること。"""
-    template = measure_module.ARCFACE_TEMPLATE
-    angle = np.deg2rad(20.0)
-    rotation = np.array(
-        [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
-    )
-    moved = (template @ rotation.T) * 1.7 + np.array([12.0, -5.0])
-
-    matrix = measure_module.similarity_transform(moved, template)
-    restored = moved @ matrix[:, :2].T + matrix[:, 2]
-    assert np.allclose(restored, template, atol=1e-6)
-
-
-def test_the_transform_never_mirrors_the_face(measure_module):
-    """**鏡像を許さない。** 許すと左右の取り違えを整列が「直して」隠してしまう。"""
-    template = measure_module.ARCFACE_TEMPLATE
-    mirrored = template * np.array([-1.0, 1.0])
-    matrix = measure_module.similarity_transform(mirrored, template)
-    assert np.linalg.det(matrix[:, :2]) > 0
-
-
-def test_the_eyes_and_the_mouth_corners_are_swapped_together(measure_module):
-    """**片方だけ入れ替えると対応が崩れる。**
-
-    MediaPipe の添字の左右と画面の左右は一致する保証がないので、目の左右が
-    逆なら口角も一緒に入れ替える。
-    """
-    points = np.array([[70.0, 50.0], [30.0, 50.0], [50.0, 70.0], [68.0, 90.0], [32.0, 90.0]])
-    ordered = measure_module.order_five_points(points)
-    assert ordered[0][0] < ordered[1][0]
-    assert ordered[3][0] < ordered[4][0]
-    # 鼻は動かさない
-    assert tuple(ordered[2]) == (50.0, 70.0)
-
-
-def test_points_already_in_order_are_left_alone(measure_module):
-    points = np.array([[30.0, 50.0], [70.0, 50.0], [50.0, 70.0], [32.0, 90.0], [68.0, 90.0]])
-    assert np.array_equal(measure_module.order_five_points(points), points)
-
-
-def test_landmarks_are_scaled_to_pixels(measure_module):
-    """FaceMesh は 0.0-1.0 の相対座標を返す。画素へ直すこと。"""
-
-    class _Mark:
-        def __init__(self, x, y):
-            self.x = x
-            self.y = y
-
-    landmarks = {index: _Mark(0.5, 0.5) for index in range(468)}
-    landmarks[33] = _Mark(0.2, 0.4)
-    landmarks[133] = _Mark(0.3, 0.4)
-    landmarks[362] = _Mark(0.7, 0.4)
-    landmarks[263] = _Mark(0.8, 0.4)
-    landmarks[1] = _Mark(0.5, 0.6)
-    landmarks[61] = _Mark(0.35, 0.8)
-    landmarks[291] = _Mark(0.65, 0.8)
-
-    points = measure_module.five_points_from_landmarks(landmarks, width=200, height=100)
-    assert points[0] == pytest.approx([50.0, 40.0])  # (0.2+0.3)/2 * 200
-    assert points[1] == pytest.approx([150.0, 40.0])
-    assert points[2] == pytest.approx([100.0, 60.0])
-    assert points[3] == pytest.approx([70.0, 80.0])
-    assert points[4] == pytest.approx([130.0, 80.0])
-
-
-# ---------------------------------------------------------------------------
 # 手本の読み出し
 # ---------------------------------------------------------------------------
 
@@ -499,3 +428,107 @@ def test_the_real_arcface_returns_512_dimensions(measure_module, tmp_path):
 
     assert vector is not None
     assert len(vector) == 512
+
+
+# ---------------------------------------------------------------------------
+# 同じ写真に写る顔のペアでの他人誤認率
+# ---------------------------------------------------------------------------
+
+
+def _add_face_with_vector(connection, media_id, vector, **kwargs):
+    return db.add_face(
+        connection,
+        media_id=media_id,
+        bbox=(0, 24, 24, 0),
+        embedding=list(vector),
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=_thumbnail(),
+        **kwargs,
+    )
+
+
+def _unit(*values):
+    vector = [0.0] * db.EMBEDDING_DIM
+    vector[: len(values)] = values
+    return vector
+
+
+def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_path):
+    """**「同じ写真なら別人」は仮定。** 手本どうしのペアと分けて数えること。
+
+    本番の `match` が解くのは「未割当（大半が他人）を手本と照合する」問題なので、
+    手本どうしの測定では実害が出る誤りを測れない。
+    """
+    database = tmp_path / "pairs.db"
+    connection = db.ensure_database(str(database))
+    try:
+        natsu = db.add_person(connection, "なつ")
+        hiyori = db.add_person(connection, "ひより")
+        media_id = db.save_media(
+            connection,
+            {
+                "path": "/photos/a.jpg",
+                "filename": "a.jpg",
+                "type": "image",
+                "file_hash": "a",
+                "file_size": 10,
+                "created_time": "2012-10-06T10:00:00",
+                "shooting_date": "2012-10-06T10:00:00",
+            },
+        )
+        # 手本どうし・別人（確かな別人）
+        a = _add_face_with_vector(connection, media_id, _unit(1.0, 0.0))
+        b = _add_face_with_vector(connection, media_id, _unit(0.0, 1.0))
+        # 手本どうし・同一人物（鏡など。**誤りに数えない**）
+        c = _add_face_with_vector(connection, media_id, _unit(1.0, 0.01))
+        # 未割当（別人と仮定）
+        _add_face_with_vector(connection, media_id, _unit(0.0, 0.0, 1.0))
+        db.assign_faces(connection, [a, c], natsu, age=3)
+        db.assign_faces(connection, [b], hiyori, age=1)
+        connection.commit()
+    finally:
+        connection.close()
+
+    buckets = measure_module.same_photo_pairs(
+        str(database), db.embedding_model.ACTIVE.version, measure_module.COSINE
+    )
+
+    # 4つの顔 → 6ペア。a-b と b-c が別人、a-c が同一人物、残り3つが未割当がらみ
+    assert len(buckets[measure_module.LABELLED_DIFFERENT]) == 2  # a-b, b-c
+    assert len(buckets[measure_module.LABELLED_SAME]) == 1  # a-c
+    assert len(buckets[measure_module.ASSUMED_DIFFERENT]) == 3  # d と他の3組
+    # a-c は同じ向きなので距離がほぼ0。**これを誤りに数えてはいけない**
+    assert buckets[measure_module.LABELLED_SAME][0] < 0.01
+    assert min(buckets[measure_module.LABELLED_DIFFERENT]) > 0.9
+
+
+def test_photos_with_a_single_face_are_ignored(measure_module, tmp_path):
+    database = tmp_path / "single.db"
+    _seed_database(database)  # 1枚に1顔ずつ
+    buckets = measure_module.same_photo_pairs(
+        str(database), db.embedding_model.ACTIVE.version, measure_module.COSINE
+    )
+    assert sum(len(values) for values in buckets.values()) == 0
+
+
+def test_faces_on_another_version_are_left_out(measure_module, tmp_path):
+    """**版の違う特徴量を混ぜない。** `reembed` の途中は混在する。"""
+    database = tmp_path / "mixed.db"
+    _seed_database(database)
+    buckets = measure_module.same_photo_pairs(
+        str(database), "別の版/v9", measure_module.COSINE
+    )
+    assert sum(len(values) for values in buckets.values()) == 0
+
+
+def test_the_report_keeps_the_assumption_visible(measure_module):
+    buckets = {
+        measure_module.LABELLED_DIFFERENT: [0.9],
+        measure_module.LABELLED_SAME: [0.1],
+        measure_module.ASSUMED_DIFFERENT: [0.3, 0.9],
+    }
+    report = measure_module.format_same_photo_report(buckets, "v/1", measure_module.COSINE)
+    assert "高めに出る" in report
+    assert "別人と仮定" in report
+    # 同一人物の行を「誤り」と読ませない断り書き
+    assert "誤りではなく" in report

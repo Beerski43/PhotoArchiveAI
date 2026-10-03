@@ -25,6 +25,7 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -106,6 +107,18 @@ def unmerged_branches(offline: bool) -> tuple[dict[str, list[str]], list[str]]:
     return found, warnings
 
 
+#: 申し送りからブランチ名を取り出す。**端を削る方式にしない。**
+#:
+#: 以前は空白で切って端の記号を削っていたため、`` `feature/#59_x`（**PR …`` の
+#: ように**全角括弧が直後に付くと名前が一致せず**、申し送りに書いてあるのに
+#: 「浮いている」と鳴っていた。**偽の警告は隣の本物ごと読まれなくなる。**
+#: 区切り文字を列挙するのをやめ、ブランチ名に使える文字だけを拾う。
+#: **末尾を記号で終わらせない。** `feature/#59_x. 次に` の `.` まで名前に
+#: 含めてしまい、一致しなかった（PR #60 の指摘5）。日本語なら「。」なので
+#: 実害は稀だが、英語の文末で起きる。
+BRANCH_PATTERN = re.compile(r"feature/[A-Za-z0-9#._/-]*[A-Za-z0-9#_/-]")
+
+
 def branches_mentioned_in_handoff_notes() -> set[str]:
     """申し送りに名前が出ているブランチ。**書いてあるなら浮いていない。**"""
     if not DETAILS_DIR.is_dir():
@@ -113,7 +126,7 @@ def branches_mentioned_in_handoff_notes() -> set[str]:
     text = "\n".join(
         path.read_text(encoding="utf-8") for path in DETAILS_DIR.glob("*.md")
     )
-    return {word.strip("`*（）()、。 ") for word in text.split() if "feature/" in word}
+    return set(BRANCH_PATTERN.findall(text))
 
 
 def check_branches_have_pull_requests(branches: dict[str, list[str]]) -> list[str]:

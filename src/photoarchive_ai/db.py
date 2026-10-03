@@ -29,9 +29,16 @@ from typing import (
 
 import numpy as np
 
+# **別名で読む。** この module には `embedding` という名前の引数を取る関数が
+# いくつもあり（`encode_embedding` / `add_face`）、同名だと関数の中で
+# module が見えなくなる。将来そこでモデルの記述を使おうとして踏む。
+from . import embedding as embedding_model
+
 SCHEMA_VERSION = 4
 
-EMBEDDING_DIM = 128
+#: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
+#: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
+EMBEDDING_DIM = embedding_model.ACTIVE.dimensions
 EMBEDDING_DTYPE = np.float32
 
 ASSIGN_MANUAL = "manual"
@@ -964,6 +971,78 @@ def set_faces_age(
     return affected
 
 
+def count_faces_to_reembed(connection: sqlite3.Connection, version: str) -> int:
+    """``version`` と違う版の特徴量を持つ顔の件数。``reembed`` の分母に使う。
+
+    **サムネイルを持たない顔は数えない。** 作り直す材料が無いので対象外
+    （実データでは0件だが、`--allow-missing-embeddings` で入れた顔など
+    理屈の上ではありうる）。
+    """
+    row = connection.execute(
+        "SELECT COUNT(*) FROM Face"
+        " WHERE (embed_version IS NULL OR embed_version != ?)"
+        " AND thumbnail IS NOT NULL AND length(thumbnail) > 0",
+        (version,),
+    ).fetchone()
+    return int(row[0])
+
+
+def iter_faces_to_reembed(
+    connection: sqlite3.Connection, version: str, chunk_size: int = 200
+) -> Iterable[Tuple[int, bytes]]:
+    """作り直す顔を ``(id, サムネイル)`` で順に返す。
+
+    **`OFFSET` で送らない。** 書き換えるたびに対象集合が縮むので、`OFFSET` だと
+    まだ処理していない顔を飛ばす。``id`` を進める形（キーセット法）にしてある。
+
+    サムネイルの BLOB は塊ごとにしか持たない（全件読むと 269MB になる）。
+    """
+    last_id = 0
+    while True:
+        rows = connection.execute(
+            "SELECT id, thumbnail FROM Face"
+            " WHERE (embed_version IS NULL OR embed_version != ?)"
+            " AND thumbnail IS NOT NULL AND length(thumbnail) > 0"
+            " AND id > ? ORDER BY id LIMIT ?",
+            (version, last_id, chunk_size),
+        ).fetchall()
+        if not rows:
+            return
+        for row in rows:
+            yield int(row["id"]), row["thumbnail"]
+        last_id = int(rows[-1]["id"])
+
+
+def save_face_embeddings(
+    connection: sqlite3.Connection,
+    rows: Sequence[Tuple[int, Optional[bytes]]],
+    version: str,
+) -> int:
+    """特徴量と版だけを書き戻す。**触れた行数を返す。**
+
+    **特徴量が `None` の行も受ける。** 「いまのモデルで作ろうとしたが作れなかった」
+    を表すのに要る（小さすぎる顔など）。版だけ進めて特徴量を NULL にしておくと、
+    `scan` が同じ状況を記録する形（`scanner` は常に版を書き、特徴量は NULL）と
+    そろい、**作り直しの対象から外れて「完了」に到達できる。**
+
+    **割り当てに触らない。** `person_id` / `assign_source` / `assign_score` /
+    `assigned_at` / `age` は列挙しないので、手本と除外はそのまま残る。
+    これが `scan --force-rescan`（顔の行を作り直す）との決定的な違い。
+
+    **塊ごとに確定する。** 実データで2時間を超える作業なので、途中で止めたときに
+    そこまでが残るようにする。
+    """
+    if not rows:
+        return 0
+    cursor = connection.cursor()
+    cursor.executemany(
+        "UPDATE Face SET embedding = ?, embed_version = ? WHERE id = ?",
+        [(blob, version, face_id) for face_id, blob in rows],
+    )
+    connection.commit()
+    return len(rows)
+
+
 def load_manual_embeddings(
     connection: sqlite3.Connection,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -972,13 +1051,19 @@ def load_manual_embeddings(
     自動紐づけの結果 (``assign_source='auto'``) は教師に含めない。混ぜると
     誤った紐づけが次回以降の基準として増幅されるため。
 
-    戻り値は (埋め込み行列 (K, 128), 人物ID配列 (K,)) で、**同じ添字が同じ顔**
+    戻り値は (埋め込み行列 (K, 次元数), 人物ID配列 (K,)) で、**同じ添字が同じ顔**
     を指す。
+
+    **いま使うモデルと同じ版の特徴量だけを読む**（`embed_version`）。
+    別の埋め込み空間の特徴量を混ぜて距離を取るのは常に誤りで、次元が違えば
+    `np.vstack` が落ち、**次元が同じモデル同士なら黙って無意味な距離が出る。**
+    `photoarchive reembed` の途中は必ず混在するので、ここで絞るのが要る。
     """
     rows = connection.execute(
         "SELECT person_id, embedding FROM Face"
-        " WHERE person_id IS NOT NULL AND assign_source = ? AND embedding IS NOT NULL",
-        (ASSIGN_MANUAL,),
+        " WHERE person_id IS NOT NULL AND assign_source = ? AND embedding IS NOT NULL"
+        " AND embed_version = ?",
+        (ASSIGN_MANUAL, embedding_model.ACTIVE.version),
     ).fetchall()
     if not rows:
         return (
@@ -1009,12 +1094,14 @@ def load_manual_faces(connection: sqlite3.Connection) -> ManualFaces:
     ``load_manual_embeddings`` との違いは添字を引ける情報が付くこと。
     交差検証は「いま抜いている顔はどれか」「同じ写真に写っている手本はどれか」
     を知る必要があるが、match 本体には不要なので関数を分けている。
+
+    **`load_manual_embeddings` と同じく、同じ版の特徴量だけを読む。**
     """
     rows = connection.execute(
         "SELECT id, media_id, person_id, embedding FROM Face"
         " WHERE person_id IS NOT NULL AND assign_source = ? AND embedding IS NOT NULL"
-        " ORDER BY id",
-        (ASSIGN_MANUAL,),
+        " AND embed_version = ? ORDER BY id",
+        (ASSIGN_MANUAL, embedding_model.ACTIVE.version),
     ).fetchall()
     if not rows:
         return ManualFaces(
@@ -1041,9 +1128,12 @@ def _match_candidate_filter(include_auto: bool) -> str:
     ``include_auto`` は dry-run 用。本番実行は先に自動割り当てを取り消して
     から候補を数えるので、取り消しを行わない dry-run で ``auto`` を除くと、
     2回目以降の件数と距離の分布が実際より小さく出てしまう。
+
+    **`embed_version` のプレースホルダを1つ持つ。** 呼び出し側は必ず
+    `embedding_model.ACTIVE.version` を先頭の引数として渡すこと。
     """
     assigned = "(assign_source IS NULL OR assign_source = 'auto')" if include_auto else "assign_source IS NULL"
-    return f" WHERE {assigned} AND embedding IS NOT NULL"
+    return f" WHERE {assigned} AND embedding IS NOT NULL AND embed_version = ?"
 
 
 def count_match_candidates(
@@ -1055,7 +1145,10 @@ def count_match_candidates(
     しまい、100% に届かないまま終わる。
     """
     where = _match_candidate_filter(include_auto)
-    return int(connection.execute(f"SELECT COUNT(*) FROM Face{where}").fetchone()[0])
+    row = connection.execute(
+        f"SELECT COUNT(*) FROM Face{where}", (embedding_model.ACTIVE.version,)
+    ).fetchone()
+    return int(row[0])
 
 
 def iter_unassigned_embeddings(
@@ -1069,7 +1162,7 @@ def iter_unassigned_embeddings(
     while True:
         rows = connection.execute(
             f"SELECT id, embedding FROM Face{where} ORDER BY id LIMIT ? OFFSET ?",
-            (chunk_size, offset),
+            (embedding_model.ACTIVE.version, chunk_size, offset),
         ).fetchall()
         if not rows:
             return

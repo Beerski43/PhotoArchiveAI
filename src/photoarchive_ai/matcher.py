@@ -15,32 +15,67 @@ from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
-from . import db
+from . import db, embedding
 from .scoring import distance_to_similarity
 
 logger = logging.getLogger("photoarchive.matcher")
 
-#: 顔特徴量の距離の上限。実データでの誤一致率(同一写真に写る別人同士が
-#: この距離を下回る割合)は 0.4 で 0.5〜1.0%、0.45 で 2.8〜5.7%、
-#: 0.5 で 9.0〜22.7%、dlib 標準の 0.6 では 40〜63% だった。
-#: 誤った紐づけは手作業でのやり直しが高くつくため、取りこぼす側に倒す。
-DEFAULT_THRESHOLD = 0.4
-DEFAULT_MARGIN = 0.05
+#: 顔特徴量の距離の上限と、1位と2位の人物の距離差の下限。
+#:
+#: **どちらもモデルの属性。書き写さない**（`embedding.ACTIVE`）。
+#: 尺度がモデルごとに違うので、dlib 用の 0.4 を他のモデルへ持ち込むと
+#: 意味が変わる（dlib はユークリッド、ArcFace はコサイン）。
+#:
+#: 選び方の基準は**モデルを替えても同じ**。「行事をまたぐ別人のペアを
+#: 1% 程度しか誤らない」点を採る。誤った紐づけは手作業でのやり直しが
+#: 高くつくため、**取りこぼす側に倒す。**
+#:
+#: 数え方は「同じ写真に写る2つの顔を別人とみなした誤認率」（仕様書 §8.3）。
+#:
+#: - dlib(0.4): 他人誤認 0.5〜1.0% / `evaluate` の正解 26.9%
+#: - ArcFace(0.45): 他人誤認 **1.06%** / `evaluate` の正解 **78.6%**
+DEFAULT_THRESHOLD = embedding.ACTIVE.threshold
+DEFAULT_MARGIN = embedding.ACTIVE.margin
+
 #: 読み出しの塊の大きさは db 側に持つ。二重定義にすると片方だけずれる。
 CHUNK_SIZE = db.MATCH_CHUNK_SIZE
 
+#: 距離の分布（ヒストグラム）の上限。**尺度によって取りうる最大が違う。**
+HISTOGRAM_MAX = 2.0 if embedding.ACTIVE.metric == embedding.METRIC_COSINE else 1.5
 
-def _distances(candidates: np.ndarray, teachers: np.ndarray) -> np.ndarray:
-    """(N, K) のユークリッド距離行列。
 
-    ブロードキャストで差分をとると (N, K, 128) の巨大な配列になるため、
+def _distances(
+    candidates: np.ndarray, teachers: np.ndarray, metric: Optional[str] = None
+) -> np.ndarray:
+    """(N, K) の距離行列。**尺度はモデルが決める**（既定は `embedding.ACTIVE`）。
+
+    ブロードキャストで差分をとると (N, K, 次元数) の巨大な配列になるため、
     内積から展開して計算する。
+
+    - ``METRIC_EUCLIDEAN``: ユークリッド距離（dlib）
+    - ``METRIC_COSINE``: L2 正規化してから ``1 - cos``（ArcFace）。
+      **正規化を省くと、ベクトルの長さが距離に混ざる。**
     """
-    candidate_sq = np.sum(candidates.astype(np.float64) ** 2, axis=1)[:, None]
-    teacher_sq = np.sum(teachers.astype(np.float64) ** 2, axis=1)[None, :]
-    cross = candidates.astype(np.float64) @ teachers.astype(np.float64).T
-    squared = np.maximum(candidate_sq + teacher_sq - 2.0 * cross, 0.0)
+    metric = metric or embedding.ACTIVE.metric
+    left = candidates.astype(np.float64)
+    right = teachers.astype(np.float64)
+    if metric == embedding.METRIC_COSINE:
+        left = _normalize_rows(left)
+        right = _normalize_rows(right)
+        return np.clip(1.0 - left @ right.T, 0.0, 2.0)
+    if metric != embedding.METRIC_EUCLIDEAN:
+        raise ValueError(f"知らない距離尺度: {metric}")
+    candidate_sq = np.sum(left**2, axis=1)[:, None]
+    teacher_sq = np.sum(right**2, axis=1)[None, :]
+    squared = np.maximum(candidate_sq + teacher_sq - 2.0 * (left @ right.T), 0.0)
     return np.sqrt(squared)
+
+
+def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """各行を L2 正規化する。長さ0の行はそのまま返す（0除算を避ける）。"""
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return matrix / norms
 
 
 def _best_match(
@@ -70,8 +105,15 @@ def match_faces(
     reset: bool = True,
     dry_run: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    metric: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """未割当の顔を自動で人物に紐づける。"""
+    """未割当の顔を自動で人物に紐づける。
+
+    ``metric`` は距離尺度。省略するといま使うモデルのもの（`embedding.ACTIVE`）。
+    **明示できるようにしているのは、尺度を前提にした判断を読み手に見せるため。**
+    閾値とマージンは尺度と一体なので、`threshold` を変えるときは
+    どの尺度の話かがはっきりしている必要がある。
+    """
     summary: Dict[str, Any] = {
         "teachers": 0,
         "candidates": 0,
@@ -104,12 +146,15 @@ def match_faces(
     for ids, candidates in db.iter_unassigned_embeddings(
         connection, CHUNK_SIZE, include_auto=include_auto
     ):
-        distances = _distances(candidates, teachers)
+        distances = _distances(candidates, teachers, metric)
         for row_index in range(distances.shape[0]):
             person_id, distance = _best_match(
                 distances[row_index], person_ids, threshold, margin
             )
-            bucket = round(min(distance, 1.5) - (min(distance, 1.5) % 0.1), 1)
+            # **刻みの上限は尺度に合わせる。** ユークリッド(dlib)は実質 1.5 まで、
+            # コサインは 2.0 まで。固定すると遠い顔が1つの桶に潰れて分布が読めない。
+            capped = min(distance, HISTOGRAM_MAX)
+            bucket = round(capped - (capped % 0.1), 1)
             summary["histogram"][bucket] = summary["histogram"].get(bucket, 0) + 1
             if person_id is None:
                 summary["unassigned"] += 1

@@ -325,22 +325,27 @@ def test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns(
     source = tmp_path / "media"
     write_image(source / "a.jpg")
 
-    monkeypatch.setattr(scanner.face, "embedding_available", lambda: False)
-    monkeypatch.setattr(scanner.face, "compute_embedding", lambda rgb, location: None)
-    summary = scan_directory(
-        str(source), connection, workers=1, allow_missing_embeddings=True
-    )
+    # **`monkeypatch.undo()` を使わない。** あれは自分の差し替えだけでなく
+    # **conftest の autouse フィクスチャ（フェイクのモデル）まで巻き戻す。**
+    # 戻ると後半が実物の ArcFace(174MB) と実物の FaceMesh を読みに行き、
+    # `models/` を置いていないチェックアウトでは落ちる（回帰テストは実物の
+    # モデルを要らない、という CLAUDE.md §5 の前提から外れる）。
+    with monkeypatch.context() as patch:
+        patch.setattr(scanner.face, "embedding_available", lambda: False)
+        patch.setattr(scanner.face, "compute_embedding", lambda rgb, location: None)
+        summary = scan_directory(
+            str(source), connection, workers=1, allow_missing_embeddings=True
+        )
 
-    assert summary["processed"] == 1
-    media = db.list_media(connection)[0]
-    assert media["face_count"] == 1
-    # 顔は貯まるが、検出は「未完了」として残す。
-    assert media["detector_version"] is None
-    face_id = db.list_faces(connection, unassigned=True)[0]["id"]
-    assert db.get_face(connection, face_id)["embedding"] is None
+        assert summary["processed"] == 1
+        media = db.list_media(connection)[0]
+        assert media["face_count"] == 1
+        # 顔は貯まるが、検出は「未完了」として残す。
+        assert media["detector_version"] is None
+        face_id = db.list_faces(connection, unassigned=True)[0]["id"]
+        assert db.get_face(connection, face_id)["embedding"] is None
 
-    # モデルが戻れば、通常の scan が拾い直す。
-    monkeypatch.undo()
+    # ここではフェイクのモデルが戻っている。モデルが戻れば通常の scan が拾い直す。
     summary = scan_directory(str(source), connection, workers=1)
 
     assert summary["processed"] == 1

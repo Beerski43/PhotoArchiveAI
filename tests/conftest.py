@@ -4,6 +4,7 @@ import pytest
 
 from tests.fakes import (
     FACE_MESH_STATE,
+    _FakeArcFaceSession,
     _FakeRecognitionModel,
     _FakeShapePredictor,
     _install_fake_mediapipe_modules,
@@ -60,12 +61,21 @@ def fake_face_mesh():
 
 @pytest.fixture(autouse=True)
 def fake_face_models(monkeypatch):
-    """dlib のモデル読み込みを差し替える。実物の .dat は使わない。"""
+    """特徴量モデルの読み込みを差し替える。実物の .dat / .onnx は使わない。"""
     from photoarchive_ai import face, scoring
 
     monkeypatch.setattr(
         face, "_load_dlib_models", lambda: (_FakeShapePredictor(), _FakeRecognitionModel())
     )
+    # ArcFace の ONNX は 174MB あり、テストで読むと重く環境にも左右される。
+    monkeypatch.setattr(face, "_load_arcface_session", lambda: _FakeArcFaceSession())
+    # **5点は取れないことにして、縮小の経路を通す**（理由は tests/fakes.py）。
+    monkeypatch.setattr(face, "detect_five_points", lambda _rgb: None)
+
+    # **ここに「実物を読もうとしたら落ちる」番人は置けない。** `monkeypatch.undo()`
+    # は差し替えを**すべて**巻き戻すので、番人ごと消える（PR #60 の指摘1で実測）。
+    # 代わりに `test_fakes_stay_installed.py` が、`models` マーカーの無いテストで
+    # `monkeypatch.undo()` を使っていないことを静的に見張る。
     monkeypatch.setattr(face, "EMBED_MIN_FACE_PX", 4)
     face.reset_model_cache()
     scoring.reset_model_cache()

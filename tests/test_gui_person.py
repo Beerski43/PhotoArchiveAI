@@ -95,8 +95,8 @@ def window(tmp_path):
         connection,
         media_id=media_id,
         bbox=(20, 120, 80, 40),
-        embedding=[0.0] * 128,
-        embed_version="test",
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
         thumbnail=b"",
     )
     connection.commit()
@@ -216,8 +216,8 @@ def test_the_preview_uses_the_last_selected_face(window):
         connection,
         media_id=media_id,
         bbox=(0, 40, 40, 0),
-        embedding=[0.0] * 128,
-        embed_version="test",
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
         thumbnail=b"",
     )
     connection.commit()
@@ -815,8 +815,8 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
         connection,
         media_id=older,
         bbox=(0, 40, 40, 0),
-        embedding=[0.0] * 128,
-        embed_version="test",
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
         thumbnail=b"",
     )
     connection.commit()
@@ -1122,8 +1122,8 @@ def test_choosing_another_face_clears_the_done_label(window, monkeypatch, qt_app
         connection,
         media_id=media_id,
         bbox=(0, 40, 40, 0),
-        embedding=[0.0] * 128,
-        embed_version="test",
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
         thumbnail=b"",
     )
     connection.commit()

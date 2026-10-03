@@ -156,18 +156,30 @@ def test_score_face_returns_both_scores(fake_face_mesh):
     assert quality == pytest.approx(scoring.estimate_quality(rgb, FULL_IMAGE))
 
 
+#: 類似度の基準距離は**モデルの属性**（dlib 0.6 / ArcFace 1.0）。
+#: 数字を書き写すと、モデルを替えたときにここだけ古くなる。
+REFERENCE = scoring.SIMILARITY_REFERENCE_DISTANCE
+
+
 @pytest.mark.parametrize(
     "distance, expected",
     [
         (0.0, 100.0),
-        (0.3, 50.0),  # 基準距離 0.6 のちょうど半分
-        (0.6, 0.0),
-        (1.2, 0.0),  # 基準を超えても負にはしない
+        (REFERENCE / 2.0, 50.0),  # 基準距離のちょうど半分
+        (REFERENCE, 0.0),
+        (REFERENCE * 2.0, 0.0),  # 基準を超えても負にはしない
         (-0.1, 100.0),  # 念のため下側もクリップする
     ],
 )
 def test_distance_to_similarity(distance, expected):
     assert scoring.distance_to_similarity(distance) == pytest.approx(expected)
+
+
+def test_the_similarity_reference_comes_from_the_active_model():
+    """**基準距離を `scoring` に書き写さない。** 尺度はモデルごとに違う。"""
+    from photoarchive_ai import embedding
+
+    assert scoring.SIMILARITY_REFERENCE_DISTANCE == embedding.ACTIVE.similarity_reference
 
 
 def test_media_scores_take_the_best_face():
