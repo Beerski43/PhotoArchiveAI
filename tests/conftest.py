@@ -71,6 +71,11 @@ def fake_face_models(monkeypatch):
     monkeypatch.setattr(face, "_load_arcface_session", lambda: _FakeArcFaceSession())
     # **5点は取れないことにして、縮小の経路を通す**（理由は tests/fakes.py）。
     monkeypatch.setattr(face, "detect_five_points", lambda _rgb: None)
+
+    # **ここに「実物を読もうとしたら落ちる」番人は置けない。** `monkeypatch.undo()`
+    # は差し替えを**すべて**巻き戻すので、番人ごと消える（PR #60 の指摘1で実測）。
+    # 代わりに `test_fakes_stay_installed.py` が、`models` マーカーの無いテストで
+    # `monkeypatch.undo()` を使っていないことを静的に見張る。
     monkeypatch.setattr(face, "EMBED_MIN_FACE_PX", 4)
     face.reset_model_cache()
     scoring.reset_model_cache()

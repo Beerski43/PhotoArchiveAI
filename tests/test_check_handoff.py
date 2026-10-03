@@ -243,3 +243,22 @@ def test_the_branch_name_does_not_swallow_the_text_after_it(tmp_path, monkeypatc
     found = check_handoff.branches_mentioned_in_handoff_notes()
 
     assert found == {"feature/#5_x", "feature/#6_y/with/slashes"}
+
+
+def test_a_branch_name_at_the_end_of_an_english_sentence(tmp_path, monkeypatch):
+    """**末尾の記号を名前に含めない。** `feature/#59_x.` では一致しない。
+
+    日本語の文書では「。」なので実害は稀だが、英語の文末で起きる
+    （PR #60 の指摘5）。
+    """
+    notes = tmp_path / "details"
+    notes.mkdir()
+    (notes / "handoff.md").write_text(
+        "See feature/#59_x. Next, feature/#60_y, then feature/#61_z-ok works.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_handoff, "DETAILS_DIR", notes)
+
+    found = check_handoff.branches_mentioned_in_handoff_notes()
+
+    assert found == {"feature/#59_x", "feature/#60_y", "feature/#61_z-ok"}

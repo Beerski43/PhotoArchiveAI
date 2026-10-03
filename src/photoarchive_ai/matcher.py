@@ -30,8 +30,10 @@ logger = logging.getLogger("photoarchive.matcher")
 #: 1% 程度しか誤らない」点を採る。誤った紐づけは手作業でのやり直しが
 #: 高くつくため、**取りこぼす側に倒す。**
 #:
-#: - dlib(0.4): 誤一致率 0.5〜1.0%。同一人物を拾えるのは約30%
-#: - ArcFace(0.60): 誤り 0.97%。**同じ誤り率で 63.5% 拾う**
+#: 数え方は「同じ写真に写る2つの顔を別人とみなした誤認率」（仕様書 §8.3）。
+#:
+#: - dlib(0.4): 他人誤認 0.5〜1.0% / `evaluate` の正解 26.9%
+#: - ArcFace(0.45): 他人誤認 **1.06%** / `evaluate` の正解 **78.6%**
 DEFAULT_THRESHOLD = embedding.ACTIVE.threshold
 DEFAULT_MARGIN = embedding.ACTIVE.margin
 

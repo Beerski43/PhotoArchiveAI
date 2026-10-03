@@ -106,7 +106,7 @@ def test_reembed_leaves_every_assignment_alone(connection):
 
     summary = reembed.reembed_faces(connection)
 
-    assert summary["written"] == 3
+    assert summary["embedded"] == 3
     for face_id, previous in before.items():
         now = _raw(connection, face_id)
         assert now["person_id"] == previous["person_id"]
@@ -184,6 +184,43 @@ def test_a_limit_stops_early_and_the_rest_is_picked_up_next_time(connection):
     assert db.count_faces_to_reembed(connection, embedding.ACTIVE.version) == 0
 
 
+def test_too_small_thumbnails_do_not_keep_the_rebuild_unfinished(connection):
+    """**小さすぎる顔が、作り直しを永遠に「途中」にしないこと。**
+
+    版を据え置くと `count_faces_to_reembed` が数え続け、**全件終わったあとも毎回
+    「作り直す顔: 443 件」と出て「もう一度実行すれば続きから」と誤って案内する**
+    （PR #60 の指摘3。実データで 443 件が該当）。
+    """
+    media_id = _add_media(connection)
+    _add_old_face(connection, media_id, size=8)
+    _add_old_face(connection, media_id, color=(10, 200, 60))
+
+    first = reembed.reembed_faces(connection)
+    assert first["too_small"] == 1
+
+    # **2回目は対象が無いこと。** ここが「完了に到達する」の意味。
+    second = reembed.reembed_faces(connection, dry_run=True)
+    assert second["target"] == 0
+    assert "残りは" not in reembed.format_summary(first)
+
+
+def test_a_face_that_could_not_be_embedded_keeps_a_null_embedding(connection):
+    """**作れなかったことを「いまのモデルで作れなかった」として記録する。**
+
+    版だけ進めて特徴量を NULL にする。`scan` が同じ状況を記録する形と同じで、
+    照合の対象からは外れたままになる。
+    """
+    media_id = _add_media(connection)
+    tiny = _add_old_face(connection, media_id, size=8)
+
+    reembed.reembed_faces(connection)
+
+    row = _raw(connection, tiny)
+    assert row["embed_version"] == embedding.ACTIVE.version
+    assert row["size"] is None  # length(embedding) が NULL
+    assert db.count_match_candidates(connection) == 0
+
+
 def test_thumbnails_that_are_too_small_are_skipped_and_counted(connection):
     """**小さすぎる顔を引き伸ばさない。** 中身の無い特徴量は誤った紐づけの種。
 
@@ -196,10 +233,11 @@ def test_thumbnails_that_are_too_small_are_skipped_and_counted(connection):
 
     summary = reembed.reembed_faces(connection)
 
-    assert summary["written"] == 1
+    assert summary["embedded"] == 1
     assert summary["too_small"] == 1
-    # 版が古いまま → 照合の対象外
-    assert _raw(connection, tiny)["embed_version"] == OLD_VERSION
+    # **版は進めるが、特徴量は NULL。** 照合の対象外のまま、作り直しは完了する
+    assert _raw(connection, tiny)["embed_version"] == embedding.ACTIVE.version
+    assert _raw(connection, tiny)["size"] is None
     assert _raw(connection, normal)["embed_version"] == embedding.ACTIVE.version
 
 
@@ -262,7 +300,8 @@ def test_the_summary_says_what_was_left_behind(connection):
 
     assert "作り直した顔: 1" in text
     assert "照合の対象外" in text
-    assert "もう一度実行すれば続きから" in text
+    # **作れなかった顔を「残り」に数えない**（数えると誤った案内になる）
+    assert "もう一度実行すれば続きから" not in text
 
 
 def test_progress_reaches_the_end(connection):

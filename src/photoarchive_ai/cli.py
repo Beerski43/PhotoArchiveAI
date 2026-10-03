@@ -260,7 +260,8 @@ def _run_migrate(args, db_path: str) -> None:
 def _run_reembed(args, db_path: str) -> None:
     """保存済みサムネイルから特徴量を作り直す。
 
-    **元写真を読まない。** 実データでは全件 142 分（NFS の読み直しは0）。
+    **元写真を読まない。** 実データでは全件 約158分（実測 162ms/件。NFS の
+    読み直しは0）。見積りは `--dry-run` が実際に作って測るので、ここは目安。
     **割り当てには触らない**ので、手本と除外はそのまま残る。
     """
     log_file = Path("data/logs") / f"reembed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"

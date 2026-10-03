@@ -32,7 +32,8 @@ import numpy as np
 from . import db
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, _best_match, _distances
 
-#: 既定で試す閾値。0.4 は現在の既定値、0.45 は ROADMAP が緩める候補として挙げる値。
+#: 既定で試す閾値。**0.45 が現在の既定値**（`embedding.ACTIVE.threshold`）。
+#: 前後を広く振るのは、閾値を動かしたときの効き方を見るため。
 DEFAULT_THRESHOLDS = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
 
 #: 距離行列を一度に作る行数。全手本ぶんを一度に作ると (N, N) になるので刻む。
