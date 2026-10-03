@@ -22,6 +22,20 @@ def test_the_defaults_come_from_the_active_model():
     assert scoring.SIMILARITY_REFERENCE_DISTANCE == embedding.ACTIVE.similarity_reference
 
 
+def test_the_assign_score_floor_matches_the_documented_formula():
+    """**仕様書の式と実装がずれないこと。**（PR #60 の指摘2）
+
+    仕様書 §8.3 は `assign_score = (1 - 距離 / 基準距離) × 100` と書き、
+    「閾値で切るので下限がある」と続ける。基準距離を書き写していたため、
+    **既定の閾値を変えたときに式だけ 0.6 のまま残っていた。**
+    """
+    model = embedding.ACTIVE
+    expected = (1.0 - model.threshold / model.similarity_reference) * 100.0
+    assert scoring.distance_to_similarity(model.threshold) == pytest.approx(expected)
+    # 閾値より遠い顔は割り当てられないので、これが下限
+    assert scoring.distance_to_similarity(model.threshold * 1.01) < expected
+
+
 def test_euclidean_distances_are_the_plain_geometry():
     distances = matcher._distances(
         _vectors([0.0, 0.0], [3.0, 4.0]),

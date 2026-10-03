@@ -40,11 +40,17 @@ logger = logging.getLogger("photoarchive.reembed")
 #: 一度に読み書きする顔の件数。**塊ごとに確定する**ので、止めた時点までが残る。
 CHUNK_SIZE = 200
 
-#: サムネイルの短辺がこれ未満の顔は作り直さない。
+#: サムネイルの短辺がこれ未満の顔は、特徴量を作らない。
 #:
 #: `face.EMBED_MIN_FACE_PX` と同じ基準。小さすぎる顔を 112x112 へ引き伸ばすと
 #: 中身の無い特徴量ができ、**誤った紐づけの種になる。** 実データでは 443 件
-#: （0.76%）が該当する。版が古いまま残るので、照合の対象からは外れる。
+#: （0.76%）が該当する。
+#:
+#: **作らないが、版は進める**（特徴量は NULL）。版を古いまま残すと
+#: `count_faces_to_reembed` が数え続け、**全件終わったあとも毎回「作り直す顔:
+#: 443 件」と出て「もう一度実行すれば続きから」と誤って案内する**（PR #60 の
+#: 指摘3）。版を進めれば照合の対象から外れたまま、作り直しは完了に到達する。
+#: `scan` が同じ状況を記録する形とも一致する。
 MIN_THUMBNAIL_PX = face.EMBED_MIN_FACE_PX
 
 ProgressCallback = Optional[Callable[[int, int, str], None]]
@@ -85,6 +91,7 @@ def reembed_faces(
         "failed": 0,
         "alignment_fallbacks": 0,
         "seconds": 0.0,
+        "embedded": 0,
         "seconds_per_face": None,
         "dry_run": dry_run,
     }
@@ -110,11 +117,14 @@ def reembed_faces(
         processed += 1
         rgb = thumbnail_to_rgb(thumbnail)
         if rgb is None:
+            # **作れないことを記録して進める。** 版を据え置くと永遠に対象に残る。
             summary["too_small"] += 1
+            pending.append((face_id, None))
         else:
             vector = face.compute_embedding_from_face_image(rgb)
             if vector is None:
                 summary["failed"] += 1
+                pending.append((face_id, None))
             else:
                 pending.append((face_id, db.encode_embedding(vector)))
         if len(pending) >= chunk_size:
@@ -129,6 +139,8 @@ def reembed_faces(
 
     if pending:
         summary["written"] += db.save_face_embeddings(connection, pending, version)
+    # `written` は**書き戻した行数**。特徴量を作れた件数はそこから引く。
+    summary["embedded"] = summary["written"] - summary["too_small"] - summary["failed"]
     summary["seconds"] = time.monotonic() - started
     if processed:
         summary["seconds_per_face"] = summary["seconds"] / processed
@@ -175,23 +187,25 @@ def format_summary(summary: Dict[str, Any]) -> str:
             "使うので、取り合うと数倍遅くなります。"
         )
     lines = [
-        f"作り直した顔: {summary['written']:,} / {summary['target']:,} 件"
-        f"（版 {summary['version']}）",
+        f"作り直した顔: {summary.get('embedded', summary['written']):,}"
+        f" / {summary['target']:,} 件（版 {summary['version']}）",
         f"所要: {summary['seconds'] / 60.0:.1f} 分"
         f"（1件あたり {(summary.get('seconds_per_face') or 0.0) * 1000:.0f}ms）",
     ]
     if summary["too_small"]:
         lines.append(
-            f"サムネイルが {MIN_THUMBNAIL_PX}px 未満で作り直さなかった顔:"
-            f" {summary['too_small']:,} 件（版が古いまま残るので照合の対象外）"
+            f"サムネイルが {MIN_THUMBNAIL_PX}px 未満で特徴量を作らなかった顔:"
+            f" {summary['too_small']:,} 件（特徴量は NULL。照合の対象外）"
         )
     if summary["failed"]:
-        lines.append(f"特徴量を作れなかった顔: {summary['failed']:,} 件")
+        lines.append(f"特徴量を作れなかった顔: {summary['failed']:,} 件（特徴量は NULL）")
     if summary["alignment_fallbacks"]:
         lines.append(
             f"5点が取れず縮小で通した顔: {summary['alignment_fallbacks']:,} 件"
             "（整列ありのほうが精度が高いので、件数として把握しておく）"
         )
     if summary["written"] < summary["target"]:
+        # **作れなかった顔を「残り」に数えない。** 数えると、全件終わったあとも
+        # 毎回「もう一度実行すれば」と誤って案内する（PR #60 の指摘3）。
         lines.append("残りは、もう一度実行すれば続きから作り直します。")
     return "\n".join(lines)

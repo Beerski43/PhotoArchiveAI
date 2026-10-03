@@ -84,12 +84,26 @@
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
-### `test_reembed.py` — 特徴量の作り直し（13件）
+### `test_fakes_stay_installed.py` — 回帰テストが実物のモデルを要らないこと（2件）
+
+**作者の手元だけ通って他の環境で落ちる**のを防ぐ。実際に起きた（PR #60 の指摘1）。
+
+| テスト | 内容 |
+|---|---|
+| `test_no_unmarked_test_file_undoes_the_fakes` | **`monkeypatch.undo()` を `models` マーカーの外で使わない。** conftest のフェイクまで巻き戻り、実物の ONNX を読みに行く |
+| `test_the_marked_file_really_carries_the_marker` | 免除した側が本当にマーカーを持っていること（免除リストを抜け道にしない） |
+
+**実行時に捕まえる番人は置けない**（`monkeypatch.undo()` は番人ごと巻き戻す。実測）。
+だから静的に見張る。
+
+### `test_reembed.py` — 特徴量の作り直し（15件）
 
 **ここが壊れると、手作業で積み上げた手本と除外が消える。**
 
 | テスト | 内容 |
 |---|---|
+| `test_too_small_thumbnails_do_not_keep_the_rebuild_unfinished` | **小さすぎる顔が作り直しを永遠に「途中」にしない。** 版を据え置くと毎回「もう一度実行すれば」と誤って案内する |
+| `test_a_face_that_could_not_be_embedded_keeps_a_null_embedding` | 作れなかったことを「いまのモデルで作れなかった」として記録する（版を進めて特徴量 NULL） |
 | `test_reembed_leaves_every_assignment_alone` | **手本・除外・年齢に触らない。** `scan --force-rescan` との決定的な違い |
 | `test_the_original_photo_is_never_read` | **元写真を読まない**（NFS の 441GB を読み直さない） |
 | `test_faces_already_on_the_current_version_are_left_out` | 版が一致する顔は対象外 |
@@ -104,10 +118,11 @@
 | `test_match_only_sees_the_current_version` | **版の違う特徴量が照合に混ざらない** |
 | `test_a_face_keeps_matching_itself_after_the_rebuild` | 作り直した手本で紐づけが成り立つ |
 
-### `test_matcher_metrics.py` — 距離尺度がモデルの属性であること（10件）
+### `test_matcher_metrics.py` — 距離尺度がモデルの属性であること（11件）
 
 | テスト | 内容 |
 |---|---|
+| `test_the_assign_score_floor_matches_the_documented_formula` | **仕様書の式と実装がずれない。** 基準距離を書き写していたため既定を変えたとき式だけ残った |
 | `test_the_defaults_come_from_the_active_model` | **閾値もマージンも書き写さない** |
 | `test_euclidean_distances_are_the_plain_geometry` | dlib の尺度 |
 | `test_cosine_distances_ignore_the_length_of_the_vector` | **L2 正規化してから比べる** |
@@ -219,7 +234,7 @@
 | `test_smile_score_is_zero_when_no_face_mesh_is_found` ほか2件 | 顔なし・モデル不在・空の矩形 |
 | `test_quality_combines_brightness_and_face_size` | 明るさ×60 + 顔の面積比×40 |
 | `test_a_dark_face_only_earns_the_size_part` ほか3件 | 暗い顔、面積比の頭打ち、大小関係、空の矩形 |
-| `test_distance_to_similarity`（5件） | 距離 0.6 を基準にした 0-100 への変換とクリップ |
+| `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
 ### `test_matcher.py` — 自動割り当て（11件）
@@ -514,6 +529,7 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | `test_a_branch_with_an_open_pull_request_is_not_a_warning` | PR があれば鳴らさない |
 | `test_a_documented_branch_without_a_pull_request_is_not_a_warning` | 申し送りに書いてあれば鳴らさない |
 | `test_an_undocumented_branch_without_a_pull_request_is_a_warning` | PR も申し送りも無いものだけ鳴らす（#48 の形） |
+| `test_a_branch_name_at_the_end_of_an_english_sentence` | **末尾の記号を名前に含めない**（`feature/#59_x.` では一致しない） |
 | `test_a_branch_name_next_to_japanese_punctuation_is_still_found` | **端を削る方式では取りこぼす。** 全角括弧が直後に付くと一致せず、書いてあるのに「浮いている」と鳴った |
 | `test_the_branch_name_does_not_swallow_the_text_after_it` | 逆に後ろの文を名前に巻き込まないこと |
 | `test_a_slow_command_does_not_block_the_check` | **繋がらない環境で止まらない**（10秒で打ち切る） |

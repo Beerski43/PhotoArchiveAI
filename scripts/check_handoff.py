@@ -113,7 +113,10 @@ def unmerged_branches(offline: bool) -> tuple[dict[str, list[str]], list[str]]:
 #: ように**全角括弧が直後に付くと名前が一致せず**、申し送りに書いてあるのに
 #: 「浮いている」と鳴っていた。**偽の警告は隣の本物ごと読まれなくなる。**
 #: 区切り文字を列挙するのをやめ、ブランチ名に使える文字だけを拾う。
-BRANCH_PATTERN = re.compile(r"feature/[A-Za-z0-9#._/-]+")
+#: **末尾を記号で終わらせない。** `feature/#59_x. 次に` の `.` まで名前に
+#: 含めてしまい、一致しなかった（PR #60 の指摘5）。日本語なら「。」なので
+#: 実害は稀だが、英語の文末で起きる。
+BRANCH_PATTERN = re.compile(r"feature/[A-Za-z0-9#._/-]*[A-Za-z0-9#_/-]")
 
 
 def branches_mentioned_in_handoff_notes() -> set[str]:

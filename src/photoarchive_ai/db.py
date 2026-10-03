@@ -1015,16 +1015,21 @@ def iter_faces_to_reembed(
 
 def save_face_embeddings(
     connection: sqlite3.Connection,
-    rows: Sequence[Tuple[int, bytes]],
+    rows: Sequence[Tuple[int, Optional[bytes]]],
     version: str,
 ) -> int:
     """特徴量と版だけを書き戻す。**触れた行数を返す。**
+
+    **特徴量が `None` の行も受ける。** 「いまのモデルで作ろうとしたが作れなかった」
+    を表すのに要る（小さすぎる顔など）。版だけ進めて特徴量を NULL にしておくと、
+    `scan` が同じ状況を記録する形（`scanner` は常に版を書き、特徴量は NULL）と
+    そろい、**作り直しの対象から外れて「完了」に到達できる。**
 
     **割り当てに触らない。** `person_id` / `assign_source` / `assign_score` /
     `assigned_at` / `age` は列挙しないので、手本と除外はそのまま残る。
     これが `scan --force-rescan`（顔の行を作り直す）との決定的な違い。
 
-    **塊ごとに確定する。** 142分かかる作業なので、途中で止めたときに
+    **塊ごとに確定する。** 実データで2時間を超える作業なので、途中で止めたときに
     そこまでが残るようにする。
     """
     if not rows:

@@ -52,7 +52,8 @@ Phase 3（実データでの精度確立）が、この製品の価値をまだ�
 [../history/details/2026-10-02-embedding-model-comparison.md](../history/details/2026-10-02-embedding-model-comparison.md)）。
 **ArcFace＋5点整列で 1位正解率 69.8% → 95.2%**、行事をまたぐ差は
 +0.033 → **+0.418（12.7倍）**。保存済みサムネイルから作り直せるので
-**NFS の再読み込みは要らず、全件 142 分**で済む。
+**NFS の再読み込みは要らず、全件 約158分**で済む（実測 162ms/件。
+[測定](../history/details/2026-10-03-reembed-proof.md)）。
 
 | フェーズ | 状態 | 内容 | Issue |
 |---|---|---|---|
