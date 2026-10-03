@@ -47,35 +47,12 @@ HISTOGRAM_MAX = 2.0 if embedding.ACTIVE.metric == embedding.METRIC_COSINE else 1
 def _distances(
     candidates: np.ndarray, teachers: np.ndarray, metric: Optional[str] = None
 ) -> np.ndarray:
-    """(N, K) の距離行列。**尺度はモデルが決める**（既定は `embedding.ACTIVE`）。
+    """(N, K) の距離行列。**式は `embedding.pairwise_distances` に1つだけある。**
 
-    ブロードキャストで差分をとると (N, K, 次元数) の巨大な配列になるため、
-    内積から展開して計算する。
-
-    - ``METRIC_EUCLIDEAN``: ユークリッド距離（dlib）
-    - ``METRIC_COSINE``: L2 正規化してから ``1 - cos``（ArcFace）。
-      **正規化を省くと、ベクトルの長さが距離に混ざる。**
+    ここに写しを置かない。**尺度はモデルの属性**（dlib はユークリッド、
+    ArcFace はコサイン）で、写しを持つとモデルを替えたときに片方が古くなる。
     """
-    metric = metric or embedding.ACTIVE.metric
-    left = candidates.astype(np.float64)
-    right = teachers.astype(np.float64)
-    if metric == embedding.METRIC_COSINE:
-        left = _normalize_rows(left)
-        right = _normalize_rows(right)
-        return np.clip(1.0 - left @ right.T, 0.0, 2.0)
-    if metric != embedding.METRIC_EUCLIDEAN:
-        raise ValueError(f"知らない距離尺度: {metric}")
-    candidate_sq = np.sum(left**2, axis=1)[:, None]
-    teacher_sq = np.sum(right**2, axis=1)[None, :]
-    squared = np.maximum(candidate_sq + teacher_sq - 2.0 * (left @ right.T), 0.0)
-    return np.sqrt(squared)
-
-
-def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
-    """各行を L2 正規化する。長さ0の行はそのまま返す（0除算を避ける）。"""
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return matrix / norms
+    return embedding.pairwise_distances(candidates, teachers, metric)
 
 
 def _best_match(

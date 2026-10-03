@@ -36,6 +36,13 @@ ArcFace の入力（112×112）に足りる。これが成り立てば、モデ�
 
 ArcFace の ONNX は ``models/w600k_r50.onnx`` に手置きする（README 参照）。
 無ければ (a)(b) だけを測り、理由を report に書いて終わる。
+
+**⚠️ #59（PR #60）以降、(a)(b) は dlib ではない。** 上の表は #57 当時の姿。
+(a) は「DB にいま入っている特徴量」、(b) は「`face.compute_embedding` を
+サムネイルに通したもの」で、**どちらもいま使うモデル**（`embedding.ACTIVE`）。
+**尺度も名前もモデルから引いている**ので、ここに書き写さないこと
+（実データを ArcFace へ作り直したあと、dlib 用のユークリッド距離で
+コサインの特徴量を測りかけた）。
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from photoarchive_ai import db, face  # noqa: E402
+from photoarchive_ai import embedding as embedding_model  # noqa: E402
 
 # **「読める撮影日時か」の判断を、ここで書き直さない。** 正本は `dates.parse_date`。
 # このリポジトリは同じ判断を2か所に持ったせいで2度壊れている
@@ -71,29 +79,19 @@ EUCLIDEAN = "euclidean"
 COSINE = "cosine"
 
 def normalize_rows(matrix: np.ndarray) -> np.ndarray:
-    """各行を L2 正規化する。長さ0の行はそのまま返す（0除算を避ける）。"""
-    matrix = np.asarray(matrix, dtype=np.float64)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return matrix / norms
+    """各行を L2 正規化する。**式は `embedding.normalize_rows` に1つだけある。**"""
+    return embedding_model.normalize_rows(matrix)
 
 
 def distance_matrix(embeddings: np.ndarray, metric: str) -> np.ndarray:
-    """(N, N) の距離行列。
+    """(N, N) の距離行列。**式は `embedding.pairwise_distances` に1つだけある。**
 
-    ``COSINE`` は L2 正規化してから ``1 - cos`` を返す。**モデルごとに尺度が
-    違うので、呼び出し側が決める。** dlib の 0.4 という閾値を他のモデルに
-    持ち込まないため。
+    ``COSINE`` は L2 正規化してから ``1 - cos``。**モデルごとに尺度が違うので、
+    呼び出し側が決める**（この測定は尺度の違うモデルを並べて比べる）。
+    **ここに写しを置かない** — dlib の 0.4 を他のモデルへ持ち込む事故と同じ形で、
+    モデルを替えたときに古いほうが残る。
     """
-    matrix = np.asarray(embeddings, dtype=np.float64)
-    if metric == COSINE:
-        unit = normalize_rows(matrix)
-        return np.clip(1.0 - unit @ unit.T, 0.0, 2.0)
-    if metric != EUCLIDEAN:
-        raise ValueError(f"知らない距離尺度: {metric}")
-    square = np.sum(matrix**2, axis=1)
-    squared = np.maximum(square[:, None] + square[None, :] - 2.0 * (matrix @ matrix.T), 0.0)
-    return np.sqrt(squared)
+    return embedding_model.pairwise_distances(embeddings, embeddings, metric)
 
 
 def top1_accuracy(
@@ -279,12 +277,12 @@ class Variant:
 
 
 def stored_embedding(record: FaceRecord) -> Optional[np.ndarray]:
-    """(a) いま DB にある dlib 特徴量。原寸から作られたもの。"""
+    """(a) いま DB にある特徴量。`scan` が原寸から作ったもの。"""
     return record.stored_embedding
 
 
-def dlib_from_thumbnail(record: FaceRecord) -> Optional[np.ndarray]:
-    """(b) dlib をサムネイルから作り直す。**サムネイル化の代償を切り出す。**
+def embedding_from_thumbnail(record: FaceRecord) -> Optional[np.ndarray]:
+    """(b) いま使うモデルでサムネイルから作り直す。**サムネイル化の代償を切り出す。**
 
     サムネイルは検出矩形の生クロップなので、画像全体を顔の位置として渡す。
     `face.compute_embedding` が `face_rect` でさらに正方形化とパディングを
@@ -347,9 +345,21 @@ class ArcFaceEmbedder:
 
 
 def build_variants(arcface_path: Optional[Path]) -> List[Variant]:
+    """測る組み合わせ。**(a)(b) の名札と尺度は `embedding.ACTIVE` から引く。**
+
+    書き写すと、モデルを替えたときにここだけ古くなる（#59 で実データを
+    ArcFace へ作り直したあと、**dlib の名前とユークリッド距離のまま**
+    コサインの特徴量を測りかけた）。
+    """
+    active = embedding_model.ACTIVE
     variants = [
-        Variant("a", "dlib / 原寸（DB の値・現行）", EUCLIDEAN, stored_embedding),
-        Variant("b", "dlib / サムネイル", EUCLIDEAN, dlib_from_thumbnail),
+        Variant("a", f"{active.version} / 原寸（DB の値・現行）", active.metric, stored_embedding),
+        Variant(
+            "b",
+            f"{active.version} / サムネイル（face.compute_embedding）",
+            active.metric,
+            embedding_from_thumbnail,
+        ),
     ]
     if arcface_path is not None and arcface_path.exists():
         variants.append(
