@@ -73,7 +73,7 @@ def folder_expression(column: str = "path") -> str:
 
     ``/a/b/c.jpg`` → ``/a/b`` ／ ``c.jpg`` → ``""``（フォルダ無し）。
 
-    **索引もこの式で張る**（`idx_media_folder`）。`SHOOTING_DATE_SORT_KEY` と
+    **索引もこの式で張る**（`idx_media_event` の先頭列）。`SHOOTING_DATE_SORT_KEY` と
     同じ理由で、**式を書き写さずに必ずこの関数を通すこと。** 綴りが1文字でも
     ずれると索引が使われなくなる。
 
@@ -184,12 +184,13 @@ SCHEMA = [
     # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
     f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
     # 行事（フォルダ×日）で顔を絞るため（§10.4）。**無いと、ページを送るたびに
-    # Media を全件走査する**（実データ 70,297 件で 1ページ 0.407秒 → 0.017秒）。
-    # **フォルダだけの索引は要らない。** 複合索引の先頭列がフォルダなので、
+    # Media を全件走査する**（実データ 70,297 件で 1ページ 0.407秒 → 0.014秒）。
+    # **フォルダだけの索引は別に張らない。** 複合索引の先頭列がフォルダなので、
     # フォルダだけの絞り込みもこれで足りる（2本張ると、どちらが使われているのか
-    # 分からなくなるうえに実データで +5MB ずつ増える）。
+    # 分からなくなるうえに実データがそのぶん大きくなる）。
     # **列を足す移行は要らない。** `create_tables` が開くたびに
-    # `CREATE INDEX IF NOT EXISTS` を流すので、既存DBにもその場で張られる。
+    # `CREATE INDEX IF NOT EXISTS` を流すので、既存DBにもその場で張られる
+    # （実データで 2.5 秒・488MB → 517MB。`PRAGMA user_version` は 4 のまま）。
     f"CREATE INDEX IF NOT EXISTS idx_media_event ON Media({folder_expression()}, {day_expression()})",
 ]
 
@@ -754,6 +755,80 @@ def face_ids(
     )
     rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
     return [int(row[0]) for row in rows]
+
+
+def faces_by_ids(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    with_thumbnail: bool = False,
+) -> List[Dict[str, Any]]:
+    """与えた id の顔を、**渡した並びのまま**返す。
+
+    **サムネイル込みで呼ぶのは1ページ分ずつ。** 全件読むと数百MBになって
+    画面が固まる（CLAUDE.md §8）。束の中身を見せるときは呼び出し側が区切る。
+
+    `IN (...)` の変数の数に上限があるので、内部で塊に割って読む。
+    """
+    if not face_ids:
+        return []
+    columns = list(FACE_LIST_COLUMNS)
+    if with_thumbnail:
+        columns.append("thumbnail")
+    found: Dict[int, Dict[str, Any]] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            f"SELECT {','.join(columns)} FROM Face WHERE id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            record = dict(row)
+            found[int(record["id"])] = record
+    # **渡した順を守る。** 品質スコアの高い順に渡されるので、束の先頭が
+    # 代表の顔になる。SQL の `IN` は並びを保証しない。
+    return [found[face_id] for face_id in face_ids if face_id in found]
+
+
+def load_faces_for_clustering(
+    connection: sqlite3.Connection,
+    folder: str,
+    day: Any = None,
+) -> List[Dict[str, Any]]:
+    """1つの行事を束ねるのに要るぶんだけ読む。**サムネイルは読まない。**
+
+    返すのは `{"id", "media_id", "person_id", "assign_source", "embedding"}` で、
+    ``embedding`` は numpy 配列。**品質スコアの高い順**に並べる（束の先頭が
+    代表の顔になる）。
+
+    絞り方の約束。
+
+    - **いま使うモデルの特徴量を持つ顔だけ**（`embed_version` の完全一致）。
+      別の埋め込み空間の距離を比べるのは常に誤り（CLAUDE.md §7）
+    - **未割当と手本だけ。** 除外した顔はもう人が判断済みで、束ねても決定は
+      減らない。自動割当（`'auto'`）も入れない（`match` の結果を人の判断の
+      材料に混ぜると、誤りが次の判断の根拠になる）
+    - **手本は入れる。** 束に手本が混ざっていれば「この束はこの人」が分かる
+    """
+    where, params = _face_filter(None, None, False, None, None, folder=folder, day=day)
+    clauses = [where[len(" WHERE ") :]] if where else []
+    clauses.append("embedding IS NOT NULL")
+    clauses.append("embed_version = ?")
+    clauses.append("(assign_source IS NULL OR assign_source = ?)")
+    params = list(params) + [embedding_model.ACTIVE.version, ASSIGN_MANUAL]
+    rows = connection.execute(
+        "SELECT id, media_id, person_id, assign_source, embedding FROM Face"
+        f" WHERE {' AND '.join(clauses)}"
+        " ORDER BY quality_score DESC, id ASC",
+        params,
+    ).fetchall()
+    records = []
+    for row in rows:
+        record = dict(row)
+        record["embedding"] = decode_embedding(record["embedding"])
+        records.append(record)
+    return records
 
 
 def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
