@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face, migration
+from . import clustering, db, embedding, face, migration
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -177,6 +177,61 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     return str(settings_path.parent.parent / source_root)
 
 
+def format_folder(folder: str, source_root: Optional[str] = None) -> str:
+    """フォルダを、画面に出す形にする。**`source_root` からの相対。**
+
+    絶対パスは長すぎて読めない（実データは
+    `/mnt/nfs/nanoPi-NEO2/suzuki/Photo/2011/...`）。`source_root` の外にある
+    ものは絶対パスのまま出す。
+
+    **プレビューの情報欄と行事の選択で、同じ規則を使う。** 別々に書くと、
+    同じフォルダが画面によって違う名前で出る。
+    """
+    path = Path(folder)
+    if source_root:
+        try:
+            path = path.relative_to(Path(source_root).expanduser().resolve())
+        except ValueError:
+            # source_root の外にあるメディア。絶対パスのまま出す。
+            pass
+    if str(path) == ".":
+        # source_root 直下。"." では何のことか読めない。
+        return "（source_root 直下）"
+    return str(path)
+
+
+def format_event(folder: str, day: Optional[str], source_root: Optional[str] = None) -> str:
+    """行事（フォルダ×日）を、画面に出す形にする。
+
+    ``day`` が ``None`` なのは**撮影日時が読めない顔の集まり**（実データで
+    5,916 件）。「不明」と出して、日付のある行事と見分けられるようにする。
+    """
+    label = format_folder(folder, source_root)
+    return f"{day} {label}" if day else f"（撮影日時不明） {label}"
+
+
+def persons_alive_on(persons: List[dict], day: Optional[str]) -> List[dict]:
+    """その日にまだ生まれていない人物を外す。
+
+    **束をまとめて割り当てるときに、選べてはいけない人物を消すため。**
+    1件ずつの割り当てでは年齢欄が負の数になって気づけるが、まとめて押すときは
+    画面に出るのが人物名だけなので、**選べると気づけない。**
+
+    誕生日が未設定の人物は**残す**（分からないことを理由に消さない）。
+    ``day`` が読めないときも全員残す。
+    """
+    taken = parse_date(day)
+    if taken is None:
+        return list(persons)
+    alive = []
+    for person in persons:
+        born = parse_date(person.get("birth_date"))
+        if born is not None and born > taken:
+            continue
+        alive.append(person)
+    return alive
+
+
 def format_media_info(
     media: dict, source_root: Optional[str] = None, person: Optional[dict] = None
 ) -> str:
@@ -204,17 +259,9 @@ def format_media_info(
             lines.append(f"ファイル日時: {file_time}")
 
     path = Path(media.get("path", ""))
-    folder = path.parent
-    if source_root:
-        try:
-            folder = folder.relative_to(Path(source_root).expanduser().resolve())
-        except ValueError:
-            # source_root の外にあるメディア。絶対パスのまま出す。
-            pass
-    if str(folder) == ".":
-        # source_root 直下。"." では何のことか読めない。
-        folder = "（source_root 直下）"
-    lines.append(f"フォルダ: {folder}")
+    # **フォルダの出し方を写さない。** 行事の選択と同じ規則を通す
+    # （別々に書くと、同じフォルダが画面によって違う名前で出る）。
+    lines.append(f"フォルダ: {format_folder(str(path.parent), source_root)}")
     lines.append(f"ファイル: {path.name}")
 
     if person:
@@ -821,6 +868,501 @@ def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
         widget.addItem(item)
 
 
+def format_event_row(counts: dict, source_root: Optional[str] = None) -> str:
+    """行事を選ぶ一覧の1行。**件数を先に、行事を後ろに置く。**
+
+    フォルダ名は長さがまちまちなので、後ろに置かないと件数の桁が揃わず、
+    どれが大きいのか見比べられない。
+    """
+    return (
+        f"未割当 {counts['unassigned']:,} / 手本 {counts['manual']:,}"
+        f" / 除外 {counts['rejected']:,}   "
+        f"{format_event(counts['folder'], counts['day'], source_root)}"
+    )
+
+
+class EventPickerDialog(QDialog):
+    """顔の一覧を絞り込む**行事（フォルダ×日）**を選ぶ。
+
+    **未割当の多い順に並べる。** まとめて処理して効き目が大きい行事が上に来る
+    （実データの1位は 2011-04-16 の結婚式・1,357 件）。
+
+    **ページャは置かない。** 「ページャの無い一覧を作らない」はサムネイルの
+    BLOB を全件読まないための約束で、ここは文字だけ（実データで 2,700 行・
+    0.4 秒）。目的の行事を探すにはページ送りより絞り込み欄が要る。
+    """
+
+    def __init__(self, parent, connection, source_root: Optional[str] = None):
+        super().__init__(parent)
+        self.setWindowTitle("行事を選ぶ（フォルダ×日）")
+        self.source_root = source_root
+        with busy_cursor():
+            self.rows = db.event_face_counts(connection)
+
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText("行事名や日付で絞り込む（例: 結婚式 / 2011-04）")
+        self.filter_edit.textChanged.connect(self._apply_filter)
+
+        self.event_list = QListWidget()
+        self.event_list.itemDoubleClicked.connect(lambda _item: self.accept())
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        self.summary_label = QLabel("")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.filter_edit)
+        layout.addWidget(self.event_list)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(buttons)
+        self.resize(780, 540)
+        self._apply_filter("")
+
+    def _apply_filter(self, text: str) -> None:
+        """絞り込み欄の文字を含む行事だけ出す。
+
+        **画面に出している文字で照合する**（`source_root` からの相対と日付）。
+        絶対パスで照合すると、画面に見えていない部分に当たってしまう。
+        """
+        needle = text.strip()
+        self.event_list.clear()
+        shown = 0
+        for counts in self.rows:
+            label = format_event_row(counts, self.source_root)
+            if needle and needle not in label:
+                continue
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, counts)
+            self.event_list.addItem(item)
+            shown += 1
+        self.summary_label.setText(f"{shown} / {len(self.rows)} 行事")
+        if shown:
+            self.event_list.setCurrentRow(0)
+
+    def selected_event(self) -> Optional[tuple]:
+        """選ばれた行事を ``(フォルダ, 日)`` で返す。
+
+        日は ``None`` のことがある（撮影日時が読めない顔の集まり）。
+        **絞り込みに使う絶対パスのほうを返す**（画面の相対表示ではない）。
+        """
+        item = self.event_list.currentItem()
+        if item is None:
+            return None
+        counts = item.data(Qt.UserRole)
+        return (counts["folder"], counts["day"])
+
+
+#: 束を割り直すときに、連結の上限をどれだけ下げるか。
+#:
+#: **0.05 ずつ。** 実測（2026-10-04）では 0.45 → 0.40 で決定が 19,678 → 22,552 回、
+#: 他人誤認率が 0.66% → 0.48% に動く。これより粗い刻みだと、1回押しただけで
+#: 束が細かく散らばって決定が増える。
+SPLIT_STEP = 0.05
+
+#: 束の中身を1度に出す上限。**サムネイルの BLOB を読む枚数**なので、
+#: 一覧と同じ `PAGE_SIZE` に合わせる（実データの最大の束は 406 件）。
+CLUSTER_PAGE_SIZE = PAGE_SIZE
+
+
+class EventClusterDialog(QDialog):
+    """1つの行事の顔を束ね、**束ごとにまとめて**割り当て／除外する（Issue #61）。
+
+    束ねる理由は実測にある: 未割当 51,860 件を1件ずつ選ぶ作業が、行事ごとに
+    束ねると **19,678 回の決定**まで落ちる（2026-10-04。連結の上限 0.45 で
+    他人誤認率 0.66%）。
+
+    守っていること。
+
+    - **束は提案で、確定ではない。** 押すのは人。自動では1件も割り当てない
+    - **触るのは `assign_source IS NULL` の顔だけ。** 束に手本が混ざっていても
+      巻き込まない（手本が消えると `match` の土台が崩れる）
+    - **束は閉じたら捨てる。** DBに持たない（手本が増えれば束は変わる）
+    - **サムネイルは選んだ束のぶんだけ読む。** 行事には最大 1,357 件あるので、
+      全部読むと画面が固まる（CLAUDE.md §8）
+    """
+
+    def __init__(
+        self,
+        parent,
+        connection,
+        folder: str,
+        day: Optional[str],
+        source_root: Optional[str] = None,
+        threshold: Optional[float] = None,
+    ):
+        super().__init__(parent)
+        self.connection = connection
+        self.folder = folder
+        self.day = day
+        self.source_root = source_root
+        self.setWindowTitle(f"行事の顔を束ねる - {format_event(folder, day, source_root)}")
+
+        self.threshold = (
+            threshold if threshold is not None else embedding.ACTIVE.cluster_threshold
+        )
+        #: 束ごとに、いまどの近さで割ったか。**割った束だけ厳しくする。**
+        self.cluster_thresholds: List[float] = []
+        with busy_cursor():
+            records = db.load_faces_for_clustering(connection, folder, day)
+            self.records = {record["id"]: record for record in records}
+            self.clusters = clustering.cluster_faces(
+                [record["id"] for record in records],
+                [record["embedding"] for record in records],
+                threshold=self.threshold,
+            )
+            self.cluster_thresholds = [self.threshold] * len(self.clusters)
+        self.page = 0
+
+        self.cluster_list = QListWidget()
+        self.cluster_list.currentRowChanged.connect(self._on_cluster_selected)
+
+        self.face_list = QListWidget()
+        self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.face_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.face_list.setUniformItemSizes(True)
+        self.face_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+
+        # **人物はこのダイアログで選ぶ。** 親画面の選択に従うと、束を見てから
+        # 「この人だ」と決める順序にならない。
+        all_persons = db.list_persons(connection)
+        self.person_names = {person["id"]: person["name"] for person in all_persons}
+        self.person_box = QComboBox()
+        # **その日に生まれていない人物は出さない。** まとめて押すときは画面に
+        # 出るのが人物名だけなので、選べると気づけない。
+        self.persons = persons_alive_on(all_persons, day)
+        for person in self.persons:
+            self.person_box.addItem(person["name"], person)
+
+        self.assign_button = QPushButton("この束をまとめて割り当て")
+        self.reject_button = QPushButton("この束をまとめて除外")
+        self.split_button = QPushButton("この束を割る")
+        self.assign_button.clicked.connect(self._assign_cluster)
+        self.reject_button.clicked.connect(self._reject_cluster)
+        self.split_button.clicked.connect(self._split_cluster)
+        self.split_button.setToolTip(
+            "選んだ束を、もっと厳しい近さで割り直します"
+            "（大きい束に別人が混ざっているときに使います）。"
+        )
+
+        self.prev_button = QPushButton("< 前")
+        self.next_button = QPushButton("次 >")
+        self.prev_button.clicked.connect(self._previous_page)
+        self.next_button.clicked.connect(self._next_page)
+        self.page_label = QLabel("-")
+
+        close_buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_buttons.rejected.connect(self.reject)
+
+        self.summary_label = QLabel("")
+        self.summary_label.setWordWrap(True)
+        self.notice_label = QLabel("")
+        self.notice_label.setWordWrap(True)
+
+        pager = QHBoxLayout()
+        pager.addStretch(1)
+        pager.addWidget(self.prev_button)
+        pager.addWidget(self.page_label)
+        pager.addWidget(self.next_button)
+
+        actions = QHBoxLayout()
+        actions.addWidget(QLabel("人物"))
+        actions.addWidget(self.person_box)
+        actions.addWidget(self.assign_button)
+        actions.addWidget(self.reject_button)
+        actions.addWidget(self.split_button)
+        actions.addStretch(1)
+
+        faces_panel = QWidget()
+        faces_layout = QVBoxLayout(faces_panel)
+        faces_layout.setContentsMargins(0, 0, 0, 0)
+        faces_layout.addLayout(pager)
+        faces_layout.addWidget(self.face_list)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.cluster_list)
+        splitter.addWidget(faces_panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(splitter, 1)
+        layout.addWidget(self.notice_label)
+        layout.addLayout(actions)
+        layout.addWidget(close_buttons)
+        self.resize(980, 640)
+
+        self._reload_clusters()
+
+    # ------------------------------------------------------------------
+    # 表示
+    # ------------------------------------------------------------------
+
+    def _pending_ids(self, index: int) -> List[int]:
+        """その束の、**まだ人が判断していない顔**の id。
+
+        手本と、この画面で割り当て済みにした顔は外す。**ここが
+        「手本を巻き込まない」の実装**なので、呼び出し側で数え直さない。
+        """
+        if not (0 <= index < len(self.clusters)):
+            return []
+        return [
+            face_id
+            for face_id in self.clusters[index].face_ids
+            if self.records[face_id]["assign_source"] is None
+        ]
+
+    def _teacher_names(self, index: int) -> List[str]:
+        """その束に混ざっている**手本の人物名。**
+
+        **手本が混ざっていれば、それが答え。** 誰の束かを探す手間が消える。
+        名前の対応表は `__init__` で1度だけ作る（束ごとに引き直すと、
+        束の数だけ問い合わせが出る）。
+        """
+        found = []
+        for face_id in self.clusters[index].face_ids:
+            record = self.records[face_id]
+            if record["assign_source"] == db.ASSIGN_MANUAL:
+                found.append(self.person_names.get(record["person_id"], "?"))
+        return sorted(set(found))
+
+    def _cluster_label(self, index: int) -> str:
+        cluster = self.clusters[index]
+        pending = len(self._pending_ids(index))
+        notes = []
+        if pending != cluster.size:
+            notes.append(f"未判断 {pending}")
+        teachers = self._teacher_names(index)
+        if teachers:
+            notes.append("手本: " + "・".join(teachers))
+        if pending == 0:
+            notes.append("済")
+        label = f"束 {index + 1} — {cluster.size} 件"
+        return f"{label}（{'、'.join(notes)}）" if notes else label
+
+    def _reload_clusters(self, keep_row: Optional[int] = None) -> None:
+        row = self.cluster_list.currentRow() if keep_row is None else keep_row
+        blocked = self.cluster_list.blockSignals(True)
+        try:
+            self.cluster_list.clear()
+            for index in range(len(self.clusters)):
+                item = QListWidgetItem(self._cluster_label(index))
+                item.setData(Qt.UserRole, index)
+                self.cluster_list.addItem(item)
+        finally:
+            self.cluster_list.blockSignals(blocked)
+
+        pending_total = sum(len(self._pending_ids(index)) for index in range(len(self.clusters)))
+        decisions = sum(
+            1 for index in range(len(self.clusters)) if self._pending_ids(index)
+        )
+        self.summary_label.setText(
+            f"{format_event(self.folder, self.day, self.source_root)}\n"
+            f"顔 {len(self.records):,} 件を {len(self.clusters):,} 束にまとめました"
+            f"（未判断 {pending_total:,} 件 / 残る決定 {decisions:,} 回）。"
+        )
+        if self.clusters:
+            self.cluster_list.setCurrentRow(min(max(row, 0), len(self.clusters) - 1))
+        self._on_cluster_selected(self.cluster_list.currentRow())
+
+    def _on_cluster_selected(self, row: int) -> None:
+        self.page = 0
+        self._reload_faces()
+
+    def _reload_faces(self) -> None:
+        row = self.cluster_list.currentRow()
+        if not (0 <= row < len(self.clusters)):
+            _fill_face_list(self.face_list, [])
+            self.page_label.setText("-")
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+            self.assign_button.setEnabled(False)
+            self.reject_button.setEnabled(False)
+            self.notice_label.setText("束がありません。")
+            return
+        face_ids = list(self.clusters[row].face_ids)
+        pages = max(1, (len(face_ids) + CLUSTER_PAGE_SIZE - 1) // CLUSTER_PAGE_SIZE)
+        self.page = min(self.page, pages - 1)
+        start = self.page * CLUSTER_PAGE_SIZE
+        with busy_cursor():
+            records = db.faces_by_ids(
+                self.connection,
+                face_ids[start : start + CLUSTER_PAGE_SIZE],
+                with_thumbnail=True,
+            )
+        _fill_face_list(self.face_list, records)
+        self.page_label.setText(
+            f"{self.page + 1} / {pages} ページ（束の {len(face_ids):,} 件）"
+        )
+        self.prev_button.setEnabled(self.page > 0)
+        self.next_button.setEnabled(self.page + 1 < pages)
+
+        pending = self._pending_ids(row)
+        has_person = self.person_box.count() > 0
+        self.assign_button.setEnabled(bool(pending) and has_person)
+        self.reject_button.setEnabled(bool(pending))
+        # 1件の束は割れない。**判断の済んだ束も割らない**（割っても決定は減らない）。
+        self.split_button.setEnabled(
+            self.clusters[row].size > 1
+            and bool(pending)
+            and self.cluster_thresholds[row] > SPLIT_STEP
+        )
+        self._refresh_notice(row, pending, has_person)
+
+    def _refresh_notice(self, row: int, pending: List[int], has_person: bool) -> None:
+        """**押せない理由と、押したら何件動くかを文字で出す。**
+
+        隠すと「そんな操作は無い」と思われ、黙って無効だと「壊れている」と
+        思われる（`_sync_unassign_button` と同じ考え方）。
+        """
+        cluster = self.clusters[row]
+        lines = []
+        if not pending:
+            lines.append("この束は、もう人が判断した顔だけです。")
+        else:
+            lines.append(f"押すと、この束の未判断 {len(pending):,} 件に効きます。")
+        if len(pending) != cluster.size:
+            lines.append(
+                f"手本など {cluster.size - len(pending):,} 件は触りません。"
+            )
+        if not has_person:
+            lines.append(
+                "割り当て先の人物がいません（この日より後に生まれた人物は出していません）。"
+            )
+        self.notice_label.setText(" ".join(lines))
+
+    def _previous_page(self) -> None:
+        if self.page > 0:
+            self.page -= 1
+            self._reload_faces()
+
+    def _next_page(self) -> None:
+        self.page += 1
+        self._reload_faces()
+
+    # ------------------------------------------------------------------
+    # まとめて処理する
+    # ------------------------------------------------------------------
+
+    def _run_with_progress(self, label: str, face_ids: List[int], work) -> None:
+        row = self.cluster_list.currentRow()
+        with busy_cursor():
+            progress = WorkProgress(self, label, len(face_ids))
+            try:
+                work(progress)
+                progress.step("束を数え直しています")
+                # **DBから読み直して、どの顔が判断済みかを更新する。**
+                # 束そのものは作り直さない（同じ画面で束が組み替わると、
+                # いま見ていたものがどこへ行ったのか分からなくなる）。
+                for record in db.faces_by_ids(self.connection, face_ids):
+                    self.records[record["id"]].update(
+                        {
+                            "assign_source": record["assign_source"],
+                            "person_id": record["person_id"],
+                        }
+                    )
+                self._reload_clusters(keep_row=row)
+            finally:
+                progress.finish()
+
+    def _split_cluster(self) -> None:
+        """選んだ束を、**もっと厳しい近さで割り直す。**
+
+        実データでいちばん大きい行事（2011-04-16 の結婚式・1,357 件）では、
+        既定の 0.45 で **380 件の束**ができる。人が見て「別人が混ざっている」と
+        分かっても、**割る手段が無いとその束はまとめて押せない**（押すと
+        誤って数百件に効く）。そこで、その束だけ連結の上限を下げて割り直す。
+
+        **行事全体は作り直さない。** 他の束は人が見終わった結果なので、
+        画面の中で勝手に組み替えない。
+        """
+        row = self.cluster_list.currentRow()
+        if not (0 <= row < len(self.clusters)):
+            return
+        cluster = self.clusters[row]
+        if cluster.size < 2:
+            return
+        tighter = round(max(self.cluster_thresholds[row] - SPLIT_STEP, SPLIT_STEP), 3)
+        face_ids = list(cluster.face_ids)
+        with busy_cursor():
+            parts = clustering.cluster_faces(
+                face_ids,
+                [self.records[face_id]["embedding"] for face_id in face_ids],
+                threshold=tighter,
+            )
+        if len(parts) == 1:
+            # **これ以上割れないことを黙らない。** 押しても何も起きないと
+            # 「壊れている」と見える。
+            self.cluster_thresholds[row] = tighter
+            # **知らせを先に書かない。** `_reload_faces` が同じ札を書き直すので、
+            # 先に書くと消える。
+            self._reload_faces()
+            self.notice_label.setText(
+                f"近さ {tighter:.2f} でも、この束は割れませんでした"
+                "（同じ人物の可能性が高いか、もっと下げる必要があります）。"
+            )
+            return
+        self.clusters[row : row + 1] = parts
+        self.cluster_thresholds[row : row + 1] = [tighter] * len(parts)
+        self._reload_clusters(keep_row=row)
+        self.notice_label.setText(
+            f"近さ {tighter:.2f} で {len(parts)} 束に割りました。"
+        )
+
+    def _assign_cluster(self) -> None:
+        row = self.cluster_list.currentRow()
+        face_ids = self._pending_ids(row)
+        person = self.person_box.currentData()
+        if not face_ids or person is None:
+            return
+        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
+        dialog = FaceAgeDialog(
+            self,
+            summary=summarize_selection(len(face_ids), shooting_dates),
+            initial_age=suggested_age(person.get("birth_date"), shooting_dates),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        age = dialog.age()
+        self._run_with_progress(
+            f"{person['name']} に割り当てています",
+            face_ids,
+            lambda progress: db.assign_faces(
+                self.connection,
+                face_ids,
+                person["id"],
+                db.ASSIGN_MANUAL,
+                age=age,
+                progress=progress,
+            ),
+        )
+
+    def _reject_cluster(self) -> None:
+        row = self.cluster_list.currentRow()
+        face_ids = self._pending_ids(row)
+        if not face_ids:
+            return
+        answer = QMessageBox.question(
+            self,
+            "まとめて除外",
+            f"この束の未判断 {len(face_ids):,} 件を除外します。\n\n"
+            "手本は触りません。あとで表示を「除外済み」にすれば取り消せます。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_with_progress(
+            "まとめて除外しています",
+            face_ids,
+            lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
+        )
+
+
 class MainWindow(QWidget):
     def __init__(self, database_path: str, source_root: Optional[str] = None):
         super().__init__()
@@ -950,11 +1492,36 @@ class MainWindow(QWidget):
         face_area.setStretchFactor(0, 3)
         face_area.setStretchFactor(1, 2)
 
+        # --- 行事で絞り、まとめて処理する ------------------------------
+        # **未割当 51,860 件は、2,122 の行事（フォルダ×日）に散っている**
+        # （2026-10-04 実測）。行事ごとに束ねると決定が 19,678 回まで落ちる。
+        # 結婚式や学校行事はほとんどが他人なので、1件ずつ判断させると
+        # 総時間がそのぶん延びる。
+        self.event: Optional[tuple] = None
+        self.event_label = QLabel("")
+        self.event_label.setWordWrap(True)
+        self.choose_event_button = QPushButton("行事を選ぶ")
+        self.clear_event_button = QPushButton("解除")
+        self.cluster_event_button = QPushButton("この行事の顔を束ねる")
+        self.bulk_event_button = QPushButton("")
+        self.choose_event_button.clicked.connect(self._choose_event)
+        self.clear_event_button.clicked.connect(self._clear_event)
+        self.cluster_event_button.clicked.connect(self._cluster_event)
+        self.bulk_event_button.clicked.connect(self._bulk_event_action)
+
+        event_row = QHBoxLayout()
+        event_row.addWidget(self.event_label, 1)
+        event_row.addWidget(self.choose_event_button)
+        event_row.addWidget(self.clear_event_button)
+        event_row.addWidget(self.cluster_event_button)
+        event_row.addWidget(self.bulk_event_button)
+
         face_panel = QWidget()
         face_layout = QVBoxLayout(face_panel)
         face_layout.addLayout(pager)
         face_layout.addWidget(face_area)
         face_layout.addLayout(face_actions)
+        face_layout.addLayout(event_row)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(person_panel)
@@ -969,6 +1536,7 @@ class MainWindow(QWidget):
 
         self._reload_person_list()
         self._sync_unassign_button()
+        self._sync_event_controls()
         self.reload_faces()
 
     # ------------------------------------------------------------------
@@ -1117,10 +1685,21 @@ class MainWindow(QWidget):
     def _filter_arguments(self) -> dict:
         selected = self.filter_box.currentText()
         if selected == FILTER_AUTO:
-            return {"assign_source": db.ASSIGN_AUTO}
-        if selected == FILTER_REJECTED:
-            return {"assign_source": db.ASSIGN_REJECTED}
-        return {"unassigned": True}
+            filters = {"assign_source": db.ASSIGN_AUTO}
+        elif selected == FILTER_REJECTED:
+            filters = {"assign_source": db.ASSIGN_REJECTED}
+        else:
+            filters = {"unassigned": True}
+        # **行事を選んでいないときは `folder` / `day` を渡さない。** 渡すと
+        # `Media` を辿る条件が増え、撮影日時の索引を順に歩く経路（未割当
+        # 58,212 件を 0.002 秒で1ページ分読む）から外れる。
+        if self.event is not None:
+            folder, day = self.event
+            filters["folder"] = folder
+            # **日が読めない行事は `UNDATED` で絞る。** `None` を渡すと
+            # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
+            filters["day"] = day if day is not None else db.UNDATED
+        return filters
 
     def _sync_unassign_button(self) -> None:
         """いま見ている一覧で「未割当に戻す」が意味を持つかを反映する。
@@ -1136,9 +1715,161 @@ class MainWindow(QWidget):
             else "選択した顔を未割当に戻します（除外や自動割当を取り消せます）。"
         )
 
+    # ------------------------------------------------------------------
+    # 行事で絞る / 束ねる / まとめて処理する
+    # ------------------------------------------------------------------
+
+    def _choose_event(self) -> None:
+        dialog = EventPickerDialog(self, self.connection, self.source_root)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        event = dialog.selected_event()
+        if event is None:
+            return
+        self.event = event
+        self._reset_page()
+
+    def _clear_event(self) -> None:
+        self.event = None
+        self._reset_page()
+
+    def _event_name(self) -> str:
+        if self.event is None:
+            return "すべての行事"
+        folder, day = self.event
+        return format_event(folder, day, self.source_root)
+
+    def _sync_event_controls(self) -> None:
+        """行事の行の表示と、まとめて処理するボタンの意味をそろえる。
+
+        **まとめて処理できるのは行事を選んでいるときだけ。** 選んでいないと
+        対象が未割当 51,860 件全部になり、**一度の押し間違いで作業がすべて
+        飛ぶ。** 押せない理由はツールチップに書く（隠さない）。
+        """
+        self.event_label.setText(f"行事: {self._event_name()}")
+        self.clear_event_button.setEnabled(self.event is not None)
+
+        self.cluster_event_button.setEnabled(self.event is not None)
+        self.cluster_event_button.setToolTip(
+            "この行事の顔を似たもの同士で束ね、束ごとにまとめて割り当て／除外します。"
+            if self.event is not None
+            else "先に「行事を選ぶ」で行事を指定してください。"
+        )
+
+        label, tooltip = self._bulk_action_labels()
+        self.bulk_event_button.setText(label)
+        self.bulk_event_button.setEnabled(self.event is not None)
+        self.bulk_event_button.setToolTip(
+            tooltip
+            if self.event is not None
+            else "先に「行事を選ぶ」で行事を指定してください。"
+        )
+
+    def _bulk_action_labels(self) -> tuple:
+        """いま表示している一覧に対して、まとめて何ができるか。
+
+        **表示を切り替えたらボタンの意味も変える。** 未割当を見ているときは
+        「まとめて除外」、除外済みや自動割当を見ているときは「まとめて取り消す」。
+        """
+        selected = self.filter_box.currentText()
+        if selected == FILTER_REJECTED:
+            return (
+                "この行事の除外をすべて取り消す",
+                "この行事で除外した顔を、ページをまたいで未割当へ戻します。",
+            )
+        if selected == FILTER_AUTO:
+            return (
+                "この行事の自動割当をすべて取り消す",
+                "この行事の自動割当を、ページをまたいで未割当へ戻します。",
+            )
+        return (
+            "この行事の未割当をすべて除外",
+            "この行事の未割当の顔を、ページをまたいでまとめて除外します"
+            "（手動で割り当てた顔は触りません）。",
+        )
+
+    def _cluster_event(self) -> None:
+        """行事の顔を束ねる画面を開く。**束ねる計算はこの中で捨てる。**"""
+        if self.event is None:
+            return
+        folder, day = self.event
+        try:
+            dialog = EventClusterDialog(
+                self, self.connection, folder, day, source_root=self.source_root
+            )
+        except clustering.TooManyFacesError as error:
+            # **黙って先頭だけ束ねない。** 出ていない顔が未割当のまま残る。
+            QMessageBox.warning(self, "束ねられません", str(error))
+            return
+        if not dialog.clusters:
+            QMessageBox.information(
+                self,
+                "対象なし",
+                f"{self._event_name()} に、束ねられる顔はありません"
+                "（特徴量を持つ未割当の顔がありません）。",
+            )
+            return
+        dialog.exec()
+        # 束ねる画面の中で割り当て・除外をしているので、親の一覧も作り直す。
+        self.reload_faces()
+        self._on_person_selected(self.person_list.currentItem())
+        self._sync_event_controls()
+
+    def _bulk_event_action(self) -> None:
+        """行事単位のまとめ処理。**表示中のページではなく行事全体に効く。**"""
+        if self.event is None:
+            return
+        filters = self._filter_arguments()
+        with busy_cursor():
+            face_ids = db.face_ids(self.connection, **filters)
+        name = self._event_name()
+        if not face_ids:
+            QMessageBox.information(
+                self, "対象なし", f"{name} に、まとめて処理できる顔はありません。"
+            )
+            return
+
+        rejecting = self.filter_box.currentText() == FILTER_UNASSIGNED
+        if rejecting:
+            question = (
+                f"{name}\n\n未割当の顔 {len(face_ids):,} 件をまとめて除外します。\n\n"
+                "手動で割り当てた顔は触りません。\n"
+                "除外したあとは、表示を「除外済み」にして取り消せます。"
+            )
+            title = "まとめて除外"
+        else:
+            question = f"{name}\n\n{len(face_ids):,} 件をまとめて未割当へ戻します。"
+            title = "まとめて取り消し"
+        answer = QMessageBox.question(
+            self,
+            title,
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        if rejecting:
+            self._run_with_progress(
+                "まとめて除外しています",
+                face_ids,
+                lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
+                f"完了 — {name} の {len(face_ids):,} 件を除外しました",
+            )
+        else:
+            self._run_with_progress(
+                "まとめて未割当に戻しています",
+                face_ids,
+                lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
+                f"完了 — {name} の {len(face_ids):,} 件を未割当に戻しました",
+            )
+        self._sync_event_controls()
+
     def _reset_page(self):
         self.page = 0
         self._sync_unassign_button()
+        self._sync_event_controls()
         self.reload_faces()
 
     def reload_faces(self):
