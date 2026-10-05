@@ -15,8 +15,14 @@ from photoarchive_ai import db
 
 
 @pytest.fixture()
-def connection(tmp_path: Path):
-    connection = db.connect(str(tmp_path / "events.db"))
+def connection():
+    """**メモリ上のDBで足りる。** この節は問い合わせだけを見る。
+
+    ファイルに作ると1件ごとに DB と WAL を作ることになり、23件で 0.35 秒かかる
+    （回帰テストは10秒以内に収める約束がある）。ファイルのパスが要るのは GUI の
+    テストだけなので、そちらは `tmp_path` のまま。**リポジトリ内には何も書かない。**
+    """
+    connection = db.connect(":memory:")
     db.create_tables(connection)
     yield connection
     connection.close()
@@ -328,3 +334,41 @@ def test_face_filter_without_an_event_keeps_the_previous_query(connection):
     )
     assert "SELECT id FROM Media" in with_event
     assert event_params == ["/photos", "2012-10-06"]
+
+
+def test_load_faces_for_clustering_requires_a_day(connection):
+    """**``day`` に既定値を置かない。** 1つの行事を束ねる関数なので、
+    日で絞らない呼び出しは常に誤り。
+
+    既定値があったせいで、束ねる画面が `None` をそのまま渡し、同じフォルダの
+    別の日の顔まで束に入れていた（PR #62 のレビュー指摘1）。
+    """
+    with pytest.raises(TypeError):
+        db.load_faces_for_clustering(connection, "/photos/mix")
+
+
+def test_load_faces_for_clustering_separates_the_undated_faces(connection):
+    """`UNDATED` を渡したら、日付の読めない顔だけを読むこと。"""
+    broken = _add_media(connection, "/photos/mix/a.jpg", shooting_date="TTTT-TT-TTTTT:TT:TT")
+    dated = _add_media(connection, "/photos/mix/b.jpg", shooting_date="2012-10-06T10:00:00")
+    broken_face = db.add_face(
+        connection,
+        media_id=broken,
+        bbox=(0, 10, 10, 0),
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=b"",
+    )
+    db.add_face(
+        connection,
+        media_id=dated,
+        bbox=(0, 10, 10, 0),
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=b"",
+    )
+
+    records = db.load_faces_for_clustering(connection, "/photos/mix", db.UNDATED)
+    assert [record["id"] for record in records] == [broken_face]
+    both = db.load_faces_for_clustering(connection, "/photos/mix", None)
+    assert len(both) == 2  # `None` は「日で絞らない」。だから既定値を置かない

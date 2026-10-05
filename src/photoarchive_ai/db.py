@@ -794,13 +794,19 @@ def faces_by_ids(
 def load_faces_for_clustering(
     connection: sqlite3.Connection,
     folder: str,
-    day: Any = None,
+    day: Any,
 ) -> List[Dict[str, Any]]:
     """1つの行事を束ねるのに要るぶんだけ読む。**サムネイルは読まない。**
 
     返すのは `{"id", "media_id", "person_id", "assign_source", "embedding"}` で、
     ``embedding`` は numpy 配列。**品質スコアの高い順**に並べる（束の先頭が
     代表の顔になる）。
+
+    **``day`` に既定値を置かない。** これは「1つの行事を束ねる」関数なので、
+    日で絞らない呼び出し（``day=None``）は常に誤り。日付が読めない行事は
+    `UNDATED` を渡す。**既定値があったせいで、束ねる画面が `None` をそのまま
+    渡し、同じフォルダの別の日の顔まで束に入れていた**（実データで日付つきの
+    未割当 18,000 件。PR #62 のレビュー指摘1）。
 
     絞り方の約束。
 
@@ -836,7 +842,8 @@ def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
 
     `{"folder", "day", "unassigned", "manual", "rejected", "total"}` を持つ。
     ``day`` は撮影日時が読めない行事では ``None``（**フォルダだけが同じ顔の集まり**。
-    実データでは 6,190 件がここに入る）。
+    実データでは顔 **6,190 件**がここに入る。**この関数は顔を全部数える**ので、
+    束ねられる「特徴量あり・未割当」の 5,910 件とは別の数）。
 
     **フォルダではなく行事で数える。** 同じフォルダでも日をまたぐと同一人物の
     距離が開くため（dlib で 0.480 → 0.578）、束ねる単位をフォルダにすると粗い。

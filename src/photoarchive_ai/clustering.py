@@ -1,9 +1,10 @@
 """行事の中で顔を束ねる（Issue #61）。
 
 **判断の単位を「顔」から「束」へ移すための計算。** 実データの未割当は
-51,860 件あり（2026-10-04 時点）、1件ずつ人物を選ぶ作業は終わらない。
+**日付の読めるものが 51,860 件、撮影日時が読めないものが 5,910 件**
+（2026-10-04 時点。どちらも特徴量を持つ顔）。1件ずつ人物を選ぶ作業は終わらない。
 同じ行事（フォルダ×日）の中で同じ人物の顔を束ねてしまえば、人間の決定は
-束の数まで落ちる。
+束の数まで落ちる（日付の読めない顔は**フォルダ単位**で束ねる）。
 
 設計上の約束。
 
@@ -134,6 +135,13 @@ def cluster_faces(
         )
     if not face_ids:
         return []
+    # **距離行列を作る前に断る。** あとで断ると (N, N) を確保してから捨てることに
+    # なる（10,000 件で 800MB）。`average_linkage_labels` 側の検査は残す
+    # （あちらを直接呼ぶ道もあるため）。
+    if len(face_ids) > MAX_FACES:
+        raise TooManyFacesError(
+            f"一度に束ねられるのは {MAX_FACES} 件まで（渡されたのは {len(face_ids)} 件）"
+        )
     if threshold is None:
         threshold = embedding.ACTIVE.cluster_threshold
     vectors = np.vstack([np.asarray(vector, dtype=np.float64) for vector in embeddings])

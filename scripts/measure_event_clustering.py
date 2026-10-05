@@ -14,6 +14,10 @@
 3. **束は誤って混ざっていないか。** 手本は 126 件しかないので、
    **同じ写真に2つ入った束**を誤りの代わりに数える（同じ写真に同じ人物が
    2回写ることは稀。仕様書 §8.3 と同じ考え方）
+4. **撮影日時が読めない顔はどうなるか。** GUI はそれを**フォルダ単位の行事**
+   として出し、同じ上限で束ねる。フォルダは日をまたぐので条件が違う。
+   **日付つきと混ぜずに、別枠で測る**（以前は数から落としていた。PR #62 の
+   レビュー指摘2）
 
 使い方::
 
@@ -59,10 +63,15 @@ class FaceRow:
 
 @dataclass
 class Event:
-    """フォルダ×日。**日付が読めない顔は行事を決められない**ので入らない。"""
+    """行事。``day`` が ``None`` なら**フォルダ単位**（撮影日時が読めない顔）。
+
+    **日付つきと日付なしを同じ表に混ぜない。** フォルダ単位は日をまたぐので、
+    束ねやすさの条件が違う（仕様書 §10.4.1 自身が「フォルダだけでは粗い」と
+    書いている単位）。GUI はこれも束ねるので、**測らないわけにはいかない。**
+    """
 
     folder: str
-    day: str
+    day: Optional[str]
     faces: List[FaceRow] = field(default_factory=list)
 
     @property
@@ -90,8 +99,12 @@ class Event:
         return max(counts.values()) if counts else 0
 
 
-def load_events(database_path: str) -> Tuple[List[Event], Dict[str, int]]:
+def load_events(database_path: str) -> Tuple[List[Event], List[Event], Dict[str, int]]:
     """特徴量を持つ顔を行事ごとに集める。**読み取り専用で開く。**
+
+    返すのは ``(日付つきの行事, 日付不明のフォルダ単位の行事, 件数)``。
+    **撮影日時が読めない顔を捨てない**（GUI はそれもフォルダ単位の行事として
+    束ねるので、落とすと測っていない経路ができる。PR #62 のレビュー指摘2）。
 
     除外（`rejected`）の顔は入れない。**もう人が判断した顔**なので、
     束ねても決定は減らない。
@@ -112,15 +125,15 @@ def load_events(database_path: str) -> Tuple[List[Event], Dict[str, int]]:
     finally:
         connection.close()
 
-    events: Dict[Tuple[str, str], Event] = {}
+    events: Dict[Tuple[str, Optional[str]], Event] = {}
     counts = {"faces": 0, "undated": 0}
     for row in rows:
         counts["faces"] += 1
         taken = parse_date(row["shooting_date"])
-        if taken is None:
+        day = taken.isoformat() if taken is not None else None
+        if day is None:
             counts["undated"] += 1
-            continue
-        key = (db.folder_of(row["path"]), taken.isoformat())
+        key = (db.folder_of(row["path"]), day)
         event = events.setdefault(key, Event(folder=key[0], day=key[1]))
         event.faces.append(
             FaceRow(
@@ -131,8 +144,12 @@ def load_events(database_path: str) -> Tuple[List[Event], Dict[str, int]]:
                 vector=db.decode_embedding(row["embedding"]),
             )
         )
-    ordered = sorted(events.values(), key=lambda e: (-len(e.faces), e.day, e.folder))
-    return ordered, counts
+    def order(group: List[Event]) -> List[Event]:
+        return sorted(group, key=lambda e: (-len(e.faces), e.day or "", e.folder))
+
+    dated = order([event for event in events.values() if event.day is not None])
+    undated = order([event for event in events.values() if event.day is None])
+    return dated, undated, counts
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +178,10 @@ def measure_separation(events: Sequence[Event]) -> Separation:
     **同じ写真のペアは外す**（同じ写真の同一人物は必ず近く、別人は必ず
     別人なので、どちらの桶でも実態より良く見せる）。
     `scripts/measure_embedding_models.py` の数え方にそろえてある。
+
+    **呼び出し側は日付つきの行事だけを渡すこと。** 日付が読めない顔を
+    「同じ行事」の側に混ぜると、フォルダ単位の（日をまたぐ）ペアが
+    行事の中の数字に紛れ、どちらも信じられなくなる。
     """
     teachers: List[Tuple[FaceRow, str]] = []
     for event in events:
@@ -351,11 +372,30 @@ def _rate(value: Optional[float]) -> str:
     return f"{value * 100:.2f}%" if value is not None else "—"
 
 
+def _decision_table(runs: Sequence[ClusterRun]) -> List[str]:
+    lines = [
+        "| 連結の上限 | 決定の数 | 減り方 | 1件だけの束 | 最大の束 |"
+        " **他人誤認率** | 混ざった束 | 手本の純度 | 手本の再現 | 所要 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for run in runs:
+        lines.append(
+            f"| {run.threshold:.2f} | {run.decisions:,} | **{run.reduction * 100:.1f}%** |"
+            f" {run.singletons:,} | {run.biggest:,} |"
+            f" **{_rate(run.photo_pair_rate)}** | {run.mixed_photo_rate * 100:.2f}% |"
+            f" {_percent(run.teacher_purity)} | {_percent(run.teacher_recall)} |"
+            f" {run.seconds:.1f}秒 |"
+        )
+    return lines
+
+
 def format_report(
     events: Sequence[Event],
+    undated_events: Sequence[Event],
     counts: Dict[str, int],
     separation: Separation,
     runs: Sequence[ClusterRun],
+    undated_runs: Sequence[ClusterRun],
 ) -> str:
     model = embedding.ACTIVE
     sizes = [len(event.unassigned) for event in events if event.unassigned]
@@ -376,9 +416,11 @@ def format_report(
         "| 見たもの | 値 |",
         "|---|---|",
         f"| 対象の顔（特徴量あり・未割当か手本） | {counts['faces']:,} 件 |",
-        f"| うち**撮影日時が読めず行事を決められない** | {counts['undated']:,} 件 |",
+        f"| うち**撮影日時が読めず、日を決められない** | {counts['undated']:,} 件"
+        "（下の §3 で**フォルダ単位**として別に測る） |",
         f"| 行事（フォルダ×日） | {len(events):,} 個 |",
-        f"| 未割当を含む行事 | {len(sizes):,} 個 |",
+        f"| 日付不明のフォルダ単位の束ね先 | {len(undated_events):,} 個 |",
+        f"| 未割当を含む行事（日付つき） | {len(sizes):,} 個 |",
         f"| 1行事あたりの未割当（中央/平均/最大） | "
         f"{st.median(sizes):.0f} / {st.mean(sizes):.1f} / {max(sizes):,} |",
         "",
@@ -405,7 +447,7 @@ def format_report(
             f" (n={len(separation.across_same)}) | {_median(separation.across_other)}"
             f" (n={len(separation.across_other)}) | {_gap(separation.gap(within=False))} |",
             "",
-            "## 2. 束ねたときの決定の数と混ざり方",
+            "## 2. 束ねたときの決定の数と混ざり方（**日付つきの行事**）",
             "",
             "- **決定の数** = 未割当を含む束の数。これが人間が人物を選ぶ回数",
             "- **他人誤認率** = 同じ写真に写る顔のペア（**ほぼ必ず別人**）を"
@@ -416,19 +458,9 @@ def format_report(
             "- **手本の再現** = 同じ行事・同じ人物・別の写真の手本ペアが、"
             "同じ束に入った割合",
             "",
-            "| 連結の上限 | 決定の数 | 減り方 | 1件だけの束 | 最大の束 |"
-            " **他人誤認率** | 混ざった束 | 手本の純度 | 手本の再現 | 所要 |",
-            "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
-    for run in runs:
-        lines.append(
-            f"| {run.threshold:.2f} | {run.decisions:,} | **{run.reduction * 100:.1f}%** |"
-            f" {run.singletons:,} | {run.biggest:,} |"
-            f" **{_rate(run.photo_pair_rate)}** | {run.mixed_photo_rate * 100:.2f}% |"
-            f" {_percent(run.teacher_purity)} | {_percent(run.teacher_recall)} |"
-            f" {run.seconds:.1f}秒 |"
-        )
+    lines.extend(_decision_table(runs))
     if runs:
         lines.extend(
             [
@@ -446,6 +478,22 @@ def format_report(
         for run in runs:
             ratio = st.median(run.split_ratio) if run.split_ratio else 0.0
             lines.append(f"| {run.threshold:.2f} | {ratio:.2f} 倍 |")
+
+    lines.extend(
+        [
+            "",
+            "## 3. 撮影日時が読めない顔（**フォルダ単位**）",
+            "",
+            f"**日を決められない顔が {counts['undated']:,} 件ある。** GUI はこれを"
+            "フォルダ単位の行事として出し、同じ上限で束ねる（§10.4.1）。"
+            "**日をまたぐ単位なので、上の表とは条件が違う。**",
+            "",
+            f"束ね先は {len(undated_events):,} フォルダ"
+            f"（最大 {max((len(event.unassigned) for event in undated_events), default=0):,} 件）。",
+            "",
+        ]
+    )
+    lines.extend(_decision_table(undated_runs))
     lines.append("")
     return "\n".join(lines)
 
@@ -477,15 +525,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else THRESHOLDS
     )
 
-    events, counts = load_events(str(database))
+    events, undated_events, counts = load_events(str(database))
     if not events:
         print("行事を作れる顔がありません。", file=sys.stderr)
         return 1
     if args.max_faces:
-        skipped = [event for event in events if len(event.faces) > args.max_faces]
+        skipped = [
+            event
+            for event in list(events) + list(undated_events)
+            if len(event.faces) > args.max_faces
+        ]
         if skipped:
             print(f"顔が {args.max_faces} 件を超える行事を {len(skipped)} 個飛ばします。")
         events = [event for event in events if len(event.faces) <= args.max_faces]
+        undated_events = [
+            event for event in undated_events if len(event.faces) <= args.max_faces
+        ]
 
     separation = measure_separation(events)
     print(
@@ -499,6 +554,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     runs = []
+    undated_runs = []
     for threshold in thresholds:
         run = measure_clustering(events, threshold)
         runs.append(run)
@@ -511,8 +567,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f" / 再現 {_percent(run.teacher_recall)}"
             f" / {run.seconds:.1f}秒"
         )
+    # **日付不明はフォルダ単位で別に測る。** 落とすと、GUI が束ねているのに
+    # 測っていない経路ができる（PR #62 のレビュー指摘2）。
+    print(f"日付不明（フォルダ単位）{len(undated_events):,} 個:")
+    for threshold in thresholds:
+        run = measure_clustering(undated_events, threshold)
+        undated_runs.append(run)
+        print(
+            f"  {threshold:.2f}: 決定 {run.decisions:,} 件"
+            f"（{run.reduction * 100:.1f}% 減）"
+            f" / 他人誤認 {_rate(run.photo_pair_rate)}"
+            f" / 混ざった束 {run.mixed_photo_rate * 100:.2f}%"
+            f" / {run.seconds:.1f}秒"
+        )
 
-    report = format_report(events, counts, separation, runs)
+    report = format_report(events, undated_events, counts, separation, runs, undated_runs)
     if args.report:
         Path(args.report).write_text(report, encoding="utf-8")
         print(f"\n報告を書き出しました: {args.report}")

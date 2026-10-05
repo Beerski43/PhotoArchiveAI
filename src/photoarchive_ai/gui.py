@@ -204,7 +204,9 @@ def format_event(folder: str, day: Optional[str], source_root: Optional[str] = N
     """行事（フォルダ×日）を、画面に出す形にする。
 
     ``day`` が ``None`` なのは**撮影日時が読めない顔の集まり**（実データで
-    5,916 件）。「不明」と出して、日付のある行事と見分けられるようにする。
+    **6,190 件**。この画面は特徴量の無い顔も数えるので、束ねられる
+    「特徴量あり」の 5,916 件より多い）。「不明」と出して、日付のある行事と
+    見分けられるようにする。
     """
     label = format_folder(folder, source_root)
     return f"{day} {label}" if day else f"（撮影日時不明） {label}"
@@ -868,6 +870,22 @@ def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
         widget.addItem(item)
 
 
+def event_filters(folder: str, day: Optional[str]) -> dict:
+    """行事を、顔の絞り込みの引数にする。
+
+    **`None` を `db.UNDATED` に直すのはここだけ。** 行事の一覧は日が読めない
+    行事を ``day=None`` で表すが、絞り込みの `None` は「日で絞らない」という
+    別の指示なので、渡す前に必ず直す必要がある。
+
+    **変換を2か所に書いたせいで、片方が抜けていた。** 一覧は直していたが、
+    束ねる画面は `None` のまま渡しており、日付不明の行事を開くと**同じフォルダの
+    別の日の顔まで束に入っていた**（実データで日付つきの未割当 18,000 件が
+    363 フォルダで巻き込まれる。最悪の例は「日付不明 2 件」の行事に 985 件。
+    PR #62 のレビュー指摘1）。
+    """
+    return {"folder": folder, "day": day if day is not None else db.UNDATED}
+
+
 def format_event_row(counts: dict, source_root: Optional[str] = None) -> str:
     """行事を選ぶ一覧の1行。**件数を先に、行事を後ろに置く。**
 
@@ -970,9 +988,10 @@ CLUSTER_PAGE_SIZE = PAGE_SIZE
 class EventClusterDialog(QDialog):
     """1つの行事の顔を束ね、**束ごとにまとめて**割り当て／除外する（Issue #61）。
 
-    束ねる理由は実測にある: 未割当 51,860 件を1件ずつ選ぶ作業が、行事ごとに
-    束ねると **19,678 回の決定**まで落ちる（2026-10-04。連結の上限 0.45 で
-    他人誤認率 0.66%）。
+    束ねる理由は実測にある: **日付の読める未割当 51,860 件**を1件ずつ選ぶ作業が、
+    行事ごとに束ねると **19,678 回の決定**まで落ちる（2026-10-04。連結の上限 0.45 で
+    他人誤認率 0.66%）。**撮影日時が読めない 5,910 件はフォルダ単位**で、
+    3,139 回（他人誤認率 0.88%）。
 
     守っていること。
 
@@ -1006,7 +1025,9 @@ class EventClusterDialog(QDialog):
         #: 束ごとに、いまどの近さで割ったか。**割った束だけ厳しくする。**
         self.cluster_thresholds: List[float] = []
         with busy_cursor():
-            records = db.load_faces_for_clustering(connection, folder, day)
+            records = db.load_faces_for_clustering(
+                connection, **event_filters(folder, day)
+            )
             self.records = {record["id"]: record for record in records}
             self.clusters = clustering.cluster_faces(
                 [record["id"] for record in records],
@@ -1493,8 +1514,9 @@ class MainWindow(QWidget):
         face_area.setStretchFactor(1, 2)
 
         # --- 行事で絞り、まとめて処理する ------------------------------
-        # **未割当 51,860 件は、2,122 の行事（フォルダ×日）に散っている**
-        # （2026-10-04 実測）。行事ごとに束ねると決定が 19,678 回まで落ちる。
+        # **日付の読める未割当 51,860 件は、2,122 の行事（フォルダ×日）に
+        # 散っている**（2026-10-04 実測）。行事ごとに束ねると決定が 19,678 回まで
+        # 落ちる。**撮影日時が読めない 5,910 件は 521 フォルダ**に散っている。
         # 結婚式や学校行事はほとんどが他人なので、1件ずつ判断させると
         # 総時間がそのぶん延びる。
         self.event: Optional[tuple] = None
@@ -1694,11 +1716,9 @@ class MainWindow(QWidget):
         # `Media` を辿る条件が増え、撮影日時の索引を順に歩く経路（未割当
         # 58,212 件を 0.002 秒で1ページ分読む）から外れる。
         if self.event is not None:
-            folder, day = self.event
-            filters["folder"] = folder
-            # **日が読めない行事は `UNDATED` で絞る。** `None` を渡すと
+            # **変換は `event_filters` に1つだけ。** `None` を渡すと
             # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
-            filters["day"] = day if day is not None else db.UNDATED
+            filters.update(event_filters(*self.event))
         return filters
 
     def _sync_unassign_button(self) -> None:
@@ -1743,7 +1763,7 @@ class MainWindow(QWidget):
         """行事の行の表示と、まとめて処理するボタンの意味をそろえる。
 
         **まとめて処理できるのは行事を選んでいるときだけ。** 選んでいないと
-        対象が未割当 51,860 件全部になり、**一度の押し間違いで作業がすべて
+        対象が未割当 57,770 件全部になり、**一度の押し間違いで作業がすべて
         飛ぶ。** 押せない理由はツールチップに書く（隠さない）。
         """
         self.event_label.setText(f"行事: {self._event_name()}")

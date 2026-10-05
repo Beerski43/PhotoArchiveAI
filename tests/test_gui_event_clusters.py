@@ -154,6 +154,51 @@ def test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark(tmp_pat
         window.connection.close()
 
 
+def test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event(tmp_path):
+    """**日付不明の行事を束ねたら、その顔だけを束ねること。**
+
+    一覧の絞り込みは `None` を `db.UNDATED` に直していたのに、束ねる画面は
+    `None` をそのまま渡していた。`None` は「日で絞らない」なので、**同じ
+    フォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた**
+    （実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。
+    最悪の例は「日付不明 2 件」の行事に 985 件。PR #62 のレビュー指摘1）。
+
+    **一覧の経路しか見ていなかったので、この経路は通っていなかった。**
+    """
+    path = tmp_path / "mix.db"
+    connection = db.ensure_database(str(path))
+    broken = _add_media(connection, "/photos/mix/broken.jpg", "TTTT-TT-TTTTT:TT:TT")
+    dated = _add_media(connection, "/photos/mix/ok.jpg", "2011-04-16T10:00:00")
+    undated_face = _add_face(connection, broken, 0.0)
+    dated_face = _add_face(connection, dated, 0.0)
+    connection.commit()
+    try:
+        dialog = photoarchive_gui.EventClusterDialog(None, connection, "/photos/mix", None)
+        assert sorted(dialog.records) == [undated_face]
+        bundled = {face_id for cluster in dialog.clusters for face_id in cluster.face_ids}
+        assert bundled == {undated_face}
+        assert dated_face not in dialog._pending_ids(0)
+    finally:
+        connection.close()
+
+
+def test_the_two_paths_turn_an_event_into_the_same_filter(seeded):
+    """一覧と束ねる画面が、**同じ変換**を通ること（`event_filters` 1か所）。"""
+    connection, _faces, path = seeded
+    window = photoarchive_gui.MainWindow(path)
+    try:
+        window.event = ("/photos/wedding", None)
+        filters = window._filter_arguments()
+        assert filters["day"] is db.UNDATED
+        assert photoarchive_gui.event_filters("/photos/wedding", None)["day"] is db.UNDATED
+        assert (
+            photoarchive_gui.event_filters("/photos/wedding", "2011-04-16")["day"]
+            == "2011-04-16"
+        )
+    finally:
+        window.connection.close()
+
+
 # ---------------------------------------------------------------------------
 # 束ねる
 # ---------------------------------------------------------------------------
