@@ -50,6 +50,20 @@ Matched 21467 faces from 126 assigned faces; 36303 left unassigned.
 488MB → 517MB。`PRAGMA user_version` は **4 のまま**で、移行は起きていない。
 手本 126・除外 268・年齢 126・自動 0 は実行前と同じ。`integrity_check: ok`。
 
+### 対話で追加: 指摘の番号を「指摘1」に改めた
+
+**`#1` という書き方をやめた。** PR #62 を読んだユーザーが、**レビュー指摘の番号を
+Issue 番号と取り違えた。** 原因はこちらの書き方で、GitHub は本文の `#1` を
+Issue / PR 番号として解釈し、**実在する Issue #1「仕様設計」へのリンクとして
+描画する。**
+
+- `.claude/skills/pr-review-comment/SKILL.md` と
+  `.claude/skills/pr-review-response/SKILL.md` の表の見出しを `#` → `指摘`、
+  値と見出しを `1.` → `指摘1` にした。**理由も書いた**（同じ形に戻らないように）
+- PR #62 の本文・返信コメント・この WORKLOG の該当箇所も直した
+
+**`#` は Issue と PR を指すときだけ使う。**
+
 ### 次にやること
 
 1. **PR #62 をマージする**（レビュー対応済み・回帰テスト 516 passed / 0 failed）
@@ -93,7 +107,7 @@ Matched 21467 faces from 126 assigned faces; 36303 left unassigned.
 
 ### 次にやること
 
-- **`photoarchive match` のやり直し。** レビュアーの助言どおり、上の #1 を
+- **`photoarchive match` のやり直し。** レビュアーの助言どおり、上の指摘1 を
   直してから流す（直す前に日付不明の行事でまとめて割り当てると、ほかの日の顔が
   手本として入ってしまう）
 - 仕様書の版 1.5 はそのまま（索引は `db.SCHEMA` の一部で DB 設計の表にも載るため、
