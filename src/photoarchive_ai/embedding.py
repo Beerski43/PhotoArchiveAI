@@ -4,8 +4,8 @@
 閾値とマージンが `matcher.py`、類似度の基準が `scoring.py` に散っていて、
 **モデルを替えるとどれか1つが古いまま残る**形だった。
 
-このモジュールは重い依存を持たない（`face.py` は MediaPipe と onnxruntime を
-読み込む）。
+このモジュールは numpy だけに依存する（`face.py` は MediaPipe と onnxruntime を
+読み込む）。**距離の計算もここに置いてある**（下の `pairwise_distances`）。
 `db` / `matcher` / `scoring` は次元数と尺度だけが要るので、ここを見る。
 
 実測は [docs/history/details/2026-10-02-embedding-model-comparison.md] にある。
@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
 
 #: 距離尺度。**モデルごとに違う。** dlib の 0.4 を他のモデルへ持ち込まないこと。
 METRIC_EUCLIDEAN = "euclidean"
@@ -39,6 +42,12 @@ class EmbeddingModel:
     threshold: float
     #: 1位と2位の人物の距離差の下限。満たさない顔は未割当のまま残す。
     margin: float
+    #: 行事（フォルダ×日）の中で顔を束ねるときの連結の上限
+    #: （`clustering.cluster_faces`）。**`threshold` とは役割が違う。**
+    #: `threshold` は「手本の人物に紐づけてよいか」、こちらは
+    #: 「同じ行事のこの2つを同じ人物として1つにまとめてよいか」。
+    #: 束ねすぎると人間が束を割る手間が増え、割れすぎると判断の数が減らない。
+    cluster_threshold: float
     #: `scoring.distance_to_similarity` が 0 を返す距離。
     similarity_reference: float
 
@@ -53,6 +62,9 @@ DLIB_RESNET = EmbeddingModel(
     metric=METRIC_EUCLIDEAN,
     threshold=0.4,
     margin=0.05,
+    #: **未測定。** dlib は退役したので測り直していない（行事の中の同一人物は
+    #: 中央 0.480・別人 0.636 だったので、この値は分けるには足りない）。
+    cluster_threshold=0.4,
     similarity_reference=0.6,
 )
 
@@ -118,12 +130,40 @@ DLIB_RESNET = EmbeddingModel(
 #:
 #: **ただし閾値 0.45 と他人誤認率 1.06% は reembed 経路だけで測った数字。**
 #: 新しく scan した顔はこの 8% のぶんだけ、ずれる余地がある。
+#:
+#: ---
+#:
+#: **束ねの上限 `cluster_threshold` も 0.45**（2026-10-04 実測。Issue #61）。
+#: **照合の閾値と同じ数字になったのは偶然**で、別に測って選んでいる。
+#: 行事（フォルダ×日）ごとに平均連結で束ね、**同じ写真に写る顔のペアを
+#: 同じ束へ入れた割合**（他人誤認率。閾値 0.45 を選んだときと同じ数え方）を見た。
+#:
+#: ===== ============ =============== ==============
+#:  上限   他人誤認率    決定の数の減り   混ざった束
+#: ===== ============ =============== ==============
+#:  0.40     0.48%          56.5%          1.68%
+#:  0.45     0.66%          62.1%          2.13%     ← 既定
+#:  0.50     1.22%          66.4%          2.98%
+#:  0.60     3.92%          73.1%          6.39%
+#: ===== ============ =============== ==============
+#:
+#: **0.50 は他人誤認率が照合の 1.06% を越える**ので採らない。0.45 なら
+#: **日付の読める未割当 51,860 件**に対する決定が 19,678 回まで落ち、
+#: **手本を2件以上含む束の純度は 100%**（手本126件での実測）。
+#:
+#: **撮影日時が読めない 5,910 件はフォルダ単位で束ねる**ので、条件が違う。
+#: そちらも同じ 0.45 で測った（他人誤認率 0.88% / 決定 5,910 → 3,139 回。
+#: 日をまたぐぶん、減り方は 62.1% → 46.9% と小さい）。
+#:
+#: 詳細は
+#: [docs/history/details/2026-10-04-event-clustering-measured.md]。
 ARCFACE_W600K_R50 = EmbeddingModel(
     version="arcface_w600k_r50/5pt/112",
     dimensions=512,
     metric=METRIC_COSINE,
     threshold=0.45,
     margin=0.08,
+    cluster_threshold=0.45,
     similarity_reference=1.0,
 )
 
@@ -140,3 +180,48 @@ KNOWN_MODELS = {model.version: model for model in (DLIB_RESNET, ARCFACE_W600K_R5
 def model_for_version(version: str) -> EmbeddingModel:
     """``Face.embed_version`` から記述を引く。知らない版なら ``KeyError``。"""
     return KNOWN_MODELS[version]
+
+
+# ---------------------------------------------------------------------------
+# 距離の計算
+# ---------------------------------------------------------------------------
+#
+# **尺度の実装をここに1つだけ置く。** 以前は `matcher._distances` と
+# `scripts/measure_embedding_models.py` に同じ式が2つあり、`clustering` を
+# 足すと3つめになるところだった。**モデルを替えたときに古いまま残るのは、
+# いつも書き写したほう。**
+
+
+def normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """各行を L2 正規化する。長さ0の行はそのまま返す（0除算を避ける）。"""
+    matrix = np.asarray(matrix, dtype=np.float64)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return matrix / norms
+
+
+def pairwise_distances(
+    left: np.ndarray, right: np.ndarray, metric: Optional[str] = None
+) -> np.ndarray:
+    """``(N, K)`` の距離行列。**尺度はモデルが決める**（既定は `ACTIVE`）。
+
+    ブロードキャストで差分をとると ``(N, K, 次元数)`` の巨大な配列になるため、
+    内積から展開して計算する。
+
+    - `METRIC_EUCLIDEAN`: ユークリッド距離（dlib）
+    - `METRIC_COSINE`: L2 正規化してから ``1 - cos``（ArcFace）。
+      **正規化を省くと、ベクトルの長さが距離に混ざる。**
+    """
+    metric = metric or ACTIVE.metric
+    first = np.asarray(left, dtype=np.float64)
+    second = np.asarray(right, dtype=np.float64)
+    if metric == METRIC_COSINE:
+        unit_first = normalize_rows(first)
+        unit_second = normalize_rows(second)
+        return np.clip(1.0 - unit_first @ unit_second.T, 0.0, 2.0)
+    if metric != METRIC_EUCLIDEAN:
+        raise ValueError(f"知らない距離尺度: {metric}")
+    first_sq = np.sum(first**2, axis=1)[:, None]
+    second_sq = np.sum(second**2, axis=1)[None, :]
+    squared = np.maximum(first_sq + second_sq - 2.0 * (first @ second.T), 0.0)
+    return np.sqrt(squared)
