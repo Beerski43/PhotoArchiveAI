@@ -163,6 +163,19 @@ def test_too_many_faces_is_refused_instead_of_truncated(monkeypatch):
         clustering.cluster_faces([1, 2, 3, 4], _line([0.0, 1.0, 2.0, 3.0]))
 
 
+def test_too_many_faces_is_refused_before_the_distance_matrix(monkeypatch):
+    """**断るのは距離行列を作る前。** あとだと (N, N) を確保してから捨てる
+    （10,000 件で 800MB。PR #62 のレビュー指摘3）。"""
+
+    def must_not_be_called(*args, **kwargs):  # pragma: no cover - 呼ばれたら失敗
+        raise AssertionError("距離行列を作る前に断っていない")
+
+    monkeypatch.setattr(clustering, "MAX_FACES", 3)
+    monkeypatch.setattr(embedding, "pairwise_distances", must_not_be_called)
+    with pytest.raises(clustering.TooManyFacesError):
+        clustering.cluster_faces([1, 2, 3, 4], _line([0.0, 1.0, 2.0, 3.0]))
+
+
 def test_a_non_square_distance_matrix_is_refused():
     with pytest.raises(ValueError):
         clustering.average_linkage_labels(np.zeros((2, 3)), 0.5)

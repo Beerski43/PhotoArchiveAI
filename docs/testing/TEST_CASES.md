@@ -57,6 +57,7 @@
 | `test_scoring.py::test_smile_score_follows_the_mouth_aspect_ratio` | フェイクの都合で笑顔スコアの式が一度も通っておらず、常に 0.0 を返していても気づけなかった |
 | `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
 | `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて除外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
+| `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
 ---
@@ -86,7 +87,7 @@
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
 
-### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（21件）
+### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（23件）
 
 | テスト | 内容 |
 |---|---|
@@ -106,8 +107,10 @@
 | `test_face_ids_for_unassigned_leaves_manual_faces_alone` | **手本を巻き込まない** |
 | `test_the_event_filter_walks_its_index` | **`idx_media_event` を使う**（式を書き写して綴りがずれると黙って外れる） |
 | `test_face_filter_without_an_event_keeps_the_previous_query` | **行事未指定なら問い合わせを変えない**（`match` と `evaluate` も通る） |
+| `test_load_faces_for_clustering_requires_a_day` | **束ねる関数の `day` に既定値を置かない**（日で絞らない呼び出しは常に誤り） |
+| `test_load_faces_for_clustering_separates_the_undated_faces` | `UNDATED` なら日付の読めない顔だけを読む |
 
-### `test_clustering.py` — 行事の中で顔を束ねる（14件）
+### `test_clustering.py` — 行事の中で顔を束ねる（15件）
 
 | テスト | 内容 |
 |---|---|
@@ -123,7 +126,21 @@
 | `test_the_metric_comes_from_the_active_model` | 既定の尺度はモデルのもの（コサイン） |
 | `test_mismatched_lengths_are_refused` | 特徴量の無い顔を黙って落とさない |
 | `test_too_many_faces_is_refused_instead_of_truncated` | **上限超過は黙って切らずに上げる** |
+| `test_too_many_faces_is_refused_before_the_distance_matrix` | 断るのは (N, N) を確保する**前** |
 | `test_a_non_square_distance_matrix_is_refused` | 距離行列の形を検査する |
+
+### `test_event_clustering_measurement.py` — 行事ごとの束ねを測る道具（6件）
+
+**測定の道具がおかしいと、間違った閾値で実データを束ねる。**
+
+| テスト | 内容 |
+|---|---|
+| `test_the_measurement_never_writes_to_the_database` | **実データに書かない**（読み取り専用で開く） |
+| `test_undated_faces_are_counted_as_folder_events` | **撮影日時が読めない顔を捨てない**（フォルダ単位の行事として数える） |
+| `test_rejected_faces_are_left_out` | 除外した顔は入れない（決定は減らない） |
+| `test_the_separation_is_measured_on_dated_events_only` | 行事の中／外の分離に、日付不明の顔を混ぜない |
+| `test_the_decision_count_is_the_number_of_bundles_with_unassigned_faces` | 決定の数 = 未割当を含む束の数 |
+| `test_the_report_keeps_the_two_kinds_of_events_apart` | 報告は日付つきと日付不明を別の表で出す |
 
 ### `test_fakes_stay_installed.py` — 回帰テストが実物のモデルを要らないこと（2件）
 
@@ -353,7 +370,7 @@
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（21件）
+### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
 **1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。
 
@@ -362,7 +379,9 @@
 | `test_the_picker_offers_events_not_folders` | 同じフォルダが日ごとに分かれて並ぶ |
 | `test_the_picker_filter_matches_what_is_on_screen` | 絞り込みは画面に出ている文字で照合する |
 | `test_the_main_window_filters_by_the_chosen_event` | 選んだ行事で一覧が絞られる |
-| `test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **日が読めない行事を「日で絞らない」と取り違えない** |
+| `test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **日が読めない行事を「日で絞らない」と取り違えない**（一覧の経路） |
+| `test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **同じことを束ねる画面の経路でも守る**（ここが抜けていた） |
+| `test_the_two_paths_turn_an_event_into_the_same_filter` | 両方の経路が `event_filters` の同じ変換を通る |
 | `test_the_dialog_bundles_only_the_chosen_day` | 束ねるのはその日の顔だけ |
 | `test_near_faces_land_in_one_cluster` | 近い顔が1つの束になる |
 | `test_rejected_and_auto_faces_are_left_out_of_the_bundles` | 除外と自動割当は束ねない |
