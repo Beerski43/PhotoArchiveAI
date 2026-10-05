@@ -591,3 +591,68 @@ def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path
         assert db.unassign_faces(connection, face_ids) == count
     finally:
         connection.close()
+
+
+def test_face_paths_come_back_keyed_by_face_id(tmp_path: Path):
+    """`evaluate` が誤りになった顔を名指しするのに使う。
+
+    **顔 id だけ出しても人は見に行けない。** パスが要る。
+    `faces_by_ids` は `Face` の列しか返さないので、別に用意している。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        first = db.save_media(connection, _media_record("2025/01/a.jpg", "hash-a"))
+        second = db.save_media(connection, _media_record("2025/01/b.jpg", "hash-b"))
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for media_id in (first, second)
+        ]
+        connection.commit()
+
+        assert db.face_paths(connection, face_ids) == {
+            face_ids[0]: "2025/01/a.jpg",
+            face_ids[1]: "2025/01/b.jpg",
+        }
+        # 何も渡さなければ読みに行かない。
+        assert db.face_paths(connection, []) == {}
+        # 無い id は黙って落ちる。呼び出し側が「見つからない」を書き分けられる。
+        assert db.face_paths(connection, [face_ids[0], 999999]) == {
+            face_ids[0]: "2025/01/a.jpg"
+        }
+    finally:
+        connection.close()
+
+
+def test_face_paths_reads_more_faces_than_the_sqlite_variable_limit(tmp_path: Path):
+    """`IN (...)` の変数の上限を越えても落ちないこと。
+
+    手本が増えれば名指しする顔も増える。塊に割るのを外すと、ある日突然
+    `too many SQL variables` で落ちる。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        media_id = db.save_media(connection, _media_record())
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for _ in range(1200)
+        ]
+        connection.commit()
+
+        found = db.face_paths(connection, face_ids)
+
+        assert len(found) == 1200
+        assert set(found) == set(face_ids)
+    finally:
+        connection.close()

@@ -44,6 +44,15 @@ CORRECT = "correct"
 MISSED = "missed"
 WRONG = "wrong"
 
+#: 誤りになった顔を名指しする上限。
+#:
+#: **率だけでは、閾値のせいなのか手本のせいなのかを切り分けられない。**
+#: 実データでは、測れた誤りの全部が「赤ん坊の顔に大人のラベルが付いた手本」と
+#: 「顔の半分しか写っていない極端な横顔」の2件から出ていた。どちらも閾値を
+#: どう動かしても直らない（自分の人物の最短が 0.676 で、どの閾値の外にもある）。
+#: **名指しが無いと、手本を直すべき場面で閾値を触ってしまう。**
+MAX_WRONG_DETAILS = 20
+
 
 def _empty_threshold_row(threshold: float) -> Dict[str, Any]:
     return {
@@ -52,6 +61,8 @@ def _empty_threshold_row(threshold: float) -> Dict[str, Any]:
         MISSED: 0,
         WRONG: 0,
         "per_person": {},
+        # 誤りになった顔。**率だけでは手本の問題を見つけられない**ので名指しする。
+        "wrong_faces": [],
     }
 
 
@@ -129,8 +140,14 @@ def evaluate_match(
                 continue
 
             summary["evaluated"] += 1
+            # 自分の人物の手本までの最短。**閾値に依らない**ので外で1回だけ出す。
+            # 誤りを読むときの要で、これが閾値よりずっと大きければ
+            # 「その顔に似た手本が無い」＝閾値ではなく手本の問題だと分かる。
+            own_distance = float(row[person_ids == truth].min())
             for threshold in thresholds:
-                best_person, _ = _best_match(row, person_ids, threshold, margin)
+                best_person, best_distance = _best_match(
+                    row, person_ids, threshold, margin
+                )
                 if best_person is None:
                     outcome = MISSED
                 elif best_person == truth:
@@ -139,6 +156,16 @@ def evaluate_match(
                     outcome = WRONG
                 target = rows_by_threshold[threshold]
                 target[outcome] += 1
+                if outcome == WRONG and len(target["wrong_faces"]) < MAX_WRONG_DETAILS:
+                    target["wrong_faces"].append(
+                        {
+                            "face_id": int(faces.face_ids[index]),
+                            "person_id": truth,
+                            "matched_person_id": int(best_person),
+                            "distance": best_distance,
+                            "own_distance": own_distance,
+                        }
+                    )
                 per_person = target["per_person"].setdefault(
                     truth, {CORRECT: 0, MISSED: 0, WRONG: 0}
                 )
@@ -148,6 +175,20 @@ def evaluate_match(
 
     for row in summary["thresholds"]:
         _finalize(row, summary["evaluated"])
+
+    # 誤りになった顔のパスを引く。**名指しした顔のぶんだけ**で、
+    # 全件は読まない（高々 MAX_WRONG_DETAILS × 閾値の数）。
+    wanted = sorted(
+        {
+            detail["face_id"]
+            for row in summary["thresholds"]
+            for detail in row["wrong_faces"]
+        }
+    )
+    paths = db.face_paths(connection, wanted)
+    for row in summary["thresholds"]:
+        for detail in row["wrong_faces"]:
+            detail["path"] = paths.get(detail["face_id"])
     return summary
 
 
@@ -194,6 +235,26 @@ def _detail_threshold(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if abs(row["threshold"] - DEFAULT_THRESHOLD) < 1e-9:
             return row
     return summary["thresholds"][0]
+
+
+def _fragile_faces(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """試したどれかの閾値で誤った顔を、**初めて誤った閾値**とともに1件ずつ返す。
+
+    既定の閾値だけを見ると、0 件のときに何も出ない。**それでは「あと少し
+    緩めたら誤る顔」が見えず、手本を直す手がかりが消える。** 実データでは
+    既定 0.45 が誤り 0 件で、0.46 から誤り始める2件が**どちらも手本の問題**
+    （赤ん坊に大人のラベル／顔の半分しか写っていない横顔）だった。
+
+    並びは「誤った最小の閾値が低い順」＝もろい順。同じ顔は1回だけ出す。
+    **最小は「試した閾値の中での最小」**で、刻みの外までは分からない。
+    """
+    seen: Dict[int, Dict[str, Any]] = {}
+    for row in sorted(summary["thresholds"], key=lambda item: item["threshold"]):
+        for item in row["wrong_faces"]:
+            if item["face_id"] in seen:
+                continue
+            seen[item["face_id"]] = {**item, "threshold": row["threshold"]}
+    return sorted(seen.values(), key=lambda item: (item["threshold"], item["face_id"]))
 
 
 def format_report(summary: Dict[str, Any]) -> str:
@@ -269,6 +330,48 @@ def format_report(summary: Dict[str, Any]) -> str:
                 ],
                 align="<>>>>",
             )
+        )
+
+    # **誤りは、既定の閾値だけを見ていると見つからない。** 既定が 0 件でも、
+    # 少し緩めただけで誤る顔は「もろい手本」で、そこが手本を直す手がかりになる。
+    # そこで**試したすべての閾値を通して**、誤った顔を初めて誤った閾値とともに出す。
+    fragile = _fragile_faces(summary)
+    if fragile:
+        lines.append("")
+        lines.append("誤りになった顔（試したどれかの閾値で誤ったもの）")
+        lines.extend(
+            _table(
+                ("顔", "正解", "誤った相手", "その距離", "自分の最短", "誤った最小の閾値"),
+                [
+                    (
+                        str(item["face_id"]),
+                        names.get(item["person_id"], f"#{item['person_id']}"),
+                        names.get(
+                            item["matched_person_id"], f"#{item['matched_person_id']}"
+                        ),
+                        f"{item['distance']:.3f}",
+                        f"{item['own_distance']:.3f}",
+                        f"{item['threshold']:.2f}",
+                    )
+                    for item in fragile
+                ],
+                align=">><>>>",
+            )
+        )
+        for item in fragile:
+            if item.get("path"):
+                lines.append(f"    {item['face_id']}: {item['path']}")
+        lines.append("")
+        lines.append(
+            "「誤った最小の閾値」は**試した閾値の中での最小**。"
+            "刻みの外は分からないので、細かく見るなら --thresholds で刻む。"
+        )
+        lines.append(
+            "**「自分の最短」が閾値よりずっと大きい誤りは、閾値では直らない。**"
+        )
+        lines.append(
+            "その顔に似た手本が1枚も無いか、手本のラベルが間違っている。"
+            "先にその顔を GUI で見て、手本を直すか増やすこと。"
         )
 
     lines.append("")

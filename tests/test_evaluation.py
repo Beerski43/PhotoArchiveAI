@@ -12,6 +12,7 @@ import pytest
 from photoarchive_ai import db
 from photoarchive_ai.evaluation import (
     CORRECT,
+    MAX_WRONG_DETAILS,
     MISSED,
     WRONG,
     evaluate_match,
@@ -321,3 +322,131 @@ def test_evaluate_leaves_every_row_untouched(connection):
     # family_score を潰していないことまで押さえる（scan と match が互いの値を
     # 消した過去がある）。
     assert before[1][media_id][2] == 77.0
+
+
+def _one_face_that_lands_on_the_other_person(connection):
+    """Alice の顔を1件だけ Bob の側へ置く。**誤りを1件だけ作る型。**
+
+    返すのは (alice, bob, 誤りになる face_id)。
+    """
+    alice = db.add_person(connection, "Alice")
+    bob = db.add_person(connection, "Bob")
+    wrong_face = None
+    for index, (person, value) in enumerate(
+        ((alice, 0.0), (alice, 1.00), (bob, 1.01), (bob, 1.02)), start=1
+    ):
+        face_id = _add_face(
+            connection, _add_media(connection, index), _vector(value, 0.0), person
+        )
+        if person == alice and value == 1.00:
+            wrong_face = face_id
+    return alice, bob, wrong_face
+
+
+def test_the_wrong_face_is_named_with_its_path_and_its_own_nearest_teacher(connection):
+    """**率だけでは、閾値の問題か手本の問題かを切り分けられない。**
+
+    実データでは、測れた誤りの全部が「赤ん坊に大人のラベルが付いた手本」と
+    「顔の半分しか写っていない横顔」の2件から出ていた。どちらも自分の人物の
+    最短が 0.676 で、**どの閾値へ動かしても直らない。** 名指しと「自分の最短」が
+    無いと、手本を直すべき場面で閾値を触ってしまう。
+    """
+    alice, bob, wrong_face = _one_face_that_lands_on_the_other_person(connection)
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    details = _row(summary, 0.4)["wrong_faces"]
+    assert [item["face_id"] for item in details] == [wrong_face]
+    detail = details[0]
+    assert detail["person_id"] == alice
+    assert detail["matched_person_id"] == bob
+    # 誤った相手(1.01)のほうが、自分の手本(0.0)よりずっと近い。
+    assert detail["distance"] == pytest.approx(0.01, abs=1e-6)
+    assert detail["own_distance"] == pytest.approx(1.00, abs=1e-6)
+    # パスが無いと、人がその顔を見に行けない。
+    assert detail["path"] == "/photos/2.jpg"
+
+
+def test_a_face_that_only_errs_above_the_default_threshold_is_still_named(connection):
+    """**既定の閾値が誤り 0 件でも、もろい手本は見える必要がある。**
+
+    実データがまさにこれで、既定 0.45 は誤り 0 件、0.46 から2件誤る。
+    既定の行だけを見せていると、その2件が**どの画面にも出てこない。**
+    """
+    _, _, wrong_face = _one_face_that_lands_on_the_other_person(connection)
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.005, 0.4])
+
+    assert _row(summary, 0.005)[WRONG] == 0, "締めた側では誤りが出ない前提"
+    assert _row(summary, 0.4)[WRONG] == 1
+
+    report = format_report(summary)
+    assert "誤りになった顔" in report
+    assert str(wrong_face) in report
+    # 誤り始めたのは緩めた側。**どの閾値から誤るのか**が読めること。
+    assert "0.40" in report
+
+
+def test_the_report_says_nothing_about_wrong_faces_when_there_are_none(connection):
+    """誤りが無いときに空の節を出さない。**読むものが増えるだけ。**"""
+    _two_people_in_separate_photos(connection, spread=0.01)
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    assert _row(summary, 0.4)[WRONG] == 0
+    assert "誤りになった顔" not in format_report(summary)
+
+
+def test_the_same_wrong_face_is_listed_once_with_the_lowest_threshold(connection):
+    """同じ顔が閾値の数だけ並ばないこと。**もろい順に読めるのが目的。**"""
+    _, _, wrong_face = _one_face_that_lands_on_the_other_person(connection)
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4, 0.5, 0.6])
+
+    report = format_report(summary)
+    listed = [line for line in report.splitlines() if line.strip().startswith(str(wrong_face))]
+    # 表の行と、パスの行が1本ずつ。閾値3つぶん並んだりしない。
+    assert len(listed) == 2, listed
+
+
+def test_the_number_of_named_wrong_faces_has_a_ceiling(connection):
+    """**手本が増えても報告が無限に伸びない。** 画面が流れると読まれない。
+
+    誤りをたくさん作るには、**誤る顔どうしも互いに遠い**必要がある。近くに
+    置くと互いの手本になって正解してしまうので、Bob の手本を 1.0, 2.0, … と
+    並べ、Alice の顔をそれぞれの真横(+0.005)へ置く。
+    """
+    alice = db.add_person(connection, "Alice")
+    bob = db.add_person(connection, "Bob")
+    index = 0
+    # Alice の足場。これが無いと「自分の手本が残らない」で対象外になる。
+    index += 1
+    _add_face(connection, _add_media(connection, index), _vector(0.0, 0.0), alice)
+    for step in range(1, MAX_WRONG_DETAILS + 6):
+        index += 1
+        _add_face(connection, _add_media(connection, index), _vector(float(step), 0.0), bob)
+        index += 1
+        _add_face(
+            connection, _add_media(connection, index), _vector(step + 0.005, 0.0), alice
+        )
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    row = _row(summary, 0.4)
+    assert row[WRONG] > MAX_WRONG_DETAILS, "上限を越える誤りを作れている前提"
+    assert len(row["wrong_faces"]) == MAX_WRONG_DETAILS
+
+
+def test_naming_the_wrong_faces_still_writes_nothing(connection):
+    """パスを引くために `Media` を読むようになったが、**書かないことは変わらない。**"""
+    _one_face_that_lands_on_the_other_person(connection)
+    before = connection.execute(
+        "SELECT id, person_id, assign_source FROM Face ORDER BY id"
+    ).fetchall()
+
+    evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    after = connection.execute(
+        "SELECT id, person_id, assign_source FROM Face ORDER BY id"
+    ).fetchall()
+    assert [tuple(row) for row in before] == [tuple(row) for row in after]

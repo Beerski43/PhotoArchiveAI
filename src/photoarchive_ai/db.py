@@ -791,6 +791,35 @@ def faces_by_ids(
     return [found[face_id] for face_id in face_ids if face_id in found]
 
 
+def face_paths(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Dict[int, str]:
+    """顔 id から、その顔が写っているファイルのパスを引く。
+
+    **サムネイルも特徴量も読まない。** 要るのは「人がその顔を見に行くための
+    手がかり」だけで、`evaluate` が誤りになった顔を名指しするのに使う。
+    `faces_by_ids` と分けているのは、あちらが `Face` の列しか返さないため。
+
+    `IN (...)` の変数の数に上限があるので、内部で塊に割って読む。
+    見つからない id は結果に入らない（呼び出し側が無い場合を書き分けられる）。
+    """
+    if not face_ids:
+        return {}
+    found: Dict[int, str] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            "SELECT f.id AS face_id, m.path AS path FROM Face f"
+            f" JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            found[int(row["face_id"])] = row["path"]
+    return found
+
+
 def load_faces_for_clustering(
     connection: sqlite3.Connection,
     folder: str,
