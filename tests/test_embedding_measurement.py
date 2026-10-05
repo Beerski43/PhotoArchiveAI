@@ -334,14 +334,29 @@ def test_the_stored_embedding_variant_uses_the_value_in_the_database(measure_mod
     assert len(vector) == db.EMBEDDING_DIM
 
 
-def test_dlib_can_be_recomputed_from_the_thumbnail(measure_module, tmp_path):
+def test_the_embedding_can_be_recomputed_from_the_thumbnail(measure_module, tmp_path):
     """(b) の経路。**サムネイルだけで特徴量を作り直せること。**"""
     database = tmp_path / "labels.db"
     _seed_database(database)
     records = measure_module.load_manual_faces(str(database))
-    vector = measure_module.dlib_from_thumbnail(records[0])
+    vector = measure_module.embedding_from_thumbnail(records[0])
     assert vector is not None
     assert len(vector) == db.EMBEDDING_DIM
+
+
+def test_the_stored_variant_follows_the_active_model(measure_module, tmp_path):
+    """**(a)(b) の尺度と名札はモデルから引く。** 書き写すと古くなる。
+
+    #59 で実データを ArcFace（コサイン）へ作り直したあと、ここには
+    「dlib / ユークリッド」と書いた名札が残っていた。**コサインの特徴量を
+    ユークリッドで測った表が出るところだった。**
+    """
+    from photoarchive_ai import embedding as embedding_model
+
+    variants = {variant.key: variant for variant in measure_module.build_variants(None)}
+    for key in ("a", "b"):
+        assert variants[key].metric == embedding_model.ACTIVE.metric
+        assert embedding_model.ACTIVE.version in variants[key].label
 
 
 def test_arcface_is_skipped_when_the_model_is_absent(measure_module, tmp_path):
@@ -407,7 +422,11 @@ def test_main_writes_a_report_and_notes_the_missing_model(measure_module, tmp_pa
     assert code == 0
     text = report.read_text(encoding="utf-8")
     assert "ArcFace を測れていない" in text
-    assert "dlib" in text
+    # **いま使うモデルの版が名札に出ること。** 以前は "dlib" が出ることを
+    # 見ていたが、モデルを替えたら嘘になる名札だった。
+    from photoarchive_ai import embedding as embedding_model
+
+    assert embedding_model.ACTIVE.version in text
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,61 @@ SHOOTING_DATE_SORT_KEY = (
     " AND shooting_date NOT LIKE '0000%' THEN shooting_date END"
 )
 
+def folder_expression(column: str = "path") -> str:
+    """``Media.path`` から、それを収めているフォルダを取り出す SQL 式。
+
+    SQLite に ``dirname`` が無いので ``rtrim`` で作る。``replace(path,'/','')``
+    は「そのパスに出てくるスラッシュ以外の文字の集合」なので、``rtrim`` は
+    **最後の ``/`` の手前で必ず止まる。** 末尾の ``/`` は ``substr`` で落とす。
+
+    ``/a/b/c.jpg`` → ``/a/b`` ／ ``c.jpg`` → ``""``（フォルダ無し）。
+
+    **索引もこの式で張る**（`idx_media_event` の先頭列）。`SHOOTING_DATE_SORT_KEY` と
+    同じ理由で、**式を書き写さずに必ずこの関数を通すこと。** 綴りが1文字でも
+    ずれると索引が使われなくなる。
+
+    **同じ判断が `folder_of` にもある。** 表示と比較は Python 側で、絞り込みは
+    SQL 側で要るため。**片方だけ直すと絞り込みが黙って外れる**ので、
+    両者が一致することをテストで固定してある。
+    """
+    trimmed = f"rtrim({column}, replace({column}, '/', ''))"
+    return f"substr({trimmed}, 1, length({trimmed}) - 1)"
+
+
+def folder_of(path: str) -> str:
+    """``folder_expression`` の Python 版。**同じ答えを返すこと。**"""
+    head, separator, _ = path.rpartition("/")
+    return head if separator else ""
+
+
+def day_expression(column: str = "shooting_date") -> str:
+    """撮影日時の**日付の部分**（``YYYY-MM-DD``）を取り出す式。読めなければ NULL。
+
+    **行事（フォルダ×日）の「日」。** 読めるかどうかの判断は
+    `SHOOTING_DATE_SORT_KEY` に1つだけあり、ここはそれを切るだけ。
+    **`substr(shooting_date, 1, 10)` と書かないこと** — `TTTT-TT-TTTTT:TT:TT`
+    のような壊れた値は**10文字あるので長さでは弾けず**、「2026-10-04」の隣に
+    「TTTT-TT-TT」という行事が並ぶ。
+    """
+    return f"substr({SHOOTING_DATE_SORT_KEY.replace('shooting_date', column)}, 1, 10)"
+
+
+class _Undated:
+    """「撮影日時が読めない顔だけ」を表す印。``day`` に渡す。
+
+    **``day=None`` は「日で絞らない」という意味**で、「日付が読めない顔」とは
+    別の指示。同じ値で表すと、片方を頼んだつもりでもう片方が起きる
+    （`KEEP_AGE` / `KEEP_BIRTH_DATE` と同じ理由。CLAUDE.md §8）。
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - 表示用
+        return "UNDATED"
+
+
+#: 日付の読めない顔だけに絞る印（`day` 引数へ）。
+UNDATED = _Undated()
+
+
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS Media ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -128,6 +183,15 @@ SCHEMA = [
     # 撮影日時の新しい順に顔を並べるため（§10.4）。**この索引が無いと、ページを
     # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
     f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
+    # 行事（フォルダ×日）で顔を絞るため（§10.4）。**無いと、ページを送るたびに
+    # Media を全件走査する**（実データ 70,297 件で 1ページ 0.407秒 → 0.014秒）。
+    # **フォルダだけの索引は別に張らない。** 複合索引の先頭列がフォルダなので、
+    # フォルダだけの絞り込みもこれで足りる（2本張ると、どちらが使われているのか
+    # 分からなくなるうえに実データがそのぶん大きくなる）。
+    # **列を足す移行は要らない。** `create_tables` が開くたびに
+    # `CREATE INDEX IF NOT EXISTS` を流すので、既存DBにもその場で張られる
+    # （実データで 2.5 秒・488MB → 517MB。`PRAGMA user_version` は 4 のまま）。
+    f"CREATE INDEX IF NOT EXISTS idx_media_event ON Media({folder_expression()}, {day_expression()})",
 ]
 
 KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult")
@@ -658,11 +722,152 @@ def count_faces(
     unassigned: bool = False,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    folder: Optional[str] = None,
+    day: Any = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
-    where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+    )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
+
+
+def face_ids(
+    connection: sqlite3.Connection,
+    assign_source: Optional[str] = None,
+    person_id: Optional[int] = None,
+    unassigned: bool = False,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
+    folder: Optional[str] = None,
+    day: Any = None,
+) -> List[int]:
+    """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
+
+    **まとめて処理する操作のためにある。** `list_faces` はページ単位で読むので、
+    「この行事の未割当をすべて除外」のように**ページをまたぐ操作**には使えない。
+    ここは id だけを読むのでサムネイルの BLOB を持ち上げない
+    （実データで最大の行事が 1,357 件）。
+    """
+    where, params = _face_filter(
+        assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+    )
+    rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def faces_by_ids(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    with_thumbnail: bool = False,
+) -> List[Dict[str, Any]]:
+    """与えた id の顔を、**渡した並びのまま**返す。
+
+    **サムネイル込みで呼ぶのは1ページ分ずつ。** 全件読むと数百MBになって
+    画面が固まる（CLAUDE.md §8）。束の中身を見せるときは呼び出し側が区切る。
+
+    `IN (...)` の変数の数に上限があるので、内部で塊に割って読む。
+    """
+    if not face_ids:
+        return []
+    columns = list(FACE_LIST_COLUMNS)
+    if with_thumbnail:
+        columns.append("thumbnail")
+    found: Dict[int, Dict[str, Any]] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            f"SELECT {','.join(columns)} FROM Face WHERE id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            record = dict(row)
+            found[int(record["id"])] = record
+    # **渡した順を守る。** 品質スコアの高い順に渡されるので、束の先頭が
+    # 代表の顔になる。SQL の `IN` は並びを保証しない。
+    return [found[face_id] for face_id in face_ids if face_id in found]
+
+
+def load_faces_for_clustering(
+    connection: sqlite3.Connection,
+    folder: str,
+    day: Any,
+) -> List[Dict[str, Any]]:
+    """1つの行事を束ねるのに要るぶんだけ読む。**サムネイルは読まない。**
+
+    返すのは `{"id", "media_id", "person_id", "assign_source", "embedding"}` で、
+    ``embedding`` は numpy 配列。**品質スコアの高い順**に並べる（束の先頭が
+    代表の顔になる）。
+
+    **``day`` に既定値を置かない。** これは「1つの行事を束ねる」関数なので、
+    日で絞らない呼び出し（``day=None``）は常に誤り。日付が読めない行事は
+    `UNDATED` を渡す。**既定値があったせいで、束ねる画面が `None` をそのまま
+    渡し、同じフォルダの別の日の顔まで束に入れていた**（実データで日付つきの
+    未割当 18,000 件。PR #62 のレビュー指摘1）。
+
+    絞り方の約束。
+
+    - **いま使うモデルの特徴量を持つ顔だけ**（`embed_version` の完全一致）。
+      別の埋め込み空間の距離を比べるのは常に誤り（CLAUDE.md §7）
+    - **未割当と手本だけ。** 除外した顔はもう人が判断済みで、束ねても決定は
+      減らない。自動割当（`'auto'`）も入れない（`match` の結果を人の判断の
+      材料に混ぜると、誤りが次の判断の根拠になる）
+    - **手本は入れる。** 束に手本が混ざっていれば「この束はこの人」が分かる
+    """
+    where, params = _face_filter(None, None, False, None, None, folder=folder, day=day)
+    clauses = [where[len(" WHERE ") :]] if where else []
+    clauses.append("embedding IS NOT NULL")
+    clauses.append("embed_version = ?")
+    clauses.append("(assign_source IS NULL OR assign_source = ?)")
+    params = list(params) + [embedding_model.ACTIVE.version, ASSIGN_MANUAL]
+    rows = connection.execute(
+        "SELECT id, media_id, person_id, assign_source, embedding FROM Face"
+        f" WHERE {' AND '.join(clauses)}"
+        " ORDER BY quality_score DESC, id ASC",
+        params,
+    ).fetchall()
+    records = []
+    for row in rows:
+        record = dict(row)
+        record["embedding"] = decode_embedding(record["embedding"])
+        records.append(record)
+    return records
+
+
+def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """**行事（フォルダ×日）ごと**の顔の件数を、未割当の多い順に返す。
+
+    `{"folder", "day", "unassigned", "manual", "rejected", "total"}` を持つ。
+    ``day`` は撮影日時が読めない行事では ``None``（**フォルダだけが同じ顔の集まり**。
+    実データでは顔 **6,190 件**がここに入る。**この関数は顔を全部数える**ので、
+    束ねられる「特徴量あり・未割当」の 5,910 件とは別の数）。
+
+    **フォルダではなく行事で数える。** 同じフォルダでも日をまたぐと同一人物の
+    距離が開くため（dlib で 0.480 → 0.578）、束ねる単位をフォルダにすると粗い。
+    これが PR #56 を取り下げて作り直した理由。
+
+    **手本（`'manual'`）の件数も返す。** 結婚式や学校行事は「ほぼ他人」であって
+    「全部他人」ではなく、家族も写っている。まとめて除外する前に、そこに手本が
+    あるかどうかが見えないと押せない。
+
+    実データ（Media 70,297 / Face 58,606）で 2,700 行事・0.4 秒。
+    """
+    folder = folder_expression("m.path")
+    day = day_expression("m.shooting_date")
+    rows = connection.execute(
+        f"SELECT {folder} AS folder, {day} AS day,"
+        " SUM(CASE WHEN f.assign_source IS NULL THEN 1 ELSE 0 END) AS unassigned,"
+        " SUM(CASE WHEN f.assign_source = ? THEN 1 ELSE 0 END) AS manual,"
+        " SUM(CASE WHEN f.assign_source = ? THEN 1 ELSE 0 END) AS rejected,"
+        " COUNT(*) AS total"
+        " FROM Media m JOIN Face f ON f.media_id = m.id"
+        " GROUP BY folder, day ORDER BY unassigned DESC, day DESC, folder ASC",
+        (ASSIGN_MANUAL, ASSIGN_REJECTED),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _face_filter(
@@ -672,6 +877,8 @@ def _face_filter(
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
     prefix: str = "",
+    folder: Optional[str] = None,
+    day: Any = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -680,6 +887,13 @@ def _face_filter(
 
     ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
     書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
+
+    ``folder`` と ``day`` が行事（`folder_expression` / `day_expression`）。
+    **結合ではなく副問い合わせで書く。** `list_faces` には `Media` と結合する
+    経路（撮影日時順）としない経路があり、結合で書くと**条件が2通りに割れる。**
+
+    ``day`` は ``None`` が「日で絞らない」、`UNDATED` が「撮影日時が読めない顔
+    だけ」。**同じ値で表さない**（CLAUDE.md §8）。
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -697,6 +911,20 @@ def _face_filter(
     if max_age is not None:
         clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
         params.append(max_age)
+    media_conditions: List[str] = []
+    if folder is not None:
+        media_conditions.append(f"{folder_expression('path')} = ?")
+        params.append(folder)
+    if day is UNDATED:
+        media_conditions.append(f"{day_expression()} IS NULL")
+    elif day is not None:
+        media_conditions.append(f"{day_expression()} = ?")
+        params.append(day)
+    if media_conditions:
+        clauses.append(
+            f"{prefix}media_id IN"
+            f" (SELECT id FROM Media WHERE {' AND '.join(media_conditions)})"
+        )
     if not clauses:
         return "", params
     return " WHERE " + " AND ".join(clauses), params
@@ -742,6 +970,8 @@ def list_faces(
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
     order: str = ORDER_QUALITY,
+    folder: Optional[str] = None,
+    day: Any = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -754,6 +984,9 @@ def list_faces(
     - ``ORDER_QUALITY``: 品質スコアの高い順
     - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
     - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
+
+    ``folder`` / ``day`` を渡すと、その行事（フォルダ×日）の写真の顔だけに絞る
+    （`_face_filter`）。渡さなければ問い合わせは従来と変わらない。
     """
     columns = list(FACE_LIST_COLUMNS)
     if with_thumbnail:
@@ -761,10 +994,12 @@ def list_faces(
 
     if order == ORDER_SHOT_DESC:
         query, params = _shooting_date_query(
-            columns, assign_source, person_id, unassigned, min_age, max_age
+            columns, assign_source, person_id, unassigned, min_age, max_age, folder, day
         )
     else:
-        where, params = _face_filter(assign_source, person_id, unassigned, min_age, max_age)
+        where, params = _face_filter(
+            assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+        )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
             # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
@@ -787,6 +1022,8 @@ def _shooting_date_query(
     unassigned: bool,
     min_age: Optional[int],
     max_age: Optional[int],
+    folder: Optional[str] = None,
+    day: Any = None,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -797,9 +1034,21 @@ def _shooting_date_query(
     **外すと、ページを送るたびに未割当の顔を全件並べ直す**（実データ
     58,547 件で 220〜435ms。固定すると1ページ目 0.6ms）。`EXPLAIN QUERY PLAN`
     に `USE TEMP B-TREE FOR ORDER BY` が出たら、その状態に戻っている。
+
+    **行事を指定したときだけは、この索引を捨てて並べ替える**
+    （`USE TEMP B-TREE FOR ORDER BY` が出る）。対象が `idx_media_event` で
+    1行事（実データの最大で 1,357 件）に絞られたあとの並べ替えなので、
+    実測 0.017秒で収まる（指定なしは 0.002秒）。
     """
     where, params = _face_filter(
-        assign_source, person_id, unassigned, min_age, max_age, prefix="f."
+        assign_source,
+        person_id,
+        unassigned,
+        min_age,
+        max_age,
+        prefix="f.",
+        folder=folder,
+        day=day,
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")

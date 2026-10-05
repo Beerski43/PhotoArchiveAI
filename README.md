@@ -224,6 +224,8 @@ photoarchive-gui
 
 人物を登録し、`scan` が検出した顔のサムネイル一覧から、その人物の顔を選んで割り当てます。ここで割り当てた顔が次の `match` の手本になります。
 
+**行事（フォルダ×日）ごとにまとめて片付けられます。** `行事を選ぶ` で絞り、`この行事の顔を束ねる` を押すと、似た顔を束ねて束ごとに割り当て・除外できます。別人が混ざっていたら `この束を割る` で割り直せます。手動で割り当てた顔は、まとめて操作しても動きません。
+
 操作手順は [GUI利用手順](docs/operation/GUI_USAGE.md) を参照してください。
 
 ### 6. 残りの顔の自動紐づけ
@@ -370,13 +372,18 @@ PhotoArchiveAI/
       config.py                設定ファイルの探索と読み込み
       db.py                    スキーマと永続化
       migration.py             旧スキーマからの移行
+      embedding.py             特徴量モデルの記述(次元数・尺度・閾値・版)と距離計算
       scanner.py               走査・差分判定・顔検出の呼び出し
-      face.py                  顔検出(MediaPipe)と顔特徴量(dlib)
+      face.py                  顔検出(MediaPipe)と顔特徴量(ArcFace)
+      reembed.py               保存済みサムネイルから特徴量を作り直す
+      dates.py                 日付の読み取りと年齢の計算
       scoring.py               笑顔・画質のスコア
       matcher.py               自動紐づけ
+      clustering.py            行事の中で顔を束ねる(平均連結)
       evaluation.py            自動紐づけの精度の実測
       converter.py             HEIC/HEIF → JPEG 変換
       selection.py             ルールに基づく抽出とコピー
+      logging_setup.py         ログの設定
       cli.py                   サブコマンド定義
       gui.py                   人物登録と顔の割り当て画面
   tests/                       テスト(リポジトリ内には書き込まない)
