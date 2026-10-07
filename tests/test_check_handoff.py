@@ -143,7 +143,7 @@ def test_a_slow_command_does_not_block_the_check():
     `=== 5/5 引き継ぎの状態 ===` が出たきり何も起きない。
     """
     # **待ち時間は短くてよい。** 見ているのは終了コードと文面で、待った長さ自体
-    # ではない。回帰テストは繰り返し流すものなので 10 秒以内に収める（CLAUDE.md §5）。
+    # ではない。待つ理由が無いので待たない。
     code, _, err = check_handoff.run("sleep", "5", timeout=0.2)
 
     assert code == 124
