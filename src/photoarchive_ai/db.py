@@ -820,6 +820,36 @@ def face_paths(
     return found
 
 
+def shooting_dates_by_face(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Dict[int, Optional[str]]:
+    """顔 id ごとの撮影日時を、**id で引ける形**で返す。
+
+    `shooting_dates_for_faces` との違いは引けること。あちらは昇順に並べた値だけを
+    返すので「まとめて年齢を入れる範囲」を見せるのには足りるが、**一覧の1件ずつに
+    年齢を出すにはどの顔のものか分からないと使えない。**
+
+    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
+    そのまま返す）。**判断は `dates.parse_date` の1か所に持たせてある**
+    （CLAUDE.md §8）。撮影日時が無い顔は ``None`` が入る。
+    """
+    if not face_ids:
+        return {}
+    found: Dict[int, Optional[str]] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            "SELECT f.id AS face_id, m.shooting_date AS shooting_date FROM Face f"
+            f" JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            found[int(row["face_id"])] = row["shooting_date"]
+    return found
+
+
 def load_faces_for_clustering(
     connection: sqlite3.Connection,
     folder: str,
@@ -1471,12 +1501,29 @@ def apply_auto_assignments(
     return cursor.rowcount
 
 
-def reset_auto_assignments(connection: sqlite3.Connection) -> int:
+def reset_auto_assignments(
+    connection: sqlite3.Connection, person_id: Optional[int] = None
+) -> int:
+    """自動割り当てを取り消す。**手本と除外には触らない。**
+
+    ``person_id`` を渡すと、その人物の自動割り当てだけを取り消す。**省略は
+    「全員」であって「人物で絞らない誰か」ではない**ので、呼び出し側が
+    どちらのつもりかをはっきり書けるようにしてある。
+
+    **`family_score` はここでは数え直さない。** 呼び出し側が
+    `recompute_family_scores` を呼ぶこと（`match` は付け直したあとに呼ぶので、
+    ここで呼ぶと二度手間になる）。
+    """
+    clauses = ["assign_source = ?"]
+    params: List[Any] = [ASSIGN_AUTO]
+    if person_id is not None:
+        clauses.append("person_id = ?")
+        params.append(person_id)
     cursor = connection.cursor()
     cursor.execute(
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
-        " assigned_at = NULL WHERE assign_source = ?",
-        (ASSIGN_AUTO,),
+        f" assigned_at = NULL WHERE {' AND '.join(clauses)}",
+        tuple(params),
     )
     connection.commit()
     return cursor.rowcount

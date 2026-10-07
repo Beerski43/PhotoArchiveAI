@@ -656,3 +656,70 @@ def test_face_paths_reads_more_faces_than_the_sqlite_variable_limit(tmp_path: Pa
         assert set(found) == set(face_ids)
     finally:
         connection.close()
+
+
+def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
+    """一覧の1件ずつに年齢を出すには、**どの顔の撮影日時かが引ける**必要がある。
+
+    `shooting_dates_for_faces` は昇順に並べた値だけを返すので、まとめて年齢を
+    入れるときの範囲表示には足りるが、1件ずつの表示には使えない。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        dated = db.save_media(connection, _media_record("2025/01/a.jpg", "hash-a"))
+        undated = db.save_media(
+            connection,
+            {**_media_record("2025/01/b.jpg", "hash-b"), "shooting_date": None},
+        )
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for media_id in (dated, undated)
+        ]
+        connection.commit()
+
+        found = db.shooting_dates_by_face(connection, face_ids)
+
+        assert found[face_ids[0]] == "2025-01-01"
+        # **撮影日時の無い顔を落とさない。** 落とすと、呼び出し側から
+        # 「分からない」が消えて、別の写真の年齢が黙って入る。
+        assert face_ids[1] in found
+        assert found[face_ids[1]] is None
+        assert db.shooting_dates_by_face(connection, []) == {}
+    finally:
+        connection.close()
+
+
+def test_resetting_auto_assignments_leaves_the_manual_ones_alone(tmp_path: Path):
+    """**自動だけを消す。** 手本と除外は GUI で積み上げた判断なので触らない。"""
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        person = db.add_person(connection, "Alice")
+        media_id = db.save_media(connection, _media_record())
+        kept = {}
+        for source in (db.ASSIGN_MANUAL, db.ASSIGN_AUTO, db.ASSIGN_REJECTED):
+            kept[source] = db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+                person_id=person if source != db.ASSIGN_REJECTED else None,
+                assign_source=source,
+            )
+        connection.commit()
+
+        removed = db.reset_auto_assignments(connection)
+
+        assert removed == 1
+        rows = {row["id"]: row for row in db.list_faces(connection)}
+        assert rows[kept[db.ASSIGN_MANUAL]]["assign_source"] == db.ASSIGN_MANUAL
+        assert rows[kept[db.ASSIGN_REJECTED]]["assign_source"] == db.ASSIGN_REJECTED
+        assert rows[kept[db.ASSIGN_AUTO]]["assign_source"] is None
+    finally:
+        connection.close()

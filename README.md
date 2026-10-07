@@ -19,7 +19,8 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
 4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
 5. `photoarchive-gui` で人物を登録し、検出された顔を人物へ割り当てます。
-6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。
+6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。結果が
+   信用できなければ `photoarchive unassign-auto` で取り消せます。
 7. `photoarchive evaluate` で、`match` の取りこぼしと誤りの割合を確かめます（任意）。
 8. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
 
@@ -244,14 +245,33 @@ photoarchive match
 # どれくらい割り当てられそうかを、書き込まずに確認する
 photoarchive match --dry-run
 
-# 判定を厳しく／緩くする（既定は 0.4、小さいほど厳しい）
-photoarchive match --threshold 0.45
+# 判定を厳しく／緩くする（既定は 0.45、小さいほど厳しい）
+photoarchive match --threshold 0.5
 
-# 2位の人物との距離差の下限（既定は 0.05）
+# 2位の人物との距離差の下限（既定は 0.08）
 photoarchive match --margin 0.1
 ```
 
 `--dry-run` は顔の距離の分布を表示するので、`--threshold` を決める目安になります。**`match` を実行したあとでも同じ結果が出ます**（自動割り当てを取り消したあとの状態を再現して数えるため）。ログは `data/logs/match_*.log` に出力されます。
+
+#### 自動紐づけの結果を取り消す
+
+GUI で見直して結果が信用できなかったときは、**自動割り当てだけを取り消せます。**
+
+```bash
+# 全員ぶん
+photoarchive unassign-auto
+
+# 1人ぶんだけ（名前か id）
+photoarchive unassign-auto --person ひより
+
+# 消す前に件数だけ確かめる
+photoarchive unassign-auto --person ひより --dry-run
+```
+
+**手動で割り当てた顔（手本）・除外した顔・設定した年齢には触りません。**
+`match` は手本と閾値だけで結果が決まるので、**手本を直してから `photoarchive match` を
+流し直せば付け直せます。**
 
 ### 7. 紐づけの精度を測る（任意）
 
