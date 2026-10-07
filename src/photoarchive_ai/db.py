@@ -104,6 +104,17 @@ def day_expression(column: str = "shooting_date") -> str:
     return f"substr({SHOOTING_DATE_SORT_KEY.replace('shooting_date', column)}, 1, 10)"
 
 
+def month_expression(column: str = "shooting_date") -> str:
+    """撮影日時の**年月**（``YYYY-MM``）を取り出す式。読めなければ NULL。
+
+    `day_expression` と同じく、読めるかどうかの判断は
+    `SHOOTING_DATE_SORT_KEY` に1つだけある。**`substr(shooting_date, 1, 7)` と
+    書かないこと** — `TTTT-TT-TTTTT:TT:TT` のような壊れた値は長さでは弾けず、
+    「2026-10」の隣に「TTTT-TT」という月が並ぶ。
+    """
+    return f"substr({SHOOTING_DATE_SORT_KEY.replace('shooting_date', column)}, 1, 7)"
+
+
 class _Undated:
     """「撮影日時が読めない顔だけ」を表す印。``day`` に渡す。
 
@@ -744,6 +755,7 @@ def count_faces(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
+    month: Any = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -756,6 +768,7 @@ def count_faces(
         day=day,
         birth_date=birth_date,
         include_unknown_age=include_unknown_age,
+        month=month,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -817,6 +830,31 @@ def faces_by_ids(
     # **渡した順を守る。** 品質スコアの高い順に渡されるので、束の先頭が
     # 代表の顔になる。SQL の `IN` は並びを保証しない。
     return [found[face_id] for face_id in face_ids if face_id in found]
+
+
+def available_months(connection: sqlite3.Connection) -> List[str]:
+    """顔のある写真の撮影年月（``YYYY-MM``）を新しい順に。読めないものは入らない。
+
+    **顔のある写真だけを数える。** 一覧の絞り込みに使うので、選んでも1件も
+    出ない月を並べても仕方がない。
+    """
+    return [
+        row[0]
+        for row in connection.execute(
+            f"SELECT DISTINCT {month_expression()} AS m FROM Media"
+            " WHERE id IN (SELECT DISTINCT media_id FROM Face)"
+            " AND m IS NOT NULL ORDER BY m DESC"
+        )
+    ]
+
+
+def count_undated_faces(connection: sqlite3.Connection) -> int:
+    """撮影日時が読めない写真に写っている顔の件数。"""
+    row = connection.execute(
+        f"SELECT COUNT(*) FROM Face WHERE media_id IN"
+        f" (SELECT id FROM Media WHERE {month_expression()} IS NULL)"
+    ).fetchone()
+    return int(row[0])
 
 
 def face_paths(
@@ -1055,8 +1093,12 @@ def _face_filter(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
+    month: Any = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
+
+    ``month`` は撮影年月（``"2015-08"``）。``UNDATED`` で「撮影日時が読めない顔」。
+    ``None`` は「年月で絞らない」。**`day` と同じく、同じ値で表さない。**
 
     年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
     実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、
@@ -1097,6 +1139,11 @@ def _face_filter(
     elif day is not None:
         media_conditions.append(f"{day_expression()} = ?")
         params.append(day)
+    if month is UNDATED:
+        media_conditions.append(f"{month_expression()} IS NULL")
+    elif month is not None:
+        media_conditions.append(f"{month_expression()} = ?")
+        params.append(month)
     if media_conditions:
         clauses.append(
             f"{prefix}media_id IN"
@@ -1151,6 +1198,7 @@ def list_faces(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
+    month: Any = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1183,6 +1231,7 @@ def list_faces(
             day,
             birth_date,
             include_unknown_age,
+            month,
         )
     else:
         where, params = _face_filter(
@@ -1195,6 +1244,7 @@ def list_faces(
             day=day,
             birth_date=birth_date,
             include_unknown_age=include_unknown_age,
+            month=month,
         )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
@@ -1222,6 +1272,7 @@ def _shooting_date_query(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
+    month: Any = None,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -1249,6 +1300,7 @@ def _shooting_date_query(
         day=day,
         birth_date=birth_date,
         include_unknown_age=include_unknown_age,
+        month=month,
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")

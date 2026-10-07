@@ -50,6 +50,13 @@ from .dates import calculate_age, parse_date  # noqa: F401
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
+#: 撮影年月の絞り込みの「絞らない」と「撮影日時なし」。
+#:
+#: **`None` と `UNDATED` を同じ値で表さない**（`db._face_filter` の `day` と
+#: 同じ理由。CLAUDE.md §8）。表示の文字列から引く対応は `month_filter_value`。
+MONTH_ALL = "すべての年月"
+MONTH_UNDATED = "撮影日時なし"
+
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "除外済み"
@@ -1712,6 +1719,15 @@ class MainWindow(QWidget):
         self.filter_box.addItems([FILTER_UNASSIGNED, FILTER_AUTO, FILTER_REJECTED])
         self.filter_box.currentIndexChanged.connect(self._reset_page)
 
+        # **撮影年月で絞る。** 家族の写っていない行事（結婚式・旅行先の他人など）は
+        # 時期でまとまっているので、**その時期だけを開いてまとめて除外できる。**
+        self.month_box = QComboBox()
+        self.month_box.setToolTip(
+            "撮影年月で絞る。家族以外が多い時期をまとめて片付けるのに使う"
+        )
+        self._reload_months()
+        self.month_box.currentIndexChanged.connect(self._reset_page)
+
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
@@ -1738,6 +1754,7 @@ class MainWindow(QWidget):
 
         pager = QHBoxLayout()
         pager.addWidget(self.filter_box)
+        pager.addWidget(self.month_box)
         pager.addStretch(1)
         pager.addWidget(self.prev_button)
         pager.addWidget(self.page_label)
@@ -1982,6 +1999,31 @@ class MainWindow(QWidget):
     # 顔一覧
     # ------------------------------------------------------------------
 
+    def _reload_months(self) -> None:
+        """撮影年月の選択肢を作り直す。**いま選んでいる年月は保つ。**
+
+        `scan` のあとなどに月が増えるので、選び直しを強いないようにする。
+        """
+        keep = self.month_box.currentText() if self.month_box.count() else MONTH_ALL
+        blocked = self.month_box.blockSignals(True)
+        try:
+            self.month_box.clear()
+            self.month_box.addItem(MONTH_ALL)
+            if db.count_undated_faces(self.connection):
+                self.month_box.addItem(MONTH_UNDATED)
+            self.month_box.addItems(db.available_months(self.connection))
+            index = self.month_box.findText(keep)
+            self.month_box.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            self.month_box.blockSignals(blocked)
+
+    def _month_filter(self):
+        """選ばれている撮影年月。``None`` は「絞らない」、`db.UNDATED` は読めない顔。"""
+        selected = self.month_box.currentText()
+        if selected == MONTH_UNDATED:
+            return db.UNDATED
+        return None if selected in ("", MONTH_ALL) else selected
+
     def _filter_arguments(self) -> dict:
         selected = self.filter_box.currentText()
         if selected == FILTER_AUTO:
@@ -1997,6 +2039,9 @@ class MainWindow(QWidget):
             # **変換は `event_filters` に1つだけ。** `None` を渡すと
             # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
             filters.update(event_filters(*self.event))
+        month = self._month_filter()
+        if month is not None:
+            filters["month"] = month
         return filters
 
     def _sync_unassign_button(self) -> None:
