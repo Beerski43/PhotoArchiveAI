@@ -251,3 +251,141 @@ def test_progress_reaches_the_end_even_when_some_faces_have_no_embedding(connect
 
 def _person(connection, name: str) -> int:
     return db.add_person(connection, name)
+
+
+def _dated_media(connection, index: int, shooting_date):
+    """撮影日時を持つメディア。``shooting_date`` に壊れた値も渡せる。"""
+    media_id = _add_media(connection, index)
+    connection.execute(
+        "UPDATE Media SET shooting_date = ? WHERE id = ?", (shooting_date, media_id)
+    )
+    connection.commit()
+    return media_id
+
+
+def _births(connection, **people):
+    """名前→誕生日 で人物を作り、``{名前: id}`` を返す。"""
+    return {
+        name: db.add_person(connection, name, birth_date=birth)
+        for name, birth in people.items()
+    }
+
+
+def test_a_person_is_not_assigned_to_a_photo_taken_before_they_were_born(connection):
+    """**生まれる前の写真には写れない。** 動かせない事実なので候補から外す。
+
+    実データでは、ひよりの手本（赤ん坊の顔が11件）が 2004〜2007 年の写真の
+    赤ん坊を 351 件引き寄せていた。**赤ん坊の顔は兄弟間でほとんど区別がつかない。**
+    """
+    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    # 妹が生まれる2年前の写真。顔は妹の手本とそっくり。
+    before = _dated_media(connection, 2, "2008-06-01T10:00:00")
+    _add_face(connection, before, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 0
+    assert summary["unassigned"] == 1
+    assert summary["no_candidate"] == 1, "候補が1人も残らなかったぶん"
+    assert db.list_faces(connection, unassigned=True)[0]["person_id"] is None
+
+
+def test_removing_an_impossible_person_lets_the_margin_through(connection):
+    """**絞るのは `_best_match` に渡す前でなければならない。**
+
+    あとから捨てると、ありえない人物が「2位」に居座ってマージンを潰し、
+    判断が保留のままになる。**実データではこれが効いて、未割当だった
+    457 件が正しく兄へ付いた。**
+    """
+    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    # 兄と妹の手本が近い（赤ん坊どうしで区別がつかない状況）。
+    _add_face(connection, teacher, _vector(0.00, 0.0), people["兄"], db.ASSIGN_MANUAL)
+    _add_face(connection, teacher, _vector(0.02, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    # 妹が生まれる前の写真。兄に 0.01、妹に 0.01 で、マージン 0.2 を満たさない。
+    before = _dated_media(connection, 2, "2009-06-01T10:00:00")
+    _add_face(connection, before, _vector(0.01, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.2, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 1, "妹が候補から外れて、兄に決まる"
+    assert summary["per_person"] == {people["兄"]: 1}
+    assert summary["no_candidate"] == 0
+
+
+def test_a_face_without_a_shooting_date_is_not_filtered(connection):
+    """**分からないものを弾かない。** 実データの約16%に撮影日時が無い。"""
+    people = _births(connection, 妹="2010-12-08")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    undated = _dated_media(connection, 2, None)
+    _add_face(connection, undated, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 1
+    assert summary["no_candidate"] == 0
+
+
+@pytest.mark.parametrize("broken", ["0000-00-00", "TTTT-TT-TTTTT:TT:TT", "", "not a date"])
+def test_a_broken_shooting_date_does_not_filter_anyone_out(connection, broken):
+    """**壊れた日付で候補を絞らない。**
+
+    このリポジトリは「読める撮影日時か」の判断で2度壊れている
+    （`0000-00-00` だけを見ていて `TTTT-TT-TTTTT:TT:TT` が素通りした）。
+    判断は `dates.parse_date` の1か所に預けてあり、**ここには書かない**。
+    """
+    people = _births(connection, 妹="2010-12-08")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    broken_media = _dated_media(connection, 2, broken)
+    _add_face(connection, broken_media, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 1, f"{broken!r} で絞り込んではいけない"
+    assert summary["no_candidate"] == 0
+
+
+def test_a_person_without_a_birth_date_is_never_filtered_out(connection):
+    """誕生日は任意の項目。登録していない人物を外さない。"""
+    person = db.add_person(connection, "名無し")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), person, db.ASSIGN_MANUAL)
+    old = _dated_media(connection, 2, "1990-06-01T10:00:00")
+    _add_face(connection, old, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 1
+    assert summary["no_candidate"] == 0
+
+
+def test_being_born_on_the_day_of_the_photo_still_counts(connection):
+    """**誕生日当日は0歳。** 境界で1日ぶんずれて弾かないこと。"""
+    people = _births(connection, 赤ん坊="2011-06-01")
+    teacher = _dated_media(connection, 1, "2012-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["赤ん坊"], db.ASSIGN_MANUAL)
+    same_day = _dated_media(connection, 2, "2011-06-01T18:00:00")
+    _add_face(connection, same_day, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 1
+    assert summary["no_candidate"] == 0
+
+
+def test_the_distance_histogram_leaves_out_faces_with_no_candidate(connection):
+    """候補が1人も残らなかった顔には距離が無い。**分布に混ぜない。**"""
+    people = _births(connection, 妹="2010-12-08")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    before = _dated_media(connection, 2, "2005-06-01T10:00:00")
+    _add_face(connection, before, _vector(1.0, 0.0))
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert sum(summary["histogram"].values()) == 0
+    assert summary["no_candidate"] == 1

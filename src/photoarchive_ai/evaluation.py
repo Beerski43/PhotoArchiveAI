@@ -30,7 +30,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 import numpy as np
 
 from . import db
-from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, _best_match, _distances
+from .matcher import (
+    DEFAULT_MARGIN,
+    DEFAULT_THRESHOLD,
+    _best_match,
+    _distances,
+    _persons_alive_at,
+)
 
 #: 既定で試す閾値。**0.45 が現在の既定値**（`embedding.ACTIVE.threshold`）。
 #: 前後を広く振るのは、閾値を動かしたときの効き方を見るため。
@@ -118,6 +124,14 @@ def evaluate_match(
     person_ids = faces.person_ids
     media_ids = faces.media_ids
     rows_by_threshold = {row["threshold"]: row for row in summary["thresholds"]}
+    # **`match` と同じ規則で絞る。** 揃えないと実測値が嘘になる（この
+    # モジュールの冒頭の約束）。誕生日で候補を外すのは `match` の判断の一部で、
+    # **外すとマージンの通り方まで変わる**ので、測定だけ素通しにはできない。
+    birth_dates = {
+        int(person["id"]): person["birth_date"] for person in db.list_persons(connection)
+    }
+    shooting_dates = db.shooting_dates_by_face(connection, faces.face_ids.tolist())
+    alive_cache: Dict[Any, np.ndarray] = {}
 
     for start in range(0, total, EVAL_CHUNK_SIZE):
         stop = min(start + EVAL_CHUNK_SIZE, total)
@@ -144,10 +158,23 @@ def evaluate_match(
             # 誤りを読むときの要で、これが閾値よりずっと大きければ
             # 「その顔に似た手本が無い」＝閾値ではなく手本の問題だと分かる。
             own_distance = float(row[person_ids == truth].min())
-            for threshold in thresholds:
-                best_person, best_distance = _best_match(
-                    row, person_ids, threshold, margin
+            shooting_date = shooting_dates.get(int(faces.face_ids[index]))
+            if shooting_date not in alive_cache:
+                alive_cache[shooting_date] = _persons_alive_at(
+                    person_ids, birth_dates, shooting_date
                 )
+            alive = alive_cache[shooting_date]
+            for threshold in thresholds:
+                if alive.all():
+                    best_person, best_distance = _best_match(
+                        row, person_ids, threshold, margin
+                    )
+                elif not alive.any():
+                    best_person, best_distance = None, float("inf")
+                else:
+                    best_person, best_distance = _best_match(
+                        row[alive], person_ids[alive], threshold, margin
+                    )
                 if best_person is None:
                     outcome = MISSED
                 elif best_person == truth:

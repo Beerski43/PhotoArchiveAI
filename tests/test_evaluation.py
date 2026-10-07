@@ -450,3 +450,59 @@ def test_naming_the_wrong_faces_still_writes_nothing(connection):
         "SELECT id, person_id, assign_source FROM Face ORDER BY id"
     ).fetchall()
     assert [tuple(row) for row in before] == [tuple(row) for row in after]
+
+
+def test_the_measurement_filters_by_birth_date_just_like_match(connection):
+    """**測るものと実際に動くものがずれたら、実測値そのものが嘘になる。**
+
+    `match` は誕生日で候補を外す。外すとマージンの通り方まで変わるので、
+    測定だけ素通しにすると、**実際には起きない誤りを数えてしまう。**
+    """
+    兄 = db.add_person(connection, "兄", birth_date="2009-02-19")
+    妹 = db.add_person(connection, "妹", birth_date="2010-12-08")
+    # 兄の顔は、妹が生まれる前の写真にある。妹の手本とそっくり。
+    before = _add_media(connection, 1)
+    connection.execute(
+        "UPDATE Media SET shooting_date = '2009-06-01T10:00:00' WHERE id = ?", (before,)
+    )
+    _add_face(connection, before, _vector(1.00, 0.0), 兄)
+    for index, (person, when, value) in enumerate(
+        ((兄, "2009-07-01T10:00:00", 1.30), (妹, "2011-06-01T10:00:00", 1.01),
+         (妹, "2011-07-01T10:00:00", 1.02)),
+        start=2,
+    ):
+        media = _add_media(connection, index)
+        connection.execute(
+            "UPDATE Media SET shooting_date = ? WHERE id = ?", (when, media)
+        )
+        _add_face(connection, media, _vector(value, 0.0), person)
+    connection.commit()
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    row = _row(summary, 0.4)
+    # 妹の手本(1.01)のほうが近いが、**その写真の時点で妹は生まれていない。**
+    # 絞らなければ誤りに数えられるところ。
+    assert row[WRONG] == 0, row["wrong_faces"]
+
+
+def test_a_teacher_whose_person_was_not_born_yet_is_not_silently_correct(connection):
+    """**誕生日と矛盾する手本は、正解に数えない。**
+
+    手本のラベルか誕生日のどちらかが間違っている。黙って正解にすると、
+    **データの矛盾が実測値の中に隠れる。**
+    """
+    妹 = db.add_person(connection, "妹", birth_date="2010-12-08")
+    for index, when in enumerate(("2005-06-01T10:00:00", "2011-06-01T10:00:00"), start=1):
+        media = _add_media(connection, index)
+        connection.execute(
+            "UPDATE Media SET shooting_date = ? WHERE id = ?", (when, media)
+        )
+        _add_face(connection, media, _vector(index * 0.01, 0.0), 妹)
+    connection.commit()
+
+    summary = evaluate_match(connection, metric=EUCLIDEAN, thresholds=[0.4])
+
+    row = _row(summary, 0.4)
+    # 2005年の顔は、妹が生まれる前なので候補に妹が残らない＝取りこぼし。
+    assert row[MISSED] >= 1
