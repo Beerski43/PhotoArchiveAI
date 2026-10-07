@@ -807,3 +807,139 @@ def test_changing_the_source_filter_returns_to_the_first_page(window, monkeypatc
 
     assert dialog.page == 0
     assert dialog.total == 1
+
+
+def test_zero_can_be_used_as_an_age_filter_bound(window):
+    """**0 を「指定なし」に使うと、0歳で絞れなくなる。**
+
+    `FaceAgeDialog` は最小値を -1 にしてこれを避けているのに、**絞り込み側だけ
+    0 を特別扱いにしていた。** QSpinBox の `specialValueText` は最小値のときに出る。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+    db.set_face_age(connection, face_ids[0], 0)
+    for face_id in face_ids[1:]:
+        db.set_face_age(connection, face_id, 6)
+    connection.commit()
+
+    assert dialog._age_range() == (None, None), "初期値は両方「指定なし」"
+
+    dialog.min_age.setValue(0)
+    dialog.max_age.setValue(0)
+
+    assert dialog._age_range() == (0, 0), "0 が None に化けないこと"
+    assert dialog.total == 1
+    assert [item.data(Qt.UserRole)["id"] for item in
+            [dialog.face_list.item(i) for i in range(dialog.face_list.count())]] == [face_ids[0]]
+
+
+def test_the_age_filter_uses_the_calculated_age_when_face_age_is_unset(window):
+    """**`Face.age` だけを見ていると、絞り込みが何もしないのと同じになる。**
+
+    `match` は年齢を書かないので、自動割り当ての顔は全部未設定。実データでは
+    割り当て済み 22,511 件のうち `Face.age` が入っているのは 126 件だけだった
+    （2026-10-07）。画面には計算年齢が出ているので、それで絞れること。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",  # 6歳
+        source=db.ASSIGN_AUTO,
+    )
+    assert all(row["age"] is None for row in db.list_faces(connection)), "年齢は未設定"
+
+    dialog.min_age.setValue(6)
+    dialog.max_age.setValue(6)
+    assert dialog.total == len(face_ids), "計算年齢 6歳 で全件残る"
+
+    dialog.min_age.setValue(7)
+    dialog.max_age.setValue(7)
+    assert dialog.total == 0, "7歳では1件も残らない"
+
+
+def test_the_calculated_age_window_respects_the_birthday_itself(window):
+    """**誕生日の当日に年齢が上がる。** 境界で1年ぶんずれないこと。"""
+    connection = window.connection
+    dialog, _ = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-05-02T12:00:00",  # 誕生日の前日 → まだ5歳
+        source=db.ASSIGN_AUTO,
+    )
+
+    dialog.min_age.setValue(5)
+    dialog.max_age.setValue(5)
+    assert dialog.total > 0, "前日は5歳"
+
+    connection.execute("UPDATE Media SET shooting_date = '2017-05-03T12:00:00'")
+    connection.commit()
+    dialog.reload()
+    assert dialog.total == 0, "当日は6歳なので、5歳の絞り込みからは外れる"
+    dialog.min_age.setValue(6)
+    dialog.max_age.setValue(6)
+    assert dialog.total > 0
+
+
+def test_faces_with_no_age_at_all_are_left_out_unless_asked_for(window):
+    """**年齢を出せない顔は、範囲を指定したら外す。**
+
+    「7〜9歳」と指定したとき、年齢の分からない顔はその範囲に入るとは言えない。
+    チェックを入れれば戻る。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    # 1件だけ撮影日時を壊して、年齢を出せなくする。
+    connection.execute(
+        "UPDATE Media SET shooting_date = 'TTTT-TT-TTTTT:TT:TT' WHERE id ="
+        " (SELECT media_id FROM Face WHERE id = ?)", (face_ids[0],)
+    )
+    connection.commit()
+    dialog.reload()
+
+    assert not dialog.include_unknown_age.isChecked(), "既定は含めない"
+    dialog.min_age.setValue(6)
+    dialog.max_age.setValue(6)
+    without = dialog.total
+
+    dialog.include_unknown_age.setChecked(True)
+
+    assert dialog.total > without, "チェックを入れると年齢不明が戻る"
+
+
+def test_clearing_the_age_filter_shows_everything_again(window):
+    """**「指定なし」に戻せば、年齢不明も含めて全部見える。**
+
+    年齢を入れていない顔が一覧から永久に消えてしまわないこと。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date=None,  # 誕生日が無いので年齢は1件も出せない
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+
+    dialog.min_age.setValue(6)
+    dialog.max_age.setValue(6)
+    assert dialog.total == 0, "年齢を出せないので、範囲を指定すると残らない"
+
+    dialog.min_age.setValue(-1)
+    dialog.max_age.setValue(-1)
+
+    assert dialog.total == len(face_ids)

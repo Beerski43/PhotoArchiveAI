@@ -33,6 +33,7 @@ import numpy as np
 # いくつもあり（`encode_embedding` / `add_face`）、同名だと関数の中で
 # module が見えなくなる。将来そこでモデルの記述を使おうとして踏む。
 from . import embedding as embedding_model
+from .dates import parse_date
 
 SCHEMA_VERSION = 4
 
@@ -724,10 +725,20 @@ def count_faces(
     max_age: Optional[int] = None,
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
-        assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+        assign_source,
+        person_id,
+        unassigned,
+        min_age,
+        max_age,
+        folder=folder,
+        day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -929,6 +940,93 @@ def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
+    """誕生日を ``years`` 年ずらした日付（``YYYY-MM-DD``）。読めなければ ``None``。
+
+    **年齢の範囲を「撮影日の範囲」に読み替えるために使う。** こうすると
+    **SQL 側に年齢の計算を持ち込まずに済む**（日付の判断は `dates.parse_date` の
+    1か所にある。CLAUDE.md §8）。
+
+    2月29日生まれで、ずらした先に29日が無い年は28日に寄せる。
+    """
+    base = parse_date(birth_date)
+    if base is None:
+        return None
+    try:
+        return base.replace(year=base.year + years).isoformat()
+    except ValueError:
+        return base.replace(year=base.year + years, day=28).isoformat()
+
+
+def _age_clause(
+    prefix: str,
+    min_age: Optional[int],
+    max_age: Optional[int],
+    birth_date: Optional[str],
+    include_unknown_age: bool,
+    params: List[Any],
+) -> Optional[str]:
+    """年齢での絞り込み。**画面に出ている年齢と同じものを見る。**
+
+    `Face.age` は人が確かめて入れた値で、**`match` は書かない。** 実データでは
+    割り当て済み 22,511 件のうち `Face.age` が入っているのは **126 件だけ**
+    （2026-10-07）。そのため `Face.age` だけを見ると、**絞り込みが何もしない**
+    のと同じになっていた。
+
+    そこで、画面の表示と同じ規則で見る。
+
+    | その顔の年齢 | 判定 |
+    |---|---|
+    | `Face.age` が入っている | その値で判定する |
+    | 入っていないが誕生日と撮影日時がある | **計算した年齢**で判定する |
+    | どちらも無い | ``include_unknown_age`` で決める |
+
+    計算のほうは**撮影日の範囲**に読み替える（`_birth_year_shift`）。
+    年齢 ``a`` は「誕生日 + a年 以上、誕生日 + (a+1)年 未満」。
+    """
+    if min_age is None and max_age is None:
+        return None
+
+    known = [f"{prefix}age IS NOT NULL"]
+    if min_age is not None:
+        known.append(f"{prefix}age >= ?")
+        params.append(min_age)
+    if max_age is not None:
+        known.append(f"{prefix}age <= ?")
+        params.append(max_age)
+    branches = ["(" + " AND ".join(known) + ")"]
+
+    day = day_expression()
+    if birth_date:
+        window = [f"{day} IS NOT NULL"]
+        lower = None if min_age is None else _birth_year_shift(birth_date, min_age)
+        upper = None if max_age is None else _birth_year_shift(birth_date, max_age + 1)
+        if lower is not None:
+            window.append(f"{day} >= ?")
+            params.append(lower)
+        if upper is not None:
+            # **上は含めない。** 誕生日の当日に次の年齢へ上がるため。
+            window.append(f"{day} < ?")
+            params.append(upper)
+        branches.append(
+            f"({prefix}age IS NULL AND {prefix}media_id IN"
+            f" (SELECT id FROM Media WHERE {' AND '.join(window)}))"
+        )
+
+    if include_unknown_age:
+        if birth_date:
+            # 誕生日はあるが、撮影日時が読めない顔。
+            branches.append(
+                f"({prefix}age IS NULL AND {prefix}media_id IN"
+                f" (SELECT id FROM Media WHERE {day} IS NULL))"
+            )
+        else:
+            # 誕生日が無いので、`Face.age` の無い顔は1件も年齢を出せない。
+            branches.append(f"{prefix}age IS NULL")
+
+    return "(" + " OR ".join(branches) + ")"
+
+
 def _face_filter(
     assign_source: Optional[str],
     person_id: Optional[int],
@@ -938,11 +1036,15 @@ def _face_filter(
     prefix: str = "",
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
-    年齢の未設定(NULL)は、範囲を指定しても常に残す。年齢を入れていない顔が
-    一覧から消えてしまうと、そもそも年齢を入れられなくなるため。
+    年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
+    実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、
+    それだけを見ると絞り込みが何もしないのと同じになる（2026-10-07）。
+    ``birth_date`` を渡すと、画面の表示と同じく**計算した年齢**でも絞る。
 
     ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
     書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
@@ -964,12 +1066,11 @@ def _face_filter(
     if person_id is not None:
         clauses.append(f"{prefix}person_id = ?")
         params.append(person_id)
-    if min_age is not None:
-        clauses.append(f"({prefix}age IS NULL OR {prefix}age >= ?)")
-        params.append(min_age)
-    if max_age is not None:
-        clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
-        params.append(max_age)
+    age_clause = _age_clause(
+        prefix, min_age, max_age, birth_date, include_unknown_age, params
+    )
+    if age_clause is not None:
+        clauses.append(age_clause)
     media_conditions: List[str] = []
     if folder is not None:
         media_conditions.append(f"{folder_expression('path')} = ?")
@@ -1031,6 +1132,8 @@ def list_faces(
     order: str = ORDER_QUALITY,
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1053,11 +1156,28 @@ def list_faces(
 
     if order == ORDER_SHOT_DESC:
         query, params = _shooting_date_query(
-            columns, assign_source, person_id, unassigned, min_age, max_age, folder, day
+            columns,
+            assign_source,
+            person_id,
+            unassigned,
+            min_age,
+            max_age,
+            folder,
+            day,
+            birth_date,
+            include_unknown_age,
         )
     else:
         where, params = _face_filter(
-            assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+            assign_source,
+            person_id,
+            unassigned,
+            min_age,
+            max_age,
+            folder=folder,
+            day=day,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown_age,
         )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
@@ -1083,6 +1203,8 @@ def _shooting_date_query(
     max_age: Optional[int],
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -1108,6 +1230,8 @@ def _shooting_date_query(
         prefix="f.",
         folder=folder,
         day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
