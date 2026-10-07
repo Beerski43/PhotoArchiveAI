@@ -104,8 +104,6 @@ Phase 0 と同じ Issue で進めるが、コミットは分ける。
 
 ### Phase 2 — テストの穴埋め（完了・#30 と #32）
 
-全体の実行時間は、PR の前に毎回流せる長さに収める（`docs/testing/TESTING.md` §5）。
-
 **#30 で済んだもの**: `scanner.py` の並列経路（実運用の既定が無検査だった）、
 `converter.py`（テストが1件も無かった）、`config.py`、`cli.py` のサブコマンドと
 引数の配線、進捗表示、`selection.py` の抽出とコピー、`gui.py` の
