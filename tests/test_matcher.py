@@ -389,3 +389,103 @@ def test_the_distance_histogram_leaves_out_faces_with_no_candidate(connection):
 
     assert sum(summary["histogram"].values()) == 0
     assert summary["no_candidate"] == 1
+
+
+def test_a_face_marked_as_not_this_person_is_not_assigned_to_them_again(connection):
+    """**「割り当てを解除」だけでは、match を流すたびに同じ誤りが戻る。**
+
+    `match` は手本と閾値だけで結果が決まるので、未割当に戻した判断はどこにも
+    残らない。実データでは、${PERSON_4}の自動割り当てを見直して解除した **1,785 件**が
+    これに当たった。**否定を残して初めて、その判断が次の match に効く。**
+    """
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    target_media = _dated_media(connection, 2, "2012-06-01T10:00:00")
+    face_id = _add_face(connection, target_media, _vector(1.0, 0.0))
+
+    assert match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)["assigned"] == 1
+
+    # 人が「これは妹ではない」と押す。
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["assigned"] == 0
+    assert db.get_face(connection, face_id)["person_id"] is None
+
+
+def test_not_this_person_still_allows_another_person(connection):
+    """**「この人物ではない」は「誰でもない」ではない。**
+
+    兄弟の赤ん坊は互いによく似ている。妹を否定したら、**兄には付いてよい。**
+    `assign_source='rejected'` との違いがここ。
+    """
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.00, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    _add_face(connection, teacher, _vector(1.02, 0.0), people["兄"], db.ASSIGN_MANUAL)
+    target = _dated_media(connection, 2, "2012-06-01T10:00:00")
+    face_id = _add_face(connection, target, _vector(1.01, 0.0))
+
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+    summary = match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)
+
+    assert summary["per_person"] == {people["兄"]: 1}
+
+
+def test_rejecting_for_one_person_does_not_touch_another_persons_assignment(connection):
+    """別の人物に割り当たっている顔を巻き込まない。"""
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
+    media = _dated_media(connection, 1, "2012-06-01T10:00:00")
+    brother_face = _add_face(
+        connection, media, _vector(0.0, 0.0), people["兄"], db.ASSIGN_MANUAL
+    )
+
+    db.reject_faces_for_person(connection, [brother_face], people["妹"])
+
+    row = db.get_face(connection, brother_face)
+    assert row["person_id"] == people["兄"], "兄の割り当ては残る"
+    assert row["assign_source"] == db.ASSIGN_MANUAL
+
+
+def test_marking_not_this_person_clears_that_persons_assignment(connection):
+    """その人物に割り当たっていたなら外す。**記録が矛盾しないように。**"""
+    people = _births(connection, 妹="2010-12-01")
+    media = _dated_media(connection, 1, "2012-06-01T10:00:00")
+    face_id = _add_face(
+        connection, media, _vector(0.0, 0.0), people["妹"], db.ASSIGN_MANUAL
+    )
+
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+
+    row = db.get_face(connection, face_id)
+    assert row["person_id"] is None
+    assert row["assign_source"] is None
+
+
+def test_the_rejection_can_be_undone(connection):
+    """**押し間違いから戻れること。**"""
+    people = _births(connection, 妹="2010-12-01")
+    teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
+    _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
+    target = _dated_media(connection, 2, "2012-06-01T10:00:00")
+    face_id = _add_face(connection, target, _vector(1.0, 0.0))
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+    assert match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)["assigned"] == 0
+
+    db.clear_person_rejections(connection, [face_id], people["妹"])
+
+    assert match_faces(connection, threshold=0.4, margin=0.0, metric=EUCLIDEAN)["assigned"] == 1
+
+
+def test_marking_the_same_face_twice_is_harmless(connection):
+    """同じ顔を2回押しても落ちない（主キーの衝突）。"""
+    people = _births(connection, 妹="2010-12-01")
+    media = _dated_media(connection, 1, "2012-06-01T10:00:00")
+    face_id = _add_face(connection, media, _vector(0.0, 0.0))
+
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+    db.reject_faces_for_person(connection, [face_id], people["妹"])
+
+    assert db.count_person_rejections(connection, people["妹"]) == 1

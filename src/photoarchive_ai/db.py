@@ -167,6 +167,23 @@ SCHEMA = [
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
     ")",
+    # **「この顔はこの人物ではない」という否定の記録。**
+    #
+    # `Face.assign_source='rejected'` は「**誰でもない顔**」で、どの人物にも
+    # 二度と自動で付かなくなる。それとは別に「**この人物ではない**（ほかの人
+    # かもしれない）」が要る。兄弟の赤ん坊の顔は互いによく似ており、
+    # **解除（未割当へ戻す）だけでは `match` を流すたびに同じ誤りが戻る**
+    # （実データで${PERSON_4}の 1,785 件で起きた）。
+    #
+    # 1つの顔が複数の人物を否定できるので (face_id, person_id) の対で持つ。
+    "CREATE TABLE IF NOT EXISTS FaceRejection ("
+    "face_id INTEGER NOT NULL,"
+    "person_id INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL,"
+    "PRIMARY KEY (face_id, person_id),"
+    "FOREIGN KEY (face_id) REFERENCES Face(id) ON DELETE CASCADE,"
+    "FOREIGN KEY (person_id) REFERENCES Person(id) ON DELETE CASCADE"
+    ")",
     "CREATE TABLE IF NOT EXISTS AnalysisResult ("
     "media_id INTEGER PRIMARY KEY,"
     "family_score REAL,"
@@ -1351,6 +1368,98 @@ def unassign_faces(
     )
     connection.commit()
     return affected
+
+
+def reject_faces_for_person(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    person_id: int,
+    progress: ProgressCallback = None,
+) -> int:
+    """「**この顔はこの人物ではない**」を記録し、割り当てを解除する。
+
+    `reject_faces`（＝「誰でもない顔」）との違いはここ。
+
+    | | この関数 | `reject_faces` |
+    |---|---|---|
+    | 意味 | **その人物ではない** | **誰でもない顔** |
+    | ほかの人物への自動割り当て | **ありうる** | 無い |
+    | `match` の候補 | 残る（その人物だけ外れる） | 外れる |
+
+    **解除するだけでは足りない。** `match` は手本と閾値だけで決まるので、
+    未割当に戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
+    1,785 件で起きた）。否定を残して初めて、その判断が次の `match` に効く。
+
+    **手動割り当ても解除する。** その人物だと記録しながら、その人物ではないと
+    記録するのは矛盾する。
+    """
+    if not face_ids:
+        return 0
+    now = _utc_now()
+    cursor = connection.cursor()
+    affected = _executemany_with_progress(
+        cursor,
+        "INSERT INTO FaceRejection (face_id, person_id, created_at) VALUES (?, ?, ?)"
+        " ON CONFLICT(face_id, person_id) DO NOTHING",
+        [(face_id, person_id, now) for face_id in face_ids],
+        progress,
+    )
+    # その人物に割り当たっているものだけを外す。別の人物のものには触らない。
+    cursor.executemany(
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        " assigned_at = NULL WHERE id = ? AND person_id = ?",
+        [(face_id, person_id) for face_id in face_ids],
+    )
+    connection.commit()
+    return affected
+
+
+def clear_person_rejections(
+    connection: sqlite3.Connection, face_ids: Sequence[int], person_id: int
+) -> int:
+    """「その人物ではない」の記録を取り消す。**押し間違いから戻れるように。**"""
+    if not face_ids:
+        return 0
+    cursor = connection.cursor()
+    placeholders = ",".join("?" for _ in face_ids)
+    cursor.execute(
+        f"DELETE FROM FaceRejection WHERE person_id = ? AND face_id IN ({placeholders})",
+        (person_id, *face_ids),
+    )
+    connection.commit()
+    return cursor.rowcount
+
+
+def load_person_rejections(connection: sqlite3.Connection) -> Dict[int, set]:
+    """``{face_id: {person_id, ...}}``。**`match` が候補を外すのに使う。**
+
+    否定は顔の数に対して少ない（人が1件ずつ押した結果）ので、全件読んでよい。
+    """
+    rejections: Dict[int, set] = {}
+    for row in connection.execute("SELECT face_id, person_id FROM FaceRejection"):
+        rejections.setdefault(int(row["face_id"]), set()).add(int(row["person_id"]))
+    return rejections
+
+
+def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> int:
+    """その人物について「ではない」と記録された顔の件数。"""
+    row = connection.execute(
+        "SELECT COUNT(*) FROM FaceRejection WHERE person_id = ?", (person_id,)
+    ).fetchone()
+    return int(row[0])
+
+
+def rejected_face_ids_for_person(
+    connection: sqlite3.Connection, person_id: int
+) -> List[int]:
+    """その人物について「ではない」と記録された顔の id。一覧で見直すため。"""
+    return [
+        int(row[0])
+        for row in connection.execute(
+            "SELECT face_id FROM FaceRejection WHERE person_id = ? ORDER BY face_id",
+            (person_id,),
+        )
+    ]
 
 
 def reject_faces(

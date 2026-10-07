@@ -92,6 +92,26 @@ def _persons_alive_at(
     return alive
 
 
+def _persons_not_rejected(
+    person_ids: np.ndarray, rejected_person_ids: Optional[set]
+) -> Optional[np.ndarray]:
+    """「**この顔はこの人物ではない**」と人が記録した人物を外すマスク。
+
+    `Face.assign_source='rejected'`（＝**誰でもない顔**）とは別のもの。
+    あちらは候補から顔ごと外れるが、こちらは**その人物だけ**を外す。
+    **兄弟の赤ん坊の顔は互いによく似ており**、未割当に戻すだけでは
+    `match` を流すたびに同じ誤りが戻る（実データで${PERSON_4}の 1,785 件で起きた）。
+
+    否定が無ければ ``None`` を返す（絞る必要が無い、の意味）。
+    """
+    if not rejected_person_ids:
+        return None
+    keep = np.ones(person_ids.shape[0], dtype=bool)
+    for person_id in rejected_person_ids:
+        keep[person_ids == person_id] = False
+    return keep
+
+
 def _best_match(
     distance_row: np.ndarray,
     person_ids: np.ndarray,
@@ -151,6 +171,9 @@ def match_faces(
     birth_dates = {
         int(person["id"]): person["birth_date"] for person in db.list_persons(connection)
     }
+    # **人が「この人物ではない」と押した記録。** 誕生日の絞り込みと同じく、
+    # 距離を比べる前に候補から外す。
+    rejections = db.load_person_rejections(connection)
     if summary["teachers"] == 0:
         logger.warning("No manually assigned faces; nothing to match against.")
         if progress_callback is not None:
@@ -179,6 +202,11 @@ def match_faces(
                     person_ids, birth_dates, shooting_date
                 )
             alive = alive_cache[shooting_date]
+            denied = _persons_not_rejected(
+                person_ids, rejections.get(int(ids[row_index]))
+            )
+            if denied is not None:
+                alive = alive & denied
             # **絞るのは `_best_match` に渡す前。** あとから捨てると、ありえない
             # 人物が2位に居座ってマージンを潰し、判断が保留のままになる。
             if alive.all():
