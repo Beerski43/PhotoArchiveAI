@@ -755,8 +755,13 @@ def test_faces_can_be_filtered_by_shooting_month(tmp_path: Path):
         _media_with_date(connection, "b.jpg", "h-b", "2015-08-31T23:59:59")
         _media_with_date(connection, "c.jpg", "h-c", "2015-09-01T00:00:00")
 
-        assert db.count_faces(connection, month="2015-08") == 2
-        assert db.count_faces(connection, month="2015-09") == 1
+        # 両端を含む。
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-08") == 2
+        assert db.count_faces(connection, month_from="2015-09", month_to="2015-09") == 1
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-09") == 3
+        # 片方だけでもよい。
+        assert db.count_faces(connection, month_from="2015-09") == 1
+        assert db.count_faces(connection, month_to="2015-08") == 2
         assert db.count_faces(connection) == 3, "絞らなければ全部"
     finally:
         connection.close()
@@ -776,8 +781,10 @@ def test_a_broken_shooting_date_counts_as_undated_not_as_a_month(tmp_path: Path,
 
         assert db.available_months(connection) == ["2015-08"]
         assert db.count_undated_faces(connection) == 1
-        assert db.count_faces(connection, month=db.UNDATED) == 1
-        assert db.count_faces(connection, month="2015-08") == 1
+        assert db.count_faces(connection, undated_only=True) == 1
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-08") == 1
+        # **読めない日付はどの範囲にも入らない。** 広く取っても混ざらない。
+        assert db.count_faces(connection, month_from="1900-01", month_to="2999-12") == 1
     finally:
         connection.close()
 
@@ -808,17 +815,20 @@ def test_the_month_filter_combines_with_the_other_filters(tmp_path: Path):
         person = db.add_person(connection, "Alice")
         _media_with_date(connection, "a.jpg", "h-a", "2015-08-14T10:00:00")
         _media_with_date(connection, "b.jpg", "h-b", "2015-08-20T10:00:00")
-        first = db.list_faces(connection, month="2015-08")[0]["id"]
+        first = db.list_faces(connection, month_from="2015-08", month_to="2015-08")[0]["id"]
         db.assign_faces(connection, [first], person, db.ASSIGN_MANUAL)
         connection.commit()
 
-        assert db.count_faces(connection, month="2015-08", unassigned=True) == 1
+        window = {"month_from": "2015-08", "month_to": "2015-08"}
+        assert db.count_faces(connection, unassigned=True, **window) == 1
+        assert (
+            db.count_faces(connection, assign_source=db.ASSIGN_MANUAL, **window) == 1
+        )
         assert (
             db.count_faces(
-                connection, month="2015-08", assign_source=db.ASSIGN_MANUAL
+                connection, unassigned=True, month_from="2015-09", month_to="2015-09"
             )
-            == 1
+            == 0
         )
-        assert db.count_faces(connection, month="2015-09", unassigned=True) == 0
     finally:
         connection.close()

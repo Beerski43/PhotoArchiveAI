@@ -50,12 +50,17 @@ from .dates import calculate_age, parse_date  # noqa: F401
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
-#: 撮影年月の絞り込みの「絞らない」と「撮影日時なし」。
+#: 撮影年月の範囲で「端を決めない」を表す表示。
 #:
-#: **`None` と `UNDATED` を同じ値で表さない**（`db._face_filter` の `day` と
-#: 同じ理由。CLAUDE.md §8）。表示の文字列から引く対応は `month_filter_value`。
-MONTH_ALL = "すべての年月"
-MONTH_UNDATED = "撮影日時なし"
+#: **「指定なし」と具体的な年月を同じ値で表さない。** 下限だけ・上限だけの
+#: 指定ができる必要がある（「2015-06 以降すべて」など）。
+MONTH_ANY = "指定なし"
+
+#: 撮影日時が読めない顔だけを見るときの表示。
+#:
+#: **範囲とは排他。** 読めない日付はどの範囲にも入らない（`month_expression` が
+#: NULL を返す）ので、見たいときは明示して選ぶ。
+MONTH_UNDATED = "撮影日時なしのみ"
 
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
@@ -1719,14 +1724,26 @@ class MainWindow(QWidget):
         self.filter_box.addItems([FILTER_UNASSIGNED, FILTER_AUTO, FILTER_REJECTED])
         self.filter_box.currentIndexChanged.connect(self._reset_page)
 
-        # **撮影年月で絞る。** 家族の写っていない行事（結婚式・旅行先の他人など）は
-        # 時期でまとまっているので、**その時期だけを開いてまとめて除外できる。**
-        self.month_box = QComboBox()
-        self.month_box.setToolTip(
-            "撮影年月で絞る。家族以外が多い時期をまとめて片付けるのに使う"
+        # **撮影年月の範囲で絞る。** 家族の写っていない行事（結婚式・旅行先の
+        # 他人など）は時期でまとまっているので、**その期間だけを開いてまとめて
+        # 除外できる。** 片方だけの指定（「2015-06 以降」など）もできる。
+        self.month_from_box = QComboBox()
+        self.month_to_box = QComboBox()
+        for box, tip in (
+            (self.month_from_box, "この年月から（含む）。指定なしなら下限を決めない"),
+            (self.month_to_box, "この年月まで（含む）。指定なしなら上限を決めない"),
+        ):
+            box.setToolTip(tip)
+        self.undated_only_box = QCheckBox(MONTH_UNDATED)
+        self.undated_only_box.setToolTip(
+            "撮影日時が読めない写真の顔だけを見る。\n"
+            "EXIF の無い写真と、カメラが壊れた日時を書いた写真が入る。\n"
+            "**範囲の指定とは併用できない**（読めない日付はどの範囲にも入らない）。"
         )
         self._reload_months()
-        self.month_box.currentIndexChanged.connect(self._reset_page)
+        self.month_from_box.currentIndexChanged.connect(self._month_changed)
+        self.month_to_box.currentIndexChanged.connect(self._month_changed)
+        self.undated_only_box.stateChanged.connect(self._month_changed)
 
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -1754,7 +1771,11 @@ class MainWindow(QWidget):
 
         pager = QHBoxLayout()
         pager.addWidget(self.filter_box)
-        pager.addWidget(self.month_box)
+        pager.addWidget(QLabel("撮影"))
+        pager.addWidget(self.month_from_box)
+        pager.addWidget(QLabel("〜"))
+        pager.addWidget(self.month_to_box)
+        pager.addWidget(self.undated_only_box)
         pager.addStretch(1)
         pager.addWidget(self.prev_button)
         pager.addWidget(self.page_label)
@@ -2003,26 +2024,64 @@ class MainWindow(QWidget):
         """撮影年月の選択肢を作り直す。**いま選んでいる年月は保つ。**
 
         `scan` のあとなどに月が増えるので、選び直しを強いないようにする。
+        **撮影日時が読めない顔が1件も無ければ、その選択肢は出さない。**
         """
-        keep = self.month_box.currentText() if self.month_box.count() else MONTH_ALL
-        blocked = self.month_box.blockSignals(True)
-        try:
-            self.month_box.clear()
-            self.month_box.addItem(MONTH_ALL)
-            if db.count_undated_faces(self.connection):
-                self.month_box.addItem(MONTH_UNDATED)
-            self.month_box.addItems(db.available_months(self.connection))
-            index = self.month_box.findText(keep)
-            self.month_box.setCurrentIndex(index if index >= 0 else 0)
-        finally:
-            self.month_box.blockSignals(blocked)
+        months = db.available_months(self.connection)
+        for box in (self.month_from_box, self.month_to_box):
+            keep = box.currentText() if box.count() else MONTH_ANY
+            blocked = box.blockSignals(True)
+            try:
+                box.clear()
+                box.addItem(MONTH_ANY)
+                box.addItems(months)
+                index = box.findText(keep)
+                box.setCurrentIndex(index if index >= 0 else 0)
+            finally:
+                box.blockSignals(blocked)
+        has_undated = bool(db.count_undated_faces(self.connection))
+        self.undated_only_box.setVisible(has_undated)
+        if not has_undated:
+            self.undated_only_box.setChecked(False)
 
-    def _month_filter(self):
-        """選ばれている撮影年月。``None`` は「絞らない」、`db.UNDATED` は読めない顔。"""
-        selected = self.month_box.currentText()
-        if selected == MONTH_UNDATED:
-            return db.UNDATED
-        return None if selected in ("", MONTH_ALL) else selected
+    def _month_changed(self) -> None:
+        """範囲を触ったとき。**上下が逆転したまま空の一覧を見せない。**
+
+        下限を上限より後ろにしたら、上限を押し上げる（その逆も同じ）。
+        黙って0件にすると、絞り込みが壊れているように見える。
+        """
+        if not self.undated_only_box.isChecked():
+            start, end = self._month_texts()
+            if start != MONTH_ANY and end != MONTH_ANY and start > end:
+                mover = (
+                    self.month_to_box
+                    if self.sender() is self.month_from_box
+                    else self.month_from_box
+                )
+                target = start if mover is self.month_to_box else end
+                blocked = mover.blockSignals(True)
+                try:
+                    mover.setCurrentIndex(mover.findText(target))
+                finally:
+                    mover.blockSignals(blocked)
+        # 「撮影日時なしのみ」は範囲と排他。見た目でも分かるようにする。
+        enabled = not self.undated_only_box.isChecked()
+        self.month_from_box.setEnabled(enabled)
+        self.month_to_box.setEnabled(enabled)
+        self._reset_page()
+
+    def _month_texts(self):
+        return (self.month_from_box.currentText(), self.month_to_box.currentText())
+
+    def _month_range(self):
+        """``(開始, 終了, 読めない顔だけか)``。端の「指定なし」は ``None``。"""
+        if self.undated_only_box.isChecked():
+            return None, None, True
+        start, end = self._month_texts()
+        return (
+            None if start in ("", MONTH_ANY) else start,
+            None if end in ("", MONTH_ANY) else end,
+            False,
+        )
 
     def _filter_arguments(self) -> dict:
         selected = self.filter_box.currentText()
@@ -2039,9 +2098,14 @@ class MainWindow(QWidget):
             # **変換は `event_filters` に1つだけ。** `None` を渡すと
             # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
             filters.update(event_filters(*self.event))
-        month = self._month_filter()
-        if month is not None:
-            filters["month"] = month
+        start, end, undated_only = self._month_range()
+        if undated_only:
+            filters["undated_only"] = True
+        else:
+            if start is not None:
+                filters["month_from"] = start
+            if end is not None:
+                filters["month_to"] = end
         return filters
 
     def _sync_unassign_button(self) -> None:

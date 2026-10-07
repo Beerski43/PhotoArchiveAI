@@ -1104,23 +1104,78 @@ def _seed_months(connection, dates):
     connection.commit()
 
 
-def test_the_unassigned_list_can_be_filtered_by_shooting_month(tmp_path):
-    """**家族以外は時期でまとまっている。** その時期だけ開いてまとめて除外できる。"""
+def _set_months(window, start=None, end=None, undated=False):
+    """撮影年月の範囲を選ぶ。``None`` は「指定なし」。"""
+    window.undated_only_box.setChecked(undated)
+    for box, value in ((window.month_from_box, start), (window.month_to_box, end)):
+        index = box.findText(value if value else photoarchive_gui.MONTH_ANY)
+        assert index >= 0, f"年月に {value} が無い"
+        box.setCurrentIndex(index)
+
+
+def test_the_unassigned_list_can_be_filtered_by_a_month_range(tmp_path):
+    """**いつからいつまでで絞れること。** 両端を含む。
+
+    家族の写っていない写真は時期でまとまっている（結婚式・旅行先の他人）ので、
+    その期間だけを開いてまとめて除外できる。
+    """
     database = tmp_path / "gui.db"
     connection = db.ensure_database(str(database))
-    _seed_months(connection, ["2015-08-14T10:00:00", "2015-08-20T10:00:00",
+    _seed_months(connection, ["2015-07-01T10:00:00", "2015-08-14T10:00:00",
+                              "2015-09-20T10:00:00", "2020-01-02T10:00:00"])
+    connection.close()
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        assert _window_total(window) == 4, "初期状態は絞らない"
+
+        _set_months(window, "2015-07", "2015-09")
+
+        assert _window_total(window) == 3, "両端を含む"
+        assert window._filter_arguments()["month_from"] == "2015-07"
+        assert window._filter_arguments()["month_to"] == "2015-09"
+        assert window.face_list.count() == 3, "一覧にも効いていること"
+    finally:
+        window.connection.close()
+
+
+def test_only_one_end_of_the_range_can_be_given(tmp_path):
+    """**片方だけの指定ができること。**「2015-08 以降すべて」など。"""
+    database = tmp_path / "gui.db"
+    connection = db.ensure_database(str(database))
+    _seed_months(connection, ["2015-07-01T10:00:00", "2015-08-14T10:00:00",
                               "2020-01-02T10:00:00"])
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        assert window.month_box.currentText() == photoarchive_gui.MONTH_ALL
-        assert _window_total(window) == 3
-
-        window.month_box.setCurrentIndex(window.month_box.findText("2015-08"))
-
+        _set_months(window, start="2015-08")
         assert _window_total(window) == 2
-        assert window._filter_arguments()["month"] == "2015-08"
-        assert window.face_list.count() == 2, "一覧にも効いていること"
+        assert "month_to" not in window._filter_arguments()
+
+        _set_months(window, end="2015-07")
+        assert _window_total(window) == 1
+        assert "month_from" not in window._filter_arguments()
+    finally:
+        window.connection.close()
+
+
+def test_the_range_is_kept_in_order(tmp_path):
+    """**上下を逆にしたまま空の一覧を見せない。**
+
+    黙って0件にすると、絞り込みが壊れているように見える。
+    """
+    database = tmp_path / "gui.db"
+    connection = db.ensure_database(str(database))
+    _seed_months(connection, ["2015-07-01T10:00:00", "2020-01-02T10:00:00"])
+    connection.close()
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        _set_months(window, "2015-07", "2015-07")
+
+        # 下限を上限より後ろにする → 上限が押し上げられる
+        window.month_from_box.setCurrentIndex(window.month_from_box.findText("2020-01"))
+
+        assert window.month_to_box.currentText() == "2020-01"
+        assert _window_total(window) == 1
     finally:
         window.connection.close()
 
@@ -1130,7 +1185,6 @@ def test_the_month_list_holds_only_months_that_have_faces(tmp_path):
     database = tmp_path / "gui.db"
     connection = db.ensure_database(str(database))
     _seed_months(connection, ["2015-08-14T10:00:00", "2020-01-02T10:00:00"])
-    # 顔の無い写真。月の一覧に出てはいけない。
     media_id = db.save_media(
         connection,
         {
@@ -1149,36 +1203,44 @@ def test_the_month_list_holds_only_months_that_have_faces(tmp_path):
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        months = [window.month_box.itemText(i) for i in range(window.month_box.count())]
-        assert months == [photoarchive_gui.MONTH_ALL, "2020-01", "2015-08"]
+        months = [
+            window.month_from_box.itemText(i)
+            for i in range(window.month_from_box.count())
+        ]
+        assert months == [photoarchive_gui.MONTH_ANY, "2020-01", "2015-08"]
     finally:
         window.connection.close()
 
 
 def test_undated_photos_can_be_picked_out_on_their_own(tmp_path):
-    """**撮影日時なしを別枠で選べる。** 実データの約16%がここに入る。"""
+    """**撮影日時なしは範囲では出せない。** 別に選べること。"""
     database = tmp_path / "gui.db"
     connection = db.ensure_database(str(database))
     _seed_months(connection, ["2015-08-14T10:00:00", "TTTT-TT-TTTTT:TT:TT", None])
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        months = [window.month_box.itemText(i) for i in range(window.month_box.count())]
-        assert months == [photoarchive_gui.MONTH_ALL, photoarchive_gui.MONTH_UNDATED,
-                          "2015-08"]
+        months = [
+            window.month_from_box.itemText(i)
+            for i in range(window.month_from_box.count())
+        ]
+        assert months == [photoarchive_gui.MONTH_ANY, "2015-08"]
         assert "TTTT-TT" not in months, "壊れた日付を月として並べない"
 
-        window.month_box.setCurrentIndex(
-            window.month_box.findText(photoarchive_gui.MONTH_UNDATED)
-        )
+        # 広い範囲を指定しても、読めない顔は入らない。
+        _set_months(window, "2015-08", "2015-08")
+        assert _window_total(window) == 1
 
-        assert window._filter_arguments()["month"] is db.UNDATED
+        _set_months(window, undated=True)
+
+        assert window._filter_arguments()["undated_only"] is True
         assert _window_total(window) == 2
+        assert not window.month_from_box.isEnabled(), "範囲とは排他だと見た目で分かる"
     finally:
         window.connection.close()
 
 
-def test_the_month_list_has_no_undated_entry_when_every_photo_is_dated(tmp_path):
+def test_the_undated_choice_is_hidden_when_every_photo_is_dated(tmp_path):
     """無い選択肢は出さない。"""
     database = tmp_path / "gui.db"
     connection = db.ensure_database(str(database))
@@ -1186,8 +1248,7 @@ def test_the_month_list_has_no_undated_entry_when_every_photo_is_dated(tmp_path)
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        months = [window.month_box.itemText(i) for i in range(window.month_box.count())]
-        assert photoarchive_gui.MONTH_UNDATED not in months
+        assert not window.undated_only_box.isVisible()
     finally:
         window.connection.close()
 
@@ -1205,7 +1266,7 @@ def test_choosing_a_month_goes_back_to_the_first_page(tmp_path, monkeypatch):
         window._next_page()
         assert window.page == 1
 
-        window.month_box.setCurrentIndex(window.month_box.findText("2015-08"))
+        _set_months(window, "2015-08", "2015-08")
 
         assert window.page == 0
     finally:
