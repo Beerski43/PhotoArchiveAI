@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from . import db, embedding
+from .dates import calculate_age
 from .scoring import distance_to_similarity
 
 logger = logging.getLogger("photoarchive.matcher")
@@ -53,6 +54,42 @@ def _distances(
     ArcFace はコサイン）で、写しを持つとモデルを替えたときに片方が古くなる。
     """
     return embedding.pairwise_distances(candidates, teachers, metric)
+
+
+def _persons_alive_at(
+    person_ids: np.ndarray,
+    birth_dates: Dict[int, Optional[str]],
+    shooting_date: Optional[str],
+) -> np.ndarray:
+    """その写真の時点で**生まれている**人物だけを残す真偽マスク。
+
+    **「その人が生まれる前の写真には写れない」は動かせない事実**なので、
+    候補から外してよい唯一の属性。**上限は設けない**（「老けすぎ」では弾かない）。
+    そちらは判断が要る。
+
+    **外した結果はマージンにも効く。** `_best_match` は2位の人物との距離差で
+    採否を決めるので、**渡す前に外さないと、ありえない人物が「2位」に居座って
+    判断を保留させる。** 実データでは、ここを先に外すことで
+    **未割当だった 457 件が正しく${PERSON_3}へ付いた。**
+
+    判定しないのは次の2つ。**分からないものを弾かない。**
+
+    - **撮影日時が読めない**（実データの約16%。壊れた値も含む）
+    - **誕生日が未登録**（任意の項目）
+
+    読めるかどうかの判断は `dates.calculate_age` 越しに
+    `dates.parse_date` へ預ける。**ここに日付の判定を書かない**
+    （`0000-00-00` と `TTTT-TT-TTTTT:TT:TT` でこのリポジトリは2度壊れている。
+    CLAUDE.md §8）。
+    """
+    alive = np.ones(person_ids.shape[0], dtype=bool)
+    if shooting_date is None:
+        return alive
+    for person_id in set(person_ids.tolist()):
+        age = calculate_age(birth_dates.get(int(person_id)), shooting_date)
+        if age is not None and age < 0:
+            alive[person_ids == person_id] = False
+    return alive
 
 
 def _best_match(
@@ -96,6 +133,9 @@ def match_faces(
         "candidates": 0,
         "assigned": 0,
         "unassigned": 0,
+        # 誕生日で候補が1人も残らなかった顔。**未割当の内訳**で、
+        # 「似た顔が無い」のではなく「その写真にいられる人が居ない」。
+        "no_candidate": 0,
         "reset": 0,
         "per_person": {},
         "histogram": {},
@@ -107,6 +147,10 @@ def match_faces(
 
     teachers, person_ids = db.load_manual_embeddings(connection)
     summary["teachers"] = int(teachers.shape[0])
+    # **誕生日は候補を絞る材料。** 登録されていない人物は絞られない。
+    birth_dates = {
+        int(person["id"]): person["birth_date"] for person in db.list_persons(connection)
+    }
     if summary["teachers"] == 0:
         logger.warning("No manually assigned faces; nothing to match against.")
         if progress_callback is not None:
@@ -120,16 +164,41 @@ def match_faces(
     total = db.count_match_candidates(connection, include_auto=include_auto)
     updates = []
     processed = 0
+    # **マスクは撮影日時で使い回す。** 同じ写真に何件も顔があり、人物ごとの
+    # 年齢計算を顔の数だけ繰り返すと、日付の解析が候補数×人物数になる。
+    alive_cache: Dict[Any, np.ndarray] = {}
     for ids, candidates in db.iter_unassigned_embeddings(
         connection, CHUNK_SIZE, include_auto=include_auto
     ):
+        shooting_dates = db.shooting_dates_by_face(connection, ids.tolist())
         distances = _distances(candidates, teachers, metric)
         for row_index in range(distances.shape[0]):
-            person_id, distance = _best_match(
-                distances[row_index], person_ids, threshold, margin
-            )
+            shooting_date = shooting_dates.get(int(ids[row_index]))
+            if shooting_date not in alive_cache:
+                alive_cache[shooting_date] = _persons_alive_at(
+                    person_ids, birth_dates, shooting_date
+                )
+            alive = alive_cache[shooting_date]
+            # **絞るのは `_best_match` に渡す前。** あとから捨てると、ありえない
+            # 人物が2位に居座ってマージンを潰し、判断が保留のままになる。
+            if alive.all():
+                person_id, distance = _best_match(
+                    distances[row_index], person_ids, threshold, margin
+                )
+            elif not alive.any():
+                # 手本のある人物が全員、この写真の時点でまだ生まれていない。
+                person_id, distance = None, float("inf")
+            else:
+                person_id, distance = _best_match(
+                    distances[row_index][alive], person_ids[alive], threshold, margin
+                )
             # **刻みの上限は尺度に合わせる。** ユークリッド(dlib)は実質 1.5 まで、
             # コサインは 2.0 まで。固定すると遠い顔が1つの桶に潰れて分布が読めない。
+            # 候補が1人も残らなかった顔は、距離の分布に混ぜない（距離が無い）。
+            if not np.isfinite(distance):
+                summary["unassigned"] += 1
+                summary["no_candidate"] += 1
+                continue
             capped = min(distance, HISTOGRAM_MAX)
             bucket = round(capped - (capped % 0.1), 1)
             summary["histogram"][bucket] = summary["histogram"].get(bucket, 0) + 1
