@@ -40,6 +40,7 @@ SELECT 'manual', COUNT(*) FROM Face WHERE assign_source='manual';"
 | 6 | `selection.py` の `family_only` の決着 | 未着手（手順4が終わったので着手できる） |
 | 7 | `Person.name` の UNIQUE 制約の要否 | 未着手 |
 | 8 | `data/photoarchive.db.bak-pre28`（739MB）を消してよいか判断する | **判断待ち**（手順1が終わったので判断できる） |
+| 9 | **撮影日時の無い写真の年月を、フォルダ名から起こす** | 未着手（**#65**。着手の指示待ち） |
 
 **この表の番号が Phase 3 の正。** ROADMAP と親 Issue #35 はここを指す
 （以前は3つの文書が別々の番号で同じ手順を指しており、「手順4」が
@@ -71,6 +72,31 @@ SELECT 'manual', COUNT(*) FROM Face WHERE assign_source='manual';"
 「外は照合できない」から「費用（2乗）と、人が目で検算できる単位」へ置き換えた。
 詳細は [../history/details/2026-10-04-event-clustering-measured.md](../history/details/2026-10-04-event-clustering-measured.md)、
 仕様は §10.4.1。
+
+## 手順9 — 撮影日時をフォルダ名から起こす（#65・未着手）
+
+**撮影日時が読めないと、4つの機能が同時に効かなくなる。**
+誕生日による候補の絞り込み・計算年齢の表示・年齢の絞り込み・行事（フォルダ×日）の束ね。
+
+実データで**顔のある写真 3,746 件**（顔にして 6,190 件）が該当し（2026-10-08 時点）、
+その **96.6% が「4桁年の下に、日付の形のフォルダ」**という並びになっている
+（2026-10-08 時点）。
+
+```bash
+# 数え直す
+sqlite3 data/photoarchive.db "
+SELECT COUNT(*) FROM Media m WHERE m.id IN (SELECT DISTINCT media_id FROM Face)
+  AND (m.shooting_date IS NULL
+       OR m.shooting_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]*'
+       OR m.shooting_date LIKE '0000%');"
+```
+
+**4桁フォルダ（`2012/1210/`）は `YYMM`。** EXIF が読める写真400件で照合して
+400/400 一致、`MMDD` は0件だった。**規約は推測せず、この形で検算して決める。**
+
+**`Media.shooting_date` に書き戻さないこと。** EXIF から読めた値と推測した値を
+同じ列に混ぜると区別できなくなる（`Face.age` と計算年齢を分けているのと同じ理由）。
+詳細と落とし穴は #65。
 
 ## 手順4 — 取りこぼし率の測り方（実装済み）
 
