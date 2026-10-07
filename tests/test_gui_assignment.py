@@ -1271,3 +1271,124 @@ def test_choosing_a_month_goes_back_to_the_first_page(tmp_path, monkeypatch):
         assert window.page == 0
     finally:
         window.connection.close()
+
+
+def test_a_face_made_nobody_s_disappears_from_the_not_this_person_list(window, monkeypatch):
+    """**「誰でもない顔」を押したのに一覧から消えない。**
+
+    `誰でもない顔` は `Face.assign_source` を変えるが、`FaceRejection` の行は
+    残る。あの一覧は `FaceRejection` を引いているので、押しても消えなかった。
+
+    `rejected` の顔は `match` の候補から丸ごと外れるので、**「この人物ではない」の
+    記録はもう何の仕事もしていない。** 一覧に残す意味がない。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    assert dialog.face_list.count() == len(face_ids)
+
+    monkeypatch.setattr(
+        photoarchive_gui.QMessageBox,
+        "question",
+        lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.Yes,
+    )
+    dialog.face_list.selectAll()
+    dialog._reject_selected()
+
+    assert dialog.face_list.count() == 0, "押した顔が一覧から消えること"
+    assert dialog.total == 0
+    assert "0 件" in dialog.page_label.text(), "件数も合っていること"
+
+
+def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeypatch):
+    """**記録そのものは消さない。** 除外を取り消したら「この人物ではない」は戻る。
+
+    消してしまうと、「誰でもない顔」を取り消した瞬間に `match` がまたその人物へ
+    付けてしまう。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    person_id = dialog.person["id"]
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+    monkeypatch.setattr(
+        photoarchive_gui.QMessageBox,
+        "question",
+        lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.Yes,
+    )
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    dialog.face_list.selectAll()
+    dialog._reject_selected()
+
+    assert db.count_person_rejections(connection, person_id) == len(face_ids)
+
+    # 除外を取り消すと、また一覧に戻る。
+    db.unassign_faces(connection, face_ids)
+    dialog.reload()
+
+    assert dialog.face_list.count() == len(face_ids)
+
+
+def test_other_buttons_also_clear_the_face_from_the_not_this_person_list(window):
+    """**一覧から消える条件を取り違えない。**
+
+    `誰でもない顔` 以外のボタンを、この一覧で押したときにどうなるか。
+    「この人物ではない」の記録が効いているあいだは残る、が筋。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    person_id = dialog.person["id"]
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+
+    # 取り消したら消える（記録そのものが無くなるため）。
+    dialog.face_list.selectAll()
+    dialog._undo_rejection_selected()
+
+    assert dialog.face_list.count() == 0
+    assert db.count_person_rejections(connection, person_id) == 0
+
+
+def test_a_face_assigned_to_someone_else_stays_in_the_list(window):
+    """**別の人物に付いた顔は残る。** 「この人物ではない」はまだ効いているため。
+
+    兄弟の顔はこうなる。${PERSON_4}ではないと記録したうえで、${PERSON_3}に付く。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+    other = db.add_person(connection, "きょうだい", birth_date="2009-02-01")
+    db.assign_faces(connection, face_ids, other, db.ASSIGN_MANUAL)
+    connection.commit()
+
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+
+    assert dialog.face_list.count() == len(face_ids)
