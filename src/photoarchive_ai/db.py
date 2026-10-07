@@ -1518,7 +1518,11 @@ def load_person_rejections(connection: sqlite3.Connection) -> Dict[int, set]:
 
 
 def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> int:
-    """その人物について「ではない」と記録された顔の件数。"""
+    """その人物について「ではない」と記録された顔の件数。
+
+    **「誰でもない顔」にした顔も数える。** 記録は残っているため。
+    一覧に出る件数とは一致しないことがある（`rejected_face_ids_for_person`）。
+    """
     row = connection.execute(
         "SELECT COUNT(*) FROM FaceRejection WHERE person_id = ?", (person_id,)
     ).fetchone()
@@ -1528,12 +1532,22 @@ def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> i
 def rejected_face_ids_for_person(
     connection: sqlite3.Connection, person_id: int
 ) -> List[int]:
-    """その人物について「ではない」と記録された顔の id。一覧で見直すため。"""
+    """その人物について「ではない」と記録された顔の id。一覧で見直すため。
+
+    **「誰でもない顔」にした顔は外す。** あちらは `match` の候補から顔ごと
+    外れるので、**「この人物ではない」の記録はもう何の仕事もしていない。**
+    一覧に残すと、`誰でもない顔` を押したのにサムネイルが消えない。
+
+    **記録そのものは消さない。** 消すと、除外を取り消した瞬間に `match` が
+    またその人物へ付けてしまう。除外を取り消せば、この一覧にも戻る。
+    """
     return [
         int(row[0])
         for row in connection.execute(
-            "SELECT face_id FROM FaceRejection WHERE person_id = ? ORDER BY face_id",
-            (person_id,),
+            "SELECT r.face_id FROM FaceRejection r JOIN Face f ON f.id = r.face_id"
+            " WHERE r.person_id = ? AND (f.assign_source IS NULL OR f.assign_source <> ?)"
+            " ORDER BY r.face_id",
+            (person_id, ASSIGN_REJECTED),
         )
     ]
 
