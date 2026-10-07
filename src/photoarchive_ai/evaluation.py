@@ -36,6 +36,7 @@ from .matcher import (
     _best_match,
     _distances,
     _persons_alive_at,
+    _persons_not_rejected,
 )
 
 #: 既定で試す閾値。**0.45 が現在の既定値**（`embedding.ACTIVE.threshold`）。
@@ -132,6 +133,8 @@ def evaluate_match(
     }
     shooting_dates = db.shooting_dates_by_face(connection, faces.face_ids.tolist())
     alive_cache: Dict[Any, np.ndarray] = {}
+    # 「この人物ではない」の記録も `match` と同じく効かせる。
+    rejections = db.load_person_rejections(connection)
 
     for start in range(0, total, EVAL_CHUNK_SIZE):
         stop = min(start + EVAL_CHUNK_SIZE, total)
@@ -164,6 +167,11 @@ def evaluate_match(
                     person_ids, birth_dates, shooting_date
                 )
             alive = alive_cache[shooting_date]
+            denied = _persons_not_rejected(
+                person_ids, rejections.get(int(faces.face_ids[index]))
+            )
+            if denied is not None:
+                alive = alive & denied
             for threshold in thresholds:
                 if alive.all():
                     best_person, best_distance = _best_match(

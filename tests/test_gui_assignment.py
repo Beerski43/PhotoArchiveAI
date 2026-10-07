@@ -737,9 +737,14 @@ def test_confirm_goes_back_to_blocked_after_the_list_is_rebuilt(window):
 
 
 def _select_source(dialog, label):
-    dialog.source_box.setCurrentIndex(
-        [name for name, _ in photoarchive_gui.SOURCE_FILTERS].index(label)
-    )
+    """種別を選ぶ。**コンボボックスを直に引く。**
+
+    「この人物ではない」は `SOURCE_FILTERS` には無い（`assign_source` の値では
+    ないため）ので、定数の一覧から引くと取りこぼす。
+    """
+    index = dialog.source_box.findText(label)
+    assert index >= 0, f"種別に {label} が無い"
+    dialog.source_box.setCurrentIndex(index)
 
 
 def test_the_list_can_be_filtered_down_to_the_automatic_faces(window):
@@ -943,3 +948,124 @@ def test_clearing_the_age_filter_shows_everything_again(window):
     dialog.max_age.setValue(-1)
 
     assert dialog.total == len(face_ids)
+
+
+def test_not_this_person_records_the_rejection_and_clears_the_assignment(window):
+    """**除外は2種類ある。** こちらは「その人物ではない」。
+
+    実データでは、ひよりの自動割り当てを見直して解除した 1,785 件が
+    `match` を流すと戻ってくる状態だった。**解除では判断が残らない。**
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    person_id = dialog.person["id"]
+    dialog.face_list.selectAll()
+
+    dialog._reject_for_person_selected()
+
+    assert db.count_person_rejections(connection, person_id) == len(face_ids)
+    rows = {row["id"]: row for row in db.list_faces(connection)}
+    assert all(rows[f]["person_id"] is None for f in face_ids), "割り当ては外れる"
+    assert all(rows[f]["assign_source"] is None for f in face_ids), "除外にはしない"
+
+
+def test_nobody_s_face_is_a_different_button_and_asks_first(window, monkeypatch):
+    """**「誰でもない顔」はどの人物にも付かなくなる。** 取り返しがつきにくいので確認する。"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    asked = {}
+
+    def fake_question(parent, title, text, *args, **kwargs):
+        asked["text"] = text
+        return photoarchive_gui.QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(photoarchive_gui.QMessageBox, "question", fake_question)
+
+    dialog._reject_selected()
+
+    assert "どの人物にも自動で付かなくなります" in asked["text"]
+    assert "この人物ではない" in asked["text"], "もう一方のボタンを案内すること"
+    rows = {row["id"]: row for row in db.list_faces(connection)}
+    assert all(rows[f]["assign_source"] == db.ASSIGN_REJECTED for f in face_ids)
+    # こちらは否定の記録ではない。
+    assert db.count_person_rejections(connection, dialog.person["id"]) == 0
+
+
+def test_saying_no_to_the_confirmation_changes_nothing(window, monkeypatch):
+    """確認で「いいえ」なら何も起きないこと。"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    monkeypatch.setattr(
+        photoarchive_gui.QMessageBox,
+        "question",
+        lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.No,
+    )
+
+    dialog._reject_selected()
+
+    rows = {row["id"]: row for row in db.list_faces(connection)}
+    assert all(rows[f]["assign_source"] == db.ASSIGN_AUTO for f in face_ids)
+
+
+def test_the_rejections_can_be_listed_and_undone(window):
+    """**押し間違いから戻れること。** 種別から見直せる。"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    person_id = dialog.person["id"]
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+
+    assert dialog.total == len(face_ids)
+    assert dialog.face_list.count() == len(face_ids)
+    assert "この人物ではない" in dialog.page_label.text()
+
+    dialog.face_list.selectAll()
+    dialog._undo_rejection_selected()
+
+    assert db.count_person_rejections(connection, person_id) == 0
+
+
+def test_the_rejection_list_still_shows_the_calculated_age(window):
+    """見直すときも年齢が要る。**年齢が誤りを見分ける手がかりだから。**"""
+    connection = window.connection
+    dialog, _ = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    dialog._reject_for_person_selected()
+
+    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+
+    assert all("(6歳)" in label for label in _labels(dialog)), _labels(dialog)

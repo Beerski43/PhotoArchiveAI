@@ -660,6 +660,11 @@ SOURCE_FILTERS = (
     ("自動のみ", db.ASSIGN_AUTO),
 )
 
+#: 種別の選択肢に足す「この人物ではない」。**`assign_source` の値ではない**
+#: （`FaceRejection` 表に持つ否定）ので、`SOURCE_FILTERS` とは別に持つ。
+#: 押し間違いを見直して取り消すための入口。
+NOT_THIS_PERSON_FILTER = "この人物ではない"
+
 #: 確定ボタンのツールチップ。**押せるときと押せないときの両方を1か所に置く。**
 #: 文言を2か所に書くと、片方だけ直したときに説明と振る舞いが食い違う。
 CONFIRM_TOOLTIP_READY = "自動割当の顔を手動割当に昇格し、match の手本にする"
@@ -684,6 +689,7 @@ class RegisteredFacesDialog(QDialog):
         self.source_box = QComboBox()
         for label, _ in SOURCE_FILTERS:
             self.source_box.addItem(label)
+        self.source_box.addItem(NOT_THIS_PERSON_FILTER)
         self.source_box.currentIndexChanged.connect(self._reset_page)
 
         # **最小値を -1 にして「指定なし」に割り当てる。**
@@ -724,12 +730,28 @@ class RegisteredFacesDialog(QDialog):
 
         self.confirm_button = QPushButton("選択した顔を確定")
         self.unassign_button = QPushButton("割り当てを解除")
+        # **除外は2種類ある。** 混ぜると取り返しがつかない。
+        self.not_this_person_button = QPushButton("この人物ではない")
+        self.not_this_person_button.setToolTip(
+            "この人物ではない、と記録する。\n"
+            "**ほかの人物には自動で付きうる。**\n"
+            "解除と違い、match を流し直しても戻ってこない。"
+        )
+        self.reject_button = QPushButton("誰でもない顔")
+        self.reject_button.setToolTip(
+            "家族の誰でもない顔として除外する。\n"
+            "**どの人物にも自動で付かなくなる。**"
+        )
         self.age_button = QPushButton("年齢を設定")
         self.confirm_button.setToolTip(CONFIRM_TOOLTIP_READY)
         self.confirm_button.clicked.connect(self._confirm_selected)
         # **確定は自動割り当てにしか効かない。** 選び直すたびに押せるかを見直す。
         self.face_list.itemSelectionChanged.connect(self._update_confirm_button)
         self.unassign_button.clicked.connect(self._unassign_selected)
+        self.not_this_person_button.clicked.connect(self._reject_for_person_selected)
+        self.undo_rejection_button = QPushButton("「この人物ではない」を取り消す")
+        self.undo_rejection_button.clicked.connect(self._undo_rejection_selected)
+        self.reject_button.clicked.connect(self._reject_selected)
         self.age_button.clicked.connect(self._set_age_selected)
 
         # 割り当て済みの顔も数百件になりうる。ページ単位で読まないと、
@@ -765,6 +787,9 @@ class RegisteredFacesDialog(QDialog):
         actions = QHBoxLayout()
         actions.addWidget(self.confirm_button)
         actions.addWidget(self.unassign_button)
+        actions.addWidget(self.not_this_person_button)
+        actions.addWidget(self.undo_rejection_button)
+        actions.addWidget(self.reject_button)
         actions.addWidget(self.age_button)
         actions.addStretch(1)
 
@@ -787,7 +812,18 @@ class RegisteredFacesDialog(QDialog):
 
     def _source_filter(self) -> Optional[str]:
         """選ばれている種別。「すべて」なら ``None``（＝種別で絞らない）。"""
-        return SOURCE_FILTERS[self.source_box.currentIndex()][1]
+        index = self.source_box.currentIndex()
+        if index >= len(SOURCE_FILTERS):
+            return None
+        return SOURCE_FILTERS[index][1]
+
+    def _showing_rejections(self) -> bool:
+        """「この人物ではない」の一覧を見ているか。
+
+        **これだけは `assign_source` で絞れない**（否定は `FaceRejection` 表）ので、
+        読み出しの経路を分ける。
+        """
+        return self.source_box.currentText() == NOT_THIS_PERSON_FILTER
 
     def _reset_page(self) -> None:
         self.page = 0
@@ -804,6 +840,9 @@ class RegisteredFacesDialog(QDialog):
             self.reload()
 
     def reload(self) -> None:
+        if self._showing_rejections():
+            self._reload_rejections()
+            return
         minimum, maximum = self._age_range()
         source = self._source_filter()
         # **誕生日を渡すと、画面に出ている計算年齢でも絞れる。**
@@ -857,6 +896,51 @@ class RegisteredFacesDialog(QDialog):
         # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
         # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで呼ぶ。
         self._update_confirm_button()
+
+    def _reload_rejections(self) -> None:
+        """「この人物ではない」と記録した顔の一覧。**取り消せるようにするため。**
+
+        この一覧の顔は**その人物に割り当たっていない**ので、人物での絞り込みが
+        使えない。顔 id を直に引く。
+        """
+        face_ids = db.rejected_face_ids_for_person(self.connection, self.person["id"])
+        self.total = len(face_ids)
+        pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page = min(self.page, pages - 1)
+        start = self.page * PAGE_SIZE
+        records = db.faces_by_ids(
+            self.connection, face_ids[start : start + PAGE_SIZE], with_thumbnail=True
+        )
+        shooting_dates = db.shooting_dates_by_face(
+            self.connection, [record["id"] for record in records]
+        )
+        birth_date = self.person.get("birth_date")
+        age_labels = {
+            record["id"]: face_age_label(
+                record, birth_date, shooting_dates.get(record["id"])
+            )
+            for record in records
+        }
+        _fill_face_list(self.face_list, records, age_labels)
+        self.page_label.setText(
+            f"{self.page + 1} / {pages} ページ（「この人物ではない」 {self.total} 件）"
+        )
+        self.prev_button.setEnabled(self.page > 0)
+        self.next_button.setEnabled(self.page + 1 < pages)
+        self._update_confirm_button()
+
+    def _undo_rejection_selected(self) -> None:
+        """「この人物ではない」を取り消す。**押し間違いから戻れるように。**"""
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        self._run_with_progress(
+            "「この人物ではない」を取り消しています",
+            face_ids,
+            lambda progress: db.clear_person_rejections(
+                self.connection, face_ids, self.person["id"]
+            ),
+        )
 
     def _selected_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
@@ -920,6 +1004,51 @@ class RegisteredFacesDialog(QDialog):
             "割り当てを解除しています",
             face_ids,
             lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
+        )
+
+    def _reject_for_person_selected(self) -> None:
+        """**この人物ではない**、と記録する。ほかの人物には付きうる。
+
+        **「割り当てを解除」では足りない。** `match` は手本と閾値だけで決まるので、
+        未割当へ戻しただけだと**流すたびに同じ誤りが戻る**（実データでひよりの
+        1,785 件で起きた）。
+        """
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        self._run_with_progress(
+            "この人物ではない、と記録しています",
+            face_ids,
+            lambda progress: db.reject_faces_for_person(
+                self.connection, face_ids, self.person["id"], progress=progress
+            ),
+        )
+
+    def _reject_selected(self) -> None:
+        """**家族の誰でもない顔**として除外する。どの人物にも自動で付かなくなる。
+
+        **押し間違えると、その顔は `match` の候補から丸ごと外れる。**
+        別の人物のものかもしれない顔には「この人物ではない」のほうを使う。
+        """
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "誰でもない顔として除外",
+                f"{len(face_ids)} 件を『家族の誰でもない顔』として除外します。\n\n"
+                "**どの人物にも自動で付かなくなります。**\n"
+                "別の人物のものかもしれない顔は『この人物ではない』を使ってください。\n\n"
+                "進めますか？",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        self._run_with_progress(
+            "除外しています",
+            face_ids,
+            lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
         )
 
     def _set_age_selected(self) -> None:
