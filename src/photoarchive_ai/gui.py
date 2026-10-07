@@ -18,6 +18,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -685,17 +686,34 @@ class RegisteredFacesDialog(QDialog):
             self.source_box.addItem(label)
         self.source_box.currentIndexChanged.connect(self._reset_page)
 
+        # **最小値を -1 にして「指定なし」に割り当てる。**
+        # `FaceAgeDialog` と同じ理由で、**0 を特別扱いにすると 0歳で絞れなくなる**
+        # （QSpinBox の `specialValueText` は最小値のときに出る）。
+        # 絞り込み側だけ 0 を「指定なし」にしていたため、0歳の顔だけを見ることが
+        # できなかった。
         self.min_age = QSpinBox()
-        self.min_age.setRange(0, 150)
+        self.min_age.setRange(-1, 150)
         self.min_age.setSpecialValueText("指定なし")
+        self.min_age.setValue(-1)
         self.max_age = QSpinBox()
-        self.max_age.setRange(0, 150)
+        self.max_age.setRange(-1, 150)
         self.max_age.setSpecialValueText("指定なし")
-        self.max_age.setValue(150)
+        self.max_age.setValue(-1)
         # 年齢の絞り込みも「指定なし」の文字が入っている。年齢の入力と
         # 同じ理由で、触ったときに打鍵で置き換えられるようにする。
         for spin in (self.min_age, self.max_age):
             spin.focusInEvent = _make_select_all_on_focus(spin)
+
+        # **年齢を出せない顔をどうするか。** 既定は「含めない」。
+        # 含めると、範囲を指定しても年齢不明の顔が常に混ざり、**絞り込みが
+        # ほとんど効かない**（実データで割り当て済み 22,511 件のうち 1,931 件。
+        # かつては `Face.age` の無い顔を全部残しており、入っているのは 126 件
+        # だけだったので、絞り込みが何もしないのと同じだった）。
+        self.include_unknown_age = QCheckBox("年齢不明も含める")
+        self.include_unknown_age.setToolTip(
+            "誕生日が未登録か、写真に撮影日時が無くて年齢を出せない顔も残す"
+        )
+        self.include_unknown_age.stateChanged.connect(self._reset_page)
 
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -739,6 +757,7 @@ class RegisteredFacesDialog(QDialog):
         age_filter.addWidget(QLabel("歳から"))
         age_filter.addWidget(self.max_age)
         age_filter.addWidget(QLabel("歳"))
+        age_filter.addWidget(self.include_unknown_age)
         age_filter.addStretch(1)
         self.min_age.valueChanged.connect(self._reset_page)
         self.max_age.valueChanged.connect(self._reset_page)
@@ -757,7 +776,14 @@ class RegisteredFacesDialog(QDialog):
         self.reload()
 
     def _age_range(self):
-        return (self.min_age.value() or None, self.max_age.value() or None)
+        """絞り込みの下限と上限。「指定なし」は ``None``。
+
+        **`value() or None` と書かない。** 0 が偽なので、**0歳が「指定なし」に
+        化ける**（`FaceAgeDialog.age` と同じ罠）。
+        """
+        minimum = self.min_age.value()
+        maximum = self.max_age.value()
+        return (None if minimum < 0 else minimum, None if maximum < 0 else maximum)
 
     def _source_filter(self) -> Optional[str]:
         """選ばれている種別。「すべて」なら ``None``（＝種別で絞らない）。"""
@@ -780,12 +806,19 @@ class RegisteredFacesDialog(QDialog):
     def reload(self) -> None:
         minimum, maximum = self._age_range()
         source = self._source_filter()
+        # **誕生日を渡すと、画面に出ている計算年齢でも絞れる。**
+        # `Face.age` は `match` が書かないので、これが無いと自動割り当ての顔は
+        # 1件も年齢で絞れない。
+        birth_date = self.person.get("birth_date")
+        include_unknown = self.include_unknown_age.isChecked()
         self.total = db.count_faces(
             self.connection,
             assign_source=source,
             person_id=self.person["id"],
             min_age=minimum,
             max_age=maximum,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown,
         )
         pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
         self.page = min(self.page, pages - 1)
@@ -798,6 +831,8 @@ class RegisteredFacesDialog(QDialog):
             offset=self.page * PAGE_SIZE,
             min_age=minimum,
             max_age=maximum,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown,
             # **年齢の若い順。** 成長の順に並ぶので、年齢の入れ間違いや、
             # 別人が混ざっているのに気づきやすい。未設定は最後。
             order=db.ORDER_AGE,
