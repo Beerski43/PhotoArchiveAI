@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPainter, QPixmap
@@ -648,6 +648,26 @@ class FaceAgeDialog(QDialog):
         return None if value < 0 else value
 
 
+#: 「割り当て済みの顔」の種別の絞り込み。**(表示, `assign_source` に渡す値)**。
+#:
+#: `None` は「種別で絞らない」。**`db.ASSIGN_MANUAL` と同じ意味に使わない**
+#: （`_face_filter` の `day` と同じで、「絞らない」と「この値だけ」を同じ値で
+#: 表すと取り違える。CLAUDE.md §8）。
+SOURCE_FILTERS = (
+    ("すべて", None),
+    ("確定済みのみ", db.ASSIGN_MANUAL),
+    ("自動のみ", db.ASSIGN_AUTO),
+)
+
+#: 確定ボタンのツールチップ。**押せるときと押せないときの両方を1か所に置く。**
+#: 文言を2か所に書くと、片方だけ直したときに説明と振る舞いが食い違う。
+CONFIRM_TOOLTIP_READY = "自動割当の顔を手動割当に昇格し、match の手本にする"
+CONFIRM_TOOLTIP_BLOCKED = (
+    "自動割り当ての顔を選んでいるときだけ押せる"
+    "（手本はすでに手動割り当てなので、確定しても何も変わらない）"
+)
+
+
 class RegisteredFacesDialog(QDialog):
     """人物に割り当て済みの顔を確認し、確定・解除する。"""
 
@@ -657,6 +677,13 @@ class RegisteredFacesDialog(QDialog):
         self.person = person
         self.setWindowTitle(f"割り当て済みの顔 - {person['name']}")
         self.resize(820, 600)
+
+        # **確定済みと自動を見分けて絞れるようにする。** 自動割り当てを
+        # 見直すときは自動だけを、手本を見直すときは確定済みだけを見たい。
+        self.source_box = QComboBox()
+        for label, _ in SOURCE_FILTERS:
+            self.source_box.addItem(label)
+        self.source_box.currentIndexChanged.connect(self._reset_page)
 
         self.min_age = QSpinBox()
         self.min_age.setRange(0, 150)
@@ -680,8 +707,10 @@ class RegisteredFacesDialog(QDialog):
         self.confirm_button = QPushButton("選択した顔を確定")
         self.unassign_button = QPushButton("割り当てを解除")
         self.age_button = QPushButton("年齢を設定")
-        self.confirm_button.setToolTip("自動割当の顔を手動割当に昇格し、match の手本にする")
+        self.confirm_button.setToolTip(CONFIRM_TOOLTIP_READY)
         self.confirm_button.clicked.connect(self._confirm_selected)
+        # **確定は自動割り当てにしか効かない。** 選び直すたびに押せるかを見直す。
+        self.face_list.itemSelectionChanged.connect(self._update_confirm_button)
         self.unassign_button.clicked.connect(self._unassign_selected)
         self.age_button.clicked.connect(self._set_age_selected)
 
@@ -702,6 +731,9 @@ class RegisteredFacesDialog(QDialog):
         pager.addWidget(self.next_button)
 
         age_filter = QHBoxLayout()
+        age_filter.addWidget(QLabel("種別"))
+        age_filter.addWidget(self.source_box)
+        age_filter.addSpacing(16)
         age_filter.addWidget(QLabel("年齢"))
         age_filter.addWidget(self.min_age)
         age_filter.addWidget(QLabel("歳から"))
@@ -727,6 +759,10 @@ class RegisteredFacesDialog(QDialog):
     def _age_range(self):
         return (self.min_age.value() or None, self.max_age.value() or None)
 
+    def _source_filter(self) -> Optional[str]:
+        """選ばれている種別。「すべて」なら ``None``（＝種別で絞らない）。"""
+        return SOURCE_FILTERS[self.source_box.currentIndex()][1]
+
     def _reset_page(self) -> None:
         self.page = 0
         self.reload()
@@ -743,8 +779,10 @@ class RegisteredFacesDialog(QDialog):
 
     def reload(self) -> None:
         minimum, maximum = self._age_range()
+        source = self._source_filter()
         self.total = db.count_faces(
             self.connection,
+            assign_source=source,
             person_id=self.person["id"],
             min_age=minimum,
             max_age=maximum,
@@ -753,6 +791,7 @@ class RegisteredFacesDialog(QDialog):
         self.page = min(self.page, pages - 1)
         records = db.list_faces(
             self.connection,
+            assign_source=source,
             person_id=self.person["id"],
             with_thumbnail=True,
             limit=PAGE_SIZE,
@@ -763,13 +802,49 @@ class RegisteredFacesDialog(QDialog):
             # 別人が混ざっているのに気づきやすい。未設定は最後。
             order=db.ORDER_AGE,
         )
-        _fill_face_list(self.face_list, records)
+        # **自動割り当ての顔は `Face.age` が未設定**（`match` は年齢を書かない）。
+        # 人物の誕生日と撮影日時から計算して出す。これが「その割り当てが
+        # 正しいか」を人が見るときのいちばんの手がかりになる。
+        shooting_dates = db.shooting_dates_by_face(
+            self.connection, [record["id"] for record in records]
+        )
+        birth_date = self.person.get("birth_date")
+        age_labels = {
+            record["id"]: face_age_label(
+                record, birth_date, shooting_dates.get(record["id"])
+            )
+            for record in records
+        }
+        _fill_face_list(self.face_list, records, age_labels)
         self.page_label.setText(f"{self.page + 1} / {pages} ページ（全 {self.total} 件）")
         self.prev_button.setEnabled(self.page > 0)
         self.next_button.setEnabled(self.page + 1 < pages)
+        # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
+        # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで呼ぶ。
+        self._update_confirm_button()
 
     def _selected_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
+
+    def _update_confirm_button(self) -> None:
+        """**確定は、自動割り当てを選んでいるときだけ押せる。**
+
+        確定は `assign_source` を `'auto'` → `'manual'` に上げる操作なので、
+        **すでに手本の顔に押しても `assigned_at` が今の時刻に書き換わるだけ**で、
+        意味のある変化が起きない。押せてしまうと「何かが起きた」と誤解する。
+
+        何も選んでいないときも押せない（自動の顔が1件も入っていないため）。
+        """
+        has_auto = any(
+            item.data(Qt.UserRole).get("assign_source") == db.ASSIGN_AUTO
+            for item in self.face_list.selectedItems()
+        )
+        self.confirm_button.setEnabled(has_auto)
+        # **押せない理由を出す。** 灰色のボタンだけでは、壊れているのか
+        # 選び方が足りないのかが分からない。
+        self.confirm_button.setToolTip(
+            CONFIRM_TOOLTIP_READY if has_auto else CONFIRM_TOOLTIP_BLOCKED
+        )
 
     def _run_with_progress(self, label: str, face_ids: List[int], work) -> None:
         """件数の分かる作業を、砂時計と進み具合つきで流す。
@@ -834,7 +909,34 @@ class RegisteredFacesDialog(QDialog):
         self._run_with_progress("年齢を設定しています", face_ids, work)
 
 
-def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
+def face_age_label(
+    record: dict, birth_date: Optional[str], shooting_date: Optional[str]
+) -> Optional[str]:
+    """一覧の1件に出す年齢。**確定した年齢と、計算しただけの年齢を見分ける。**
+
+    `Face.age` は人が確かめて入れた値で、**`match` は書かない。** そのため
+    自動割り当ての顔はすべて未設定で、年齢が1件も出なかった。
+    **自動割り当てが正しいかを人が見るとき、撮影時の年齢がいちばん効く手がかり**
+    なので、未設定なら人物の誕生日と撮影日時から計算して出す。
+
+    **計算した値は括弧で囲む。** 確定した年齢と同じ見た目にすると、
+    どちらが人の確かめた値か分からなくなる（Issue #48 の判断2と同じ理由で、
+    計算値を `Face.age` に書き戻すこともしない）。
+
+    撮影日より前に生まれていなければ「誕生前」。**これは誤割り当ての強い
+    手がかり**なので、負の数でも落とさずに出す。
+    """
+    if record.get("age") is not None:
+        return format_age(record["age"])
+    computed = format_age(calculate_age(birth_date, shooting_date))
+    return None if computed is None else f"({computed})"
+
+
+def _fill_face_list(
+    widget: QListWidget,
+    records: List[dict],
+    age_labels: Optional[Dict[int, Optional[str]]] = None,
+) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
     `clear()` は項目を1つずつ外すので、そのたびに `itemSelectionChanged` が
@@ -847,12 +949,16 @@ def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
     """
     blocked = widget.blockSignals(True)
     try:
-        _repopulate_face_list(widget, records)
+        _repopulate_face_list(widget, records, age_labels)
     finally:
         widget.blockSignals(blocked)
 
 
-def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
+def _repopulate_face_list(
+    widget: QListWidget,
+    records: List[dict],
+    age_labels: Optional[Dict[int, Optional[str]]] = None,
+) -> None:
     widget.clear()
     for record in records:
         pixmap = QPixmap()
@@ -863,8 +969,16 @@ def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
         label = str(record["id"])
         if record.get("assign_source") == db.ASSIGN_AUTO:
             label = f"{label} (自動 {record.get('assign_score') or 0:.0f})"
-        if record.get("age") is not None:
-            label = f"{label} {record['age']}歳"
+        # **年齢の出し方は呼び出し側が決める。** 人物が決まっている画面だけが
+        # 誕生日を持っているので、計算した年齢を出せるのもそこだけ。
+        if age_labels is not None:
+            age_text = age_labels.get(record["id"])
+        elif record.get("age") is not None:
+            age_text = format_age(record["age"])
+        else:
+            age_text = None
+        if age_text:
+            label = f"{label} {age_text}"
         item.setText(label)
         item.setData(Qt.UserRole, record)
         widget.addItem(item)

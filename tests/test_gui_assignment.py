@@ -564,3 +564,246 @@ def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
     window._unassign_selected()
 
     assert reads == []
+
+
+
+
+def _assigned_person_with_faces(connection, window, *, birth_date, shooting_date, source):
+    """1人ぶんの顔を、割り当て元（手本か自動か）を指定して用意する。"""
+    if shooting_date is None:
+        connection.execute("UPDATE Media SET shooting_date = NULL")
+    else:
+        connection.execute("UPDATE Media SET shooting_date = ?", (shooting_date,))
+    person_id = db.add_person(connection, "${PERSON_2}", birth_date=birth_date)
+    face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
+    db.assign_faces(connection, face_ids, person_id, source)
+    connection.commit()
+    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
+    return photoarchive_gui.RegisteredFacesDialog(window, connection, person), face_ids
+
+
+def _labels(dialog):
+    return [dialog.face_list.item(i).text() for i in range(dialog.face_list.count())]
+
+
+def test_an_automatic_face_shows_the_age_calculated_from_the_birth_date(window):
+    """**自動割り当ての顔は `Face.age` が未設定**なので、今まで年齢が出なかった。
+
+    `match` は年齢を書かない（実データで年齢が入っているのは手本の126件だけ）。
+    **自動割り当てが正しいかを人が見るとき、撮影時の年齢がいちばん効く手がかり。**
+    """
+    dialog, _ = _assigned_person_with_faces(
+        window.connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+
+    # 2011-05-03 生まれが 2017-12-16 に写っていれば6歳。
+    assert all("(6歳)" in label for label in _labels(dialog)), _labels(dialog)
+
+
+def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
+    """**計算値と確定値を同じ見た目にしない。** どちらが人の確かめた値か分からなくなる。
+
+    括弧つきが計算値。`Face.age` に書き戻さないのも同じ理由（Issue #48 の判断2）。
+    """
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    db.set_face_age(connection, face_ids[0], 6)
+    connection.commit()
+    dialog.reload()
+
+    labels = _labels(dialog)
+    # **年齢の部分だけで見分ける。** ラベルには "(自動 0)" も入るので、
+    # 括弧の有無をラベル全体で見てはいけない。
+    assert any(label.endswith(" 6歳") for label in labels), labels
+    assert any(label.endswith(" (6歳)") for label in labels), labels
+    # **計算しただけの年齢を DB に書き戻していないこと。**
+    unset = {row["id"] for row in db.list_faces(connection) if row["age"] is None}
+    assert unset == set(face_ids[1:])
+
+
+def test_a_face_taken_before_the_person_was_born_says_so(window):
+    """**「誕生前」は誤割り当てのいちばん強い手がかり。** 負の数でも落とさない。"""
+    dialog, _ = _assigned_person_with_faces(
+        window.connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2009-12-28T15:19:49",
+        source=db.ASSIGN_AUTO,
+    )
+
+    assert all("(誕生前)" in label for label in _labels(dialog)), _labels(dialog)
+
+
+def test_no_age_is_shown_when_the_shooting_date_is_missing(window):
+    """**撮影日時が無ければ年齢は出せない。** 実データの 15.8% が該当する。"""
+    dialog, _ = _assigned_person_with_faces(
+        window.connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date=None,
+        source=db.ASSIGN_AUTO,
+    )
+
+    assert all("歳" not in label for label in _labels(dialog)), _labels(dialog)
+
+
+def test_no_age_is_shown_when_the_person_has_no_birth_date(window):
+    """誕生日が未登録なら計算できない。"""
+    dialog, _ = _assigned_person_with_faces(
+        window.connection,
+        window,
+        birth_date=None,
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+
+    assert all("歳" not in label for label in _labels(dialog)), _labels(dialog)
+
+
+def test_confirm_is_blocked_until_an_automatic_face_is_selected(window):
+    """**確定は自動割り当てにしか効かない。**
+
+    手本に押しても `assigned_at` が書き換わるだけで意味のある変化が起きない。
+    押せてしまうと「何かが起きた」と誤解する。
+    """
+    dialog, _ = _assigned_person_with_faces(
+        window.connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+
+    assert not dialog.confirm_button.isEnabled(), "何も選んでいないので押せない"
+
+    dialog.face_list.selectAll()
+
+    assert not dialog.confirm_button.isEnabled(), "手本だけなので押せない"
+    assert "自動割り当ての顔を選んでいるときだけ" in dialog.confirm_button.toolTip()
+
+
+def test_confirm_becomes_available_when_the_selection_holds_an_automatic_face(window):
+    """自動が1件でも混ざっていれば押せる。**混在した選択で押せなくしない。**"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+    db.assign_faces(connection, face_ids[:1], dialog.person["id"], db.ASSIGN_AUTO)
+    connection.commit()
+    dialog.reload()
+
+    dialog.face_list.selectAll()
+
+    assert dialog.confirm_button.isEnabled()
+    assert dialog.confirm_button.toolTip() == photoarchive_gui.CONFIRM_TOOLTIP_READY
+
+
+def test_confirm_goes_back_to_blocked_after_the_list_is_rebuilt(window):
+    """確定したあと、一覧を作り直すと選択が消える。**押せたままにしない。**
+
+    `_fill_face_list` は作り直すあいだ信号を止めるので
+    `itemSelectionChanged` が出ない。明示的に見直す必要がある。
+    """
+    connection = window.connection
+    dialog, _ = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_AUTO,
+    )
+    dialog.face_list.selectAll()
+    assert dialog.confirm_button.isEnabled()
+
+    dialog._confirm_selected()
+
+    assert dialog.face_list.selectedItems() == []
+    assert not dialog.confirm_button.isEnabled()
+    assert {row["assign_source"] for row in db.list_faces(connection)} == {db.ASSIGN_MANUAL}
+
+
+def _select_source(dialog, label):
+    dialog.source_box.setCurrentIndex(
+        [name for name, _ in photoarchive_gui.SOURCE_FILTERS].index(label)
+    )
+
+
+def test_the_list_can_be_filtered_down_to_the_automatic_faces(window):
+    """**自動割り当てを見直すときは、自動だけを見たい。**"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+    db.assign_faces(connection, face_ids[:2], dialog.person["id"], db.ASSIGN_AUTO)
+    connection.commit()
+    dialog.reload()
+    assert dialog.total == len(face_ids), "「すべて」では全部見える"
+
+    _select_source(dialog, "自動のみ")
+
+    assert dialog.total == 2
+    assert all("(自動" in label for label in _labels(dialog)), _labels(dialog)
+
+
+def test_the_list_can_be_filtered_down_to_the_confirmed_faces(window):
+    """**手本を見直すときは、確定済みだけを見たい。**"""
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+    db.assign_faces(connection, face_ids[:2], dialog.person["id"], db.ASSIGN_AUTO)
+    connection.commit()
+    dialog.reload()
+
+    _select_source(dialog, "確定済みのみ")
+
+    assert dialog.total == len(face_ids) - 2
+    assert all("(自動" not in label for label in _labels(dialog)), _labels(dialog)
+    # 確定済みだけを選んでいるので、確定ボタンは押せない。
+    dialog.face_list.selectAll()
+    assert not dialog.confirm_button.isEnabled()
+
+
+def test_changing_the_source_filter_returns_to_the_first_page(window, monkeypatch):
+    """年齢の絞り込みと同じ。**絞ったのに後ろのページのままだと空に見える。**"""
+    monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
+    connection = window.connection
+    dialog, face_ids = _assigned_person_with_faces(
+        connection,
+        window,
+        birth_date="2011-05-03",
+        shooting_date="2017-12-16T18:46:32",
+        source=db.ASSIGN_MANUAL,
+    )
+    db.assign_faces(connection, face_ids[:1], dialog.person["id"], db.ASSIGN_AUTO)
+    connection.commit()
+    dialog.reload()
+    dialog._next_page()
+    assert dialog.page == 1
+
+    _select_source(dialog, "自動のみ")
+
+    assert dialog.page == 0
+    assert dialog.total == 1
