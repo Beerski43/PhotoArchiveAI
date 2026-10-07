@@ -755,7 +755,9 @@ def count_faces(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
-    month: Any = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -768,7 +770,9 @@ def count_faces(
         day=day,
         birth_date=birth_date,
         include_unknown_age=include_unknown_age,
-        month=month,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -1093,12 +1097,15 @@ def _face_filter(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
-    month: Any = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
-    ``month`` は撮影年月（``"2015-08"``）。``UNDATED`` で「撮影日時が読めない顔」。
-    ``None`` は「年月で絞らない」。**`day` と同じく、同じ値で表さない。**
+    ``month_from`` / ``month_to`` は撮影年月の範囲（``"2015-08"`` 形式・**両端を含む**）。
+    片方だけでもよい。``undated_only`` は「**撮影日時が読めない顔だけ**」で、
+    範囲とは**排他**（読めない顔はどの範囲にも入らないため）。
 
     年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
     実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、
@@ -1139,11 +1146,18 @@ def _face_filter(
     elif day is not None:
         media_conditions.append(f"{day_expression()} = ?")
         params.append(day)
-    if month is UNDATED:
+    if undated_only:
         media_conditions.append(f"{month_expression()} IS NULL")
-    elif month is not None:
-        media_conditions.append(f"{month_expression()} = ?")
-        params.append(month)
+    else:
+        # **読めない撮影日時は、どの範囲にも入らない。** `month_expression` が
+        # NULL を返し、比較の結果も NULL になって行が落ちる。
+        # 見たいときは `undated_only` で明示する。
+        if month_from is not None:
+            media_conditions.append(f"{month_expression()} >= ?")
+            params.append(month_from)
+        if month_to is not None:
+            media_conditions.append(f"{month_expression()} <= ?")
+            params.append(month_to)
     if media_conditions:
         clauses.append(
             f"{prefix}media_id IN"
@@ -1198,7 +1212,9 @@ def list_faces(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
-    month: Any = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1231,7 +1247,9 @@ def list_faces(
             day,
             birth_date,
             include_unknown_age,
-            month,
+            month_from,
+            month_to,
+            undated_only,
         )
     else:
         where, params = _face_filter(
@@ -1244,7 +1262,9 @@ def list_faces(
             day=day,
             birth_date=birth_date,
             include_unknown_age=include_unknown_age,
-            month=month,
+            month_from=month_from,
+            month_to=month_to,
+            undated_only=undated_only,
         )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
@@ -1272,7 +1292,9 @@ def _shooting_date_query(
     day: Any = None,
     birth_date: Optional[str] = None,
     include_unknown_age: bool = True,
-    month: Any = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -1300,7 +1322,9 @@ def _shooting_date_query(
         day=day,
         birth_date=birth_date,
         include_unknown_age=include_unknown_age,
-        month=month,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
