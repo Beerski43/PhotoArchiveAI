@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from photoarchive_ai import db
 
 
@@ -589,5 +591,244 @@ def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path
         assert db.reject_faces(connection, face_ids, progress=noop) == count
         # 知らせない場合も同じ
         assert db.unassign_faces(connection, face_ids) == count
+    finally:
+        connection.close()
+
+
+def test_face_paths_come_back_keyed_by_face_id(tmp_path: Path):
+    """`evaluate` が誤りになった顔を名指しするのに使う。
+
+    **顔 id だけ出しても人は見に行けない。** パスが要る。
+    `faces_by_ids` は `Face` の列しか返さないので、別に用意している。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        first = db.save_media(connection, _media_record("2025/01/a.jpg", "hash-a"))
+        second = db.save_media(connection, _media_record("2025/01/b.jpg", "hash-b"))
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for media_id in (first, second)
+        ]
+        connection.commit()
+
+        assert db.face_paths(connection, face_ids) == {
+            face_ids[0]: "2025/01/a.jpg",
+            face_ids[1]: "2025/01/b.jpg",
+        }
+        # 何も渡さなければ読みに行かない。
+        assert db.face_paths(connection, []) == {}
+        # 無い id は黙って落ちる。呼び出し側が「見つからない」を書き分けられる。
+        assert db.face_paths(connection, [face_ids[0], 999999]) == {
+            face_ids[0]: "2025/01/a.jpg"
+        }
+    finally:
+        connection.close()
+
+
+def test_face_paths_reads_more_faces_than_the_sqlite_variable_limit(tmp_path: Path):
+    """`IN (...)` の変数の上限を越えても落ちないこと。
+
+    手本が増えれば名指しする顔も増える。塊に割るのを外すと、ある日突然
+    `too many SQL variables` で落ちる。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        media_id = db.save_media(connection, _media_record())
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for _ in range(1200)
+        ]
+        connection.commit()
+
+        found = db.face_paths(connection, face_ids)
+
+        assert len(found) == 1200
+        assert set(found) == set(face_ids)
+    finally:
+        connection.close()
+
+
+def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
+    """一覧の1件ずつに年齢を出すには、**どの顔の撮影日時かが引ける**必要がある。
+
+    `shooting_dates_for_faces` は昇順に並べた値だけを返すので、まとめて年齢を
+    入れるときの範囲表示には足りるが、1件ずつの表示には使えない。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        dated = db.save_media(connection, _media_record("2025/01/a.jpg", "hash-a"))
+        undated = db.save_media(
+            connection,
+            {**_media_record("2025/01/b.jpg", "hash-b"), "shooting_date": None},
+        )
+        face_ids = [
+            db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+            )
+            for media_id in (dated, undated)
+        ]
+        connection.commit()
+
+        found = db.shooting_dates_by_face(connection, face_ids)
+
+        assert found[face_ids[0]] == "2025-01-01"
+        # **撮影日時の無い顔を落とさない。** 落とすと、呼び出し側から
+        # 「分からない」が消えて、別の写真の年齢が黙って入る。
+        assert face_ids[1] in found
+        assert found[face_ids[1]] is None
+        assert db.shooting_dates_by_face(connection, []) == {}
+    finally:
+        connection.close()
+
+
+def test_resetting_auto_assignments_leaves_the_manual_ones_alone(tmp_path: Path):
+    """**自動だけを消す。** 手本と除外は GUI で積み上げた判断なので触らない。"""
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        person = db.add_person(connection, "Alice")
+        media_id = db.save_media(connection, _media_record())
+        kept = {}
+        for source in (db.ASSIGN_MANUAL, db.ASSIGN_AUTO, db.ASSIGN_REJECTED):
+            kept[source] = db.add_face(
+                connection,
+                media_id=media_id,
+                bbox=(0, 10, 10, 0),
+                embedding=None,
+                embed_version=db.embedding_model.ACTIVE.version,
+                person_id=person if source != db.ASSIGN_REJECTED else None,
+                assign_source=source,
+            )
+        connection.commit()
+
+        removed = db.reset_auto_assignments(connection)
+
+        assert removed == 1
+        rows = {row["id"]: row for row in db.list_faces(connection)}
+        assert rows[kept[db.ASSIGN_MANUAL]]["assign_source"] == db.ASSIGN_MANUAL
+        assert rows[kept[db.ASSIGN_REJECTED]]["assign_source"] == db.ASSIGN_REJECTED
+        assert rows[kept[db.ASSIGN_AUTO]]["assign_source"] is None
+    finally:
+        connection.close()
+
+
+def _media_with_date(connection, path, file_hash, shooting_date):
+    media_id = db.save_media(connection, _media_record(path, file_hash))
+    connection.execute(
+        "UPDATE Media SET shooting_date = ? WHERE id = ?", (shooting_date, media_id)
+    )
+    db.add_face(
+        connection,
+        media_id=media_id,
+        bbox=(0, 10, 10, 0),
+        embedding=None,
+        embed_version=db.embedding_model.ACTIVE.version,
+    )
+    connection.commit()
+    return media_id
+
+
+def test_faces_can_be_filtered_by_shooting_month(tmp_path: Path):
+    """**撮影年月で絞れること。**
+
+    家族の写っていない行事（結婚式や旅行先の他人）は時期でまとまっているので、
+    その時期だけを開いてまとめて除外できる。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        _media_with_date(connection, "a.jpg", "h-a", "2015-08-14T10:00:00")
+        _media_with_date(connection, "b.jpg", "h-b", "2015-08-31T23:59:59")
+        _media_with_date(connection, "c.jpg", "h-c", "2015-09-01T00:00:00")
+
+        # 両端を含む。
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-08") == 2
+        assert db.count_faces(connection, month_from="2015-09", month_to="2015-09") == 1
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-09") == 3
+        # 片方だけでもよい。
+        assert db.count_faces(connection, month_from="2015-09") == 1
+        assert db.count_faces(connection, month_to="2015-08") == 2
+        assert db.count_faces(connection) == 3, "絞らなければ全部"
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("broken", ["0000-00-00T00:00:00", "TTTT-TT-TTTTT:TT:TT", None])
+def test_a_broken_shooting_date_counts_as_undated_not_as_a_month(tmp_path: Path, broken):
+    """**壊れた日付を月として扱わない。**
+
+    `substr(shooting_date, 1, 7)` と書くと「TTTT-TT」という月が一覧に並ぶ。
+    判断は `SHOOTING_DATE_SORT_KEY` に1つだけある。
+    """
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        _media_with_date(connection, "a.jpg", "h-a", "2015-08-14T10:00:00")
+        _media_with_date(connection, "b.jpg", "h-b", broken)
+
+        assert db.available_months(connection) == ["2015-08"]
+        assert db.count_undated_faces(connection) == 1
+        assert db.count_faces(connection, undated_only=True) == 1
+        assert db.count_faces(connection, month_from="2015-08", month_to="2015-08") == 1
+        # **読めない日付はどの範囲にも入らない。** 広く取っても混ざらない。
+        assert db.count_faces(connection, month_from="1900-01", month_to="2999-12") == 1
+    finally:
+        connection.close()
+
+
+def test_available_months_come_back_newest_first_and_only_where_faces_are(tmp_path: Path):
+    """**顔のある写真の月だけ。** 選んでも1件も出ない月を並べない。"""
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        _media_with_date(connection, "a.jpg", "h-a", "2015-08-14T10:00:00")
+        _media_with_date(connection, "b.jpg", "h-b", "2020-01-02T10:00:00")
+        # 顔の無い写真。月の一覧に出てはいけない。
+        faceless = db.save_media(connection, _media_record("c.jpg", "h-c"))
+        connection.execute(
+            "UPDATE Media SET shooting_date = '2018-06-01T10:00:00' WHERE id = ?",
+            (faceless,),
+        )
+        connection.commit()
+
+        assert db.available_months(connection) == ["2020-01", "2015-08"]
+    finally:
+        connection.close()
+
+
+def test_the_month_filter_combines_with_the_other_filters(tmp_path: Path):
+    """ほかの絞り込みと併用できること。"""
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    try:
+        person = db.add_person(connection, "Alice")
+        _media_with_date(connection, "a.jpg", "h-a", "2015-08-14T10:00:00")
+        _media_with_date(connection, "b.jpg", "h-b", "2015-08-20T10:00:00")
+        first = db.list_faces(connection, month_from="2015-08", month_to="2015-08")[0]["id"]
+        db.assign_faces(connection, [first], person, db.ASSIGN_MANUAL)
+        connection.commit()
+
+        window = {"month_from": "2015-08", "month_to": "2015-08"}
+        assert db.count_faces(connection, unassigned=True, **window) == 1
+        assert (
+            db.count_faces(connection, assign_source=db.ASSIGN_MANUAL, **window) == 1
+        )
+        assert (
+            db.count_faces(
+                connection, unassigned=True, month_from="2015-09", month_to="2015-09"
+            )
+            == 0
+        )
     finally:
         connection.close()

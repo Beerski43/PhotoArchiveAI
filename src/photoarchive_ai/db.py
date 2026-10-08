@@ -33,6 +33,7 @@ import numpy as np
 # いくつもあり（`encode_embedding` / `add_face`）、同名だと関数の中で
 # module が見えなくなる。将来そこでモデルの記述を使おうとして踏む。
 from . import embedding as embedding_model
+from .dates import parse_date
 
 SCHEMA_VERSION = 4
 
@@ -103,6 +104,17 @@ def day_expression(column: str = "shooting_date") -> str:
     return f"substr({SHOOTING_DATE_SORT_KEY.replace('shooting_date', column)}, 1, 10)"
 
 
+def month_expression(column: str = "shooting_date") -> str:
+    """撮影日時の**年月**（``YYYY-MM``）を取り出す式。読めなければ NULL。
+
+    `day_expression` と同じく、読めるかどうかの判断は
+    `SHOOTING_DATE_SORT_KEY` に1つだけある。**`substr(shooting_date, 1, 7)` と
+    書かないこと** — `TTTT-TT-TTTTT:TT:TT` のような壊れた値は長さでは弾けず、
+    「2026-10」の隣に「TTTT-TT」という月が並ぶ。
+    """
+    return f"substr({SHOOTING_DATE_SORT_KEY.replace('shooting_date', column)}, 1, 7)"
+
+
 class _Undated:
     """「撮影日時が読めない顔だけ」を表す印。``day`` に渡す。
 
@@ -165,6 +177,23 @@ SCHEMA = [
     "created_at TEXT NOT NULL,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
+    ")",
+    # **「この顔はこの人物ではない」という否定の記録。**
+    #
+    # `Face.assign_source='rejected'` は「**誰でもない顔**」で、どの人物にも
+    # 二度と自動で付かなくなる。それとは別に「**この人物ではない**（ほかの人
+    # かもしれない）」が要る。兄弟の赤ん坊の顔は互いによく似ており、
+    # **解除（未割当へ戻す）だけでは `match` を流すたびに同じ誤りが戻る**
+    # （実データで${PERSON_4}の 1,785 件で起きた）。
+    #
+    # 1つの顔が複数の人物を否定できるので (face_id, person_id) の対で持つ。
+    "CREATE TABLE IF NOT EXISTS FaceRejection ("
+    "face_id INTEGER NOT NULL,"
+    "person_id INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL,"
+    "PRIMARY KEY (face_id, person_id),"
+    "FOREIGN KEY (face_id) REFERENCES Face(id) ON DELETE CASCADE,"
+    "FOREIGN KEY (person_id) REFERENCES Person(id) ON DELETE CASCADE"
     ")",
     "CREATE TABLE IF NOT EXISTS AnalysisResult ("
     "media_id INTEGER PRIMARY KEY,"
@@ -724,10 +753,26 @@ def count_faces(
     max_age: Optional[int] = None,
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
-        assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+        assign_source,
+        person_id,
+        unassigned,
+        min_age,
+        max_age,
+        folder=folder,
+        day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -789,6 +834,90 @@ def faces_by_ids(
     # **渡した順を守る。** 品質スコアの高い順に渡されるので、束の先頭が
     # 代表の顔になる。SQL の `IN` は並びを保証しない。
     return [found[face_id] for face_id in face_ids if face_id in found]
+
+
+def available_months(connection: sqlite3.Connection) -> List[str]:
+    """顔のある写真の撮影年月（``YYYY-MM``）を新しい順に。読めないものは入らない。
+
+    **顔のある写真だけを数える。** 一覧の絞り込みに使うので、選んでも1件も
+    出ない月を並べても仕方がない。
+    """
+    return [
+        row[0]
+        for row in connection.execute(
+            f"SELECT DISTINCT {month_expression()} AS m FROM Media"
+            " WHERE id IN (SELECT DISTINCT media_id FROM Face)"
+            " AND m IS NOT NULL ORDER BY m DESC"
+        )
+    ]
+
+
+def count_undated_faces(connection: sqlite3.Connection) -> int:
+    """撮影日時が読めない写真に写っている顔の件数。"""
+    row = connection.execute(
+        f"SELECT COUNT(*) FROM Face WHERE media_id IN"
+        f" (SELECT id FROM Media WHERE {month_expression()} IS NULL)"
+    ).fetchone()
+    return int(row[0])
+
+
+def face_paths(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Dict[int, str]:
+    """顔 id から、その顔が写っているファイルのパスを引く。
+
+    **サムネイルも特徴量も読まない。** 要るのは「人がその顔を見に行くための
+    手がかり」だけで、`evaluate` が誤りになった顔を名指しするのに使う。
+    `faces_by_ids` と分けているのは、あちらが `Face` の列しか返さないため。
+
+    `IN (...)` の変数の数に上限があるので、内部で塊に割って読む。
+    見つからない id は結果に入らない（呼び出し側が無い場合を書き分けられる）。
+    """
+    if not face_ids:
+        return {}
+    found: Dict[int, str] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            "SELECT f.id AS face_id, m.path AS path FROM Face f"
+            f" JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            found[int(row["face_id"])] = row["path"]
+    return found
+
+
+def shooting_dates_by_face(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Dict[int, Optional[str]]:
+    """顔 id ごとの撮影日時を、**id で引ける形**で返す。
+
+    `shooting_dates_for_faces` との違いは引けること。あちらは昇順に並べた値だけを
+    返すので「まとめて年齢を入れる範囲」を見せるのには足りるが、**一覧の1件ずつに
+    年齢を出すにはどの顔のものか分からないと使えない。**
+
+    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
+    そのまま返す）。**判断は `dates.parse_date` の1か所に持たせてある**
+    （CLAUDE.md §8）。撮影日時が無い顔は ``None`` が入る。
+    """
+    if not face_ids:
+        return {}
+    found: Dict[int, Optional[str]] = {}
+    chunk = 500
+    for start in range(0, len(face_ids), chunk):
+        part = list(face_ids[start : start + chunk])
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            "SELECT f.id AS face_id, m.shooting_date AS shooting_date FROM Face f"
+            f" JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
+            tuple(part),
+        ).fetchall()
+        for row in rows:
+            found[int(row["face_id"])] = row["shooting_date"]
+    return found
 
 
 def load_faces_for_clustering(
@@ -870,6 +999,93 @@ def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
+    """誕生日を ``years`` 年ずらした日付（``YYYY-MM-DD``）。読めなければ ``None``。
+
+    **年齢の範囲を「撮影日の範囲」に読み替えるために使う。** こうすると
+    **SQL 側に年齢の計算を持ち込まずに済む**（日付の判断は `dates.parse_date` の
+    1か所にある。CLAUDE.md §8）。
+
+    2月29日生まれで、ずらした先に29日が無い年は28日に寄せる。
+    """
+    base = parse_date(birth_date)
+    if base is None:
+        return None
+    try:
+        return base.replace(year=base.year + years).isoformat()
+    except ValueError:
+        return base.replace(year=base.year + years, day=28).isoformat()
+
+
+def _age_clause(
+    prefix: str,
+    min_age: Optional[int],
+    max_age: Optional[int],
+    birth_date: Optional[str],
+    include_unknown_age: bool,
+    params: List[Any],
+) -> Optional[str]:
+    """年齢での絞り込み。**画面に出ている年齢と同じものを見る。**
+
+    `Face.age` は人が確かめて入れた値で、**`match` は書かない。** 実データでは
+    割り当て済み 22,511 件のうち `Face.age` が入っているのは **126 件だけ**
+    （2026-10-07）。そのため `Face.age` だけを見ると、**絞り込みが何もしない**
+    のと同じになっていた。
+
+    そこで、画面の表示と同じ規則で見る。
+
+    | その顔の年齢 | 判定 |
+    |---|---|
+    | `Face.age` が入っている | その値で判定する |
+    | 入っていないが誕生日と撮影日時がある | **計算した年齢**で判定する |
+    | どちらも無い | ``include_unknown_age`` で決める |
+
+    計算のほうは**撮影日の範囲**に読み替える（`_birth_year_shift`）。
+    年齢 ``a`` は「誕生日 + a年 以上、誕生日 + (a+1)年 未満」。
+    """
+    if min_age is None and max_age is None:
+        return None
+
+    known = [f"{prefix}age IS NOT NULL"]
+    if min_age is not None:
+        known.append(f"{prefix}age >= ?")
+        params.append(min_age)
+    if max_age is not None:
+        known.append(f"{prefix}age <= ?")
+        params.append(max_age)
+    branches = ["(" + " AND ".join(known) + ")"]
+
+    day = day_expression()
+    if birth_date:
+        window = [f"{day} IS NOT NULL"]
+        lower = None if min_age is None else _birth_year_shift(birth_date, min_age)
+        upper = None if max_age is None else _birth_year_shift(birth_date, max_age + 1)
+        if lower is not None:
+            window.append(f"{day} >= ?")
+            params.append(lower)
+        if upper is not None:
+            # **上は含めない。** 誕生日の当日に次の年齢へ上がるため。
+            window.append(f"{day} < ?")
+            params.append(upper)
+        branches.append(
+            f"({prefix}age IS NULL AND {prefix}media_id IN"
+            f" (SELECT id FROM Media WHERE {' AND '.join(window)}))"
+        )
+
+    if include_unknown_age:
+        if birth_date:
+            # 誕生日はあるが、撮影日時が読めない顔。
+            branches.append(
+                f"({prefix}age IS NULL AND {prefix}media_id IN"
+                f" (SELECT id FROM Media WHERE {day} IS NULL))"
+            )
+        else:
+            # 誕生日が無いので、`Face.age` の無い顔は1件も年齢を出せない。
+            branches.append(f"{prefix}age IS NULL")
+
+    return "(" + " OR ".join(branches) + ")"
+
+
 def _face_filter(
     assign_source: Optional[str],
     person_id: Optional[int],
@@ -879,11 +1095,22 @@ def _face_filter(
     prefix: str = "",
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
-    年齢の未設定(NULL)は、範囲を指定しても常に残す。年齢を入れていない顔が
-    一覧から消えてしまうと、そもそも年齢を入れられなくなるため。
+    ``month_from`` / ``month_to`` は撮影年月の範囲（``"2015-08"`` 形式・**両端を含む**）。
+    片方だけでもよい。``undated_only`` は「**撮影日時が読めない顔だけ**」で、
+    範囲とは**排他**（読めない顔はどの範囲にも入らないため）。
+
+    年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
+    実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、
+    それだけを見ると絞り込みが何もしないのと同じになる（2026-10-07）。
+    ``birth_date`` を渡すと、画面の表示と同じく**計算した年齢**でも絞る。
 
     ``prefix`` は `Media` と結合するときの別名（``"f."``）。**条件を2通り
     書き分けない。** 書き分けると、片方にだけ絞り込みが足される。
@@ -905,12 +1132,11 @@ def _face_filter(
     if person_id is not None:
         clauses.append(f"{prefix}person_id = ?")
         params.append(person_id)
-    if min_age is not None:
-        clauses.append(f"({prefix}age IS NULL OR {prefix}age >= ?)")
-        params.append(min_age)
-    if max_age is not None:
-        clauses.append(f"({prefix}age IS NULL OR {prefix}age <= ?)")
-        params.append(max_age)
+    age_clause = _age_clause(
+        prefix, min_age, max_age, birth_date, include_unknown_age, params
+    )
+    if age_clause is not None:
+        clauses.append(age_clause)
     media_conditions: List[str] = []
     if folder is not None:
         media_conditions.append(f"{folder_expression('path')} = ?")
@@ -920,6 +1146,18 @@ def _face_filter(
     elif day is not None:
         media_conditions.append(f"{day_expression()} = ?")
         params.append(day)
+    if undated_only:
+        media_conditions.append(f"{month_expression()} IS NULL")
+    else:
+        # **読めない撮影日時は、どの範囲にも入らない。** `month_expression` が
+        # NULL を返し、比較の結果も NULL になって行が落ちる。
+        # 見たいときは `undated_only` で明示する。
+        if month_from is not None:
+            media_conditions.append(f"{month_expression()} >= ?")
+            params.append(month_from)
+        if month_to is not None:
+            media_conditions.append(f"{month_expression()} <= ?")
+            params.append(month_to)
     if media_conditions:
         clauses.append(
             f"{prefix}media_id IN"
@@ -972,6 +1210,11 @@ def list_faces(
     order: str = ORDER_QUALITY,
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -994,11 +1237,34 @@ def list_faces(
 
     if order == ORDER_SHOT_DESC:
         query, params = _shooting_date_query(
-            columns, assign_source, person_id, unassigned, min_age, max_age, folder, day
+            columns,
+            assign_source,
+            person_id,
+            unassigned,
+            min_age,
+            max_age,
+            folder,
+            day,
+            birth_date,
+            include_unknown_age,
+            month_from,
+            month_to,
+            undated_only,
         )
     else:
         where, params = _face_filter(
-            assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+            assign_source,
+            person_id,
+            unassigned,
+            min_age,
+            max_age,
+            folder=folder,
+            day=day,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown_age,
+            month_from=month_from,
+            month_to=month_to,
+            undated_only=undated_only,
         )
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
@@ -1024,6 +1290,11 @@ def _shooting_date_query(
     max_age: Optional[int],
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
 ) -> Tuple[str, List[Any]]:
     """撮影日時の新しい順に並べる問い合わせ。
 
@@ -1049,6 +1320,11 @@ def _shooting_date_query(
         prefix="f.",
         folder=folder,
         day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
     )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
@@ -1168,6 +1444,112 @@ def unassign_faces(
     )
     connection.commit()
     return affected
+
+
+def reject_faces_for_person(
+    connection: sqlite3.Connection,
+    face_ids: Sequence[int],
+    person_id: int,
+    progress: ProgressCallback = None,
+) -> int:
+    """「**この顔はこの人物ではない**」を記録し、割り当てを解除する。
+
+    `reject_faces`（＝「誰でもない顔」）との違いはここ。
+
+    | | この関数 | `reject_faces` |
+    |---|---|---|
+    | 意味 | **その人物ではない** | **誰でもない顔** |
+    | ほかの人物への自動割り当て | **ありうる** | 無い |
+    | `match` の候補 | 残る（その人物だけ外れる） | 外れる |
+
+    **解除するだけでは足りない。** `match` は手本と閾値だけで決まるので、
+    未割当に戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
+    1,785 件で起きた）。否定を残して初めて、その判断が次の `match` に効く。
+
+    **手動割り当ても解除する。** その人物だと記録しながら、その人物ではないと
+    記録するのは矛盾する。
+    """
+    if not face_ids:
+        return 0
+    now = _utc_now()
+    cursor = connection.cursor()
+    affected = _executemany_with_progress(
+        cursor,
+        "INSERT INTO FaceRejection (face_id, person_id, created_at) VALUES (?, ?, ?)"
+        " ON CONFLICT(face_id, person_id) DO NOTHING",
+        [(face_id, person_id, now) for face_id in face_ids],
+        progress,
+    )
+    # その人物に割り当たっているものだけを外す。別の人物のものには触らない。
+    cursor.executemany(
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        " assigned_at = NULL WHERE id = ? AND person_id = ?",
+        [(face_id, person_id) for face_id in face_ids],
+    )
+    connection.commit()
+    return affected
+
+
+def clear_person_rejections(
+    connection: sqlite3.Connection, face_ids: Sequence[int], person_id: int
+) -> int:
+    """「その人物ではない」の記録を取り消す。**押し間違いから戻れるように。**"""
+    if not face_ids:
+        return 0
+    cursor = connection.cursor()
+    placeholders = ",".join("?" for _ in face_ids)
+    cursor.execute(
+        f"DELETE FROM FaceRejection WHERE person_id = ? AND face_id IN ({placeholders})",
+        (person_id, *face_ids),
+    )
+    connection.commit()
+    return cursor.rowcount
+
+
+def load_person_rejections(connection: sqlite3.Connection) -> Dict[int, set]:
+    """``{face_id: {person_id, ...}}``。**`match` が候補を外すのに使う。**
+
+    否定は顔の数に対して少ない（人が1件ずつ押した結果）ので、全件読んでよい。
+    """
+    rejections: Dict[int, set] = {}
+    for row in connection.execute("SELECT face_id, person_id FROM FaceRejection"):
+        rejections.setdefault(int(row["face_id"]), set()).add(int(row["person_id"]))
+    return rejections
+
+
+def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> int:
+    """その人物について「ではない」と記録された顔の件数。
+
+    **「誰でもない顔」にした顔も数える。** 記録は残っているため。
+    一覧に出る件数とは一致しないことがある（`rejected_face_ids_for_person`）。
+    """
+    row = connection.execute(
+        "SELECT COUNT(*) FROM FaceRejection WHERE person_id = ?", (person_id,)
+    ).fetchone()
+    return int(row[0])
+
+
+def rejected_face_ids_for_person(
+    connection: sqlite3.Connection, person_id: int
+) -> List[int]:
+    """その人物について「ではない」と記録された顔の id。一覧で見直すため。
+
+    **「誰でもない顔」にした顔は外す。** あちらは `match` の候補から顔ごと
+    外れるので、**「この人物ではない」の記録はもう何の仕事もしていない。**
+    一覧に残すと、`誰でもない顔` を押したのにサムネイルが消えない。
+
+    **記録そのものは消さない。** 消すと、除外を取り消した瞬間に `match` が
+    またその人物へ付けてしまう。除外を取り消せば、この一覧にも戻る。
+    """
+    return [
+        int(row[0])
+        for row in connection.execute(
+            "SELECT r.face_id FROM FaceRejection r JOIN Face f ON f.id = r.face_id"
+            " WHERE r.person_id = ? AND (f.assign_source IS NULL OR f.assign_source <> ?)"
+            " ORDER BY r.face_id",
+            (person_id, ASSIGN_REJECTED),
+        )
+    ]
 
 
 def reject_faces(
@@ -1442,12 +1824,29 @@ def apply_auto_assignments(
     return cursor.rowcount
 
 
-def reset_auto_assignments(connection: sqlite3.Connection) -> int:
+def reset_auto_assignments(
+    connection: sqlite3.Connection, person_id: Optional[int] = None
+) -> int:
+    """自動割り当てを取り消す。**手本と除外には触らない。**
+
+    ``person_id`` を渡すと、その人物の自動割り当てだけを取り消す。**省略は
+    「全員」であって「人物で絞らない誰か」ではない**ので、呼び出し側が
+    どちらのつもりかをはっきり書けるようにしてある。
+
+    **`family_score` はここでは数え直さない。** 呼び出し側が
+    `recompute_family_scores` を呼ぶこと（`match` は付け直したあとに呼ぶので、
+    ここで呼ぶと二度手間になる）。
+    """
+    clauses = ["assign_source = ?"]
+    params: List[Any] = [ASSIGN_AUTO]
+    if person_id is not None:
+        clauses.append("person_id = ?")
+        params.append(person_id)
     cursor = connection.cursor()
     cursor.execute(
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
-        " assigned_at = NULL WHERE assign_source = ?",
-        (ASSIGN_AUTO,),
+        f" assigned_at = NULL WHERE {' AND '.join(clauses)}",
+        tuple(params),
     )
     connection.commit()
     return cursor.rowcount

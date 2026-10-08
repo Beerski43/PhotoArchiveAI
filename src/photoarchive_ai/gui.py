@@ -12,12 +12,13 @@ import os
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -48,6 +49,18 @@ from .dates import calculate_age, parse_date  # noqa: F401
 
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
+
+#: 撮影年月の範囲で「端を決めない」を表す表示。
+#:
+#: **「指定なし」と具体的な年月を同じ値で表さない。** 下限だけ・上限だけの
+#: 指定ができる必要がある（「2015-06 以降すべて」など）。
+MONTH_ANY = "指定なし"
+
+#: 撮影日時が読めない顔だけを見るときの表示。
+#:
+#: **範囲とは排他。** 読めない日付はどの範囲にも入らない（`month_expression` が
+#: NULL を返す）ので、見たいときは明示して選ぶ。
+MONTH_UNDATED = "撮影日時なしのみ"
 
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
@@ -648,6 +661,31 @@ class FaceAgeDialog(QDialog):
         return None if value < 0 else value
 
 
+#: 「割り当て済みの顔」の種別の絞り込み。**(表示, `assign_source` に渡す値)**。
+#:
+#: `None` は「種別で絞らない」。**`db.ASSIGN_MANUAL` と同じ意味に使わない**
+#: （`_face_filter` の `day` と同じで、「絞らない」と「この値だけ」を同じ値で
+#: 表すと取り違える。CLAUDE.md §8）。
+SOURCE_FILTERS = (
+    ("すべて", None),
+    ("確定済みのみ", db.ASSIGN_MANUAL),
+    ("自動のみ", db.ASSIGN_AUTO),
+)
+
+#: 種別の選択肢に足す「この人物ではない」。**`assign_source` の値ではない**
+#: （`FaceRejection` 表に持つ否定）ので、`SOURCE_FILTERS` とは別に持つ。
+#: 押し間違いを見直して取り消すための入口。
+NOT_THIS_PERSON_FILTER = "この人物ではない"
+
+#: 確定ボタンのツールチップ。**押せるときと押せないときの両方を1か所に置く。**
+#: 文言を2か所に書くと、片方だけ直したときに説明と振る舞いが食い違う。
+CONFIRM_TOOLTIP_READY = "自動割当の顔を手動割当に昇格し、match の手本にする"
+CONFIRM_TOOLTIP_BLOCKED = (
+    "自動割り当ての顔を選んでいるときだけ押せる"
+    "（手本はすでに手動割り当てなので、確定しても何も変わらない）"
+)
+
+
 class RegisteredFacesDialog(QDialog):
     """人物に割り当て済みの顔を確認し、確定・解除する。"""
 
@@ -658,17 +696,42 @@ class RegisteredFacesDialog(QDialog):
         self.setWindowTitle(f"割り当て済みの顔 - {person['name']}")
         self.resize(820, 600)
 
+        # **確定済みと自動を見分けて絞れるようにする。** 自動割り当てを
+        # 見直すときは自動だけを、手本を見直すときは確定済みだけを見たい。
+        self.source_box = QComboBox()
+        for label, _ in SOURCE_FILTERS:
+            self.source_box.addItem(label)
+        self.source_box.addItem(NOT_THIS_PERSON_FILTER)
+        self.source_box.currentIndexChanged.connect(self._reset_page)
+
+        # **最小値を -1 にして「指定なし」に割り当てる。**
+        # `FaceAgeDialog` と同じ理由で、**0 を特別扱いにすると 0歳で絞れなくなる**
+        # （QSpinBox の `specialValueText` は最小値のときに出る）。
+        # 絞り込み側だけ 0 を「指定なし」にしていたため、0歳の顔だけを見ることが
+        # できなかった。
         self.min_age = QSpinBox()
-        self.min_age.setRange(0, 150)
+        self.min_age.setRange(-1, 150)
         self.min_age.setSpecialValueText("指定なし")
+        self.min_age.setValue(-1)
         self.max_age = QSpinBox()
-        self.max_age.setRange(0, 150)
+        self.max_age.setRange(-1, 150)
         self.max_age.setSpecialValueText("指定なし")
-        self.max_age.setValue(150)
+        self.max_age.setValue(-1)
         # 年齢の絞り込みも「指定なし」の文字が入っている。年齢の入力と
         # 同じ理由で、触ったときに打鍵で置き換えられるようにする。
         for spin in (self.min_age, self.max_age):
             spin.focusInEvent = _make_select_all_on_focus(spin)
+
+        # **年齢を出せない顔をどうするか。** 既定は「含めない」。
+        # 含めると、範囲を指定しても年齢不明の顔が常に混ざり、**絞り込みが
+        # ほとんど効かない**（実データで割り当て済み 22,511 件のうち 1,931 件。
+        # かつては `Face.age` の無い顔を全部残しており、入っているのは 126 件
+        # だけだったので、絞り込みが何もしないのと同じだった）。
+        self.include_unknown_age = QCheckBox("年齢不明も含める")
+        self.include_unknown_age.setToolTip(
+            "誕生日が未登録か、写真に撮影日時が無くて年齢を出せない顔も残す"
+        )
+        self.include_unknown_age.stateChanged.connect(self._reset_page)
 
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -679,10 +742,28 @@ class RegisteredFacesDialog(QDialog):
 
         self.confirm_button = QPushButton("選択した顔を確定")
         self.unassign_button = QPushButton("割り当てを解除")
+        # **除外は2種類ある。** 混ぜると取り返しがつかない。
+        self.not_this_person_button = QPushButton("この人物ではない")
+        self.not_this_person_button.setToolTip(
+            "この人物ではない、と記録する。\n"
+            "**ほかの人物には自動で付きうる。**\n"
+            "解除と違い、match を流し直しても戻ってこない。"
+        )
+        self.reject_button = QPushButton("誰でもない顔")
+        self.reject_button.setToolTip(
+            "家族の誰でもない顔として除外する。\n"
+            "**どの人物にも自動で付かなくなる。**"
+        )
         self.age_button = QPushButton("年齢を設定")
-        self.confirm_button.setToolTip("自動割当の顔を手動割当に昇格し、match の手本にする")
+        self.confirm_button.setToolTip(CONFIRM_TOOLTIP_READY)
         self.confirm_button.clicked.connect(self._confirm_selected)
+        # **確定は自動割り当てにしか効かない。** 選び直すたびに押せるかを見直す。
+        self.face_list.itemSelectionChanged.connect(self._update_confirm_button)
         self.unassign_button.clicked.connect(self._unassign_selected)
+        self.not_this_person_button.clicked.connect(self._reject_for_person_selected)
+        self.undo_rejection_button = QPushButton("「この人物ではない」を取り消す")
+        self.undo_rejection_button.clicked.connect(self._undo_rejection_selected)
+        self.reject_button.clicked.connect(self._reject_selected)
         self.age_button.clicked.connect(self._set_age_selected)
 
         # 割り当て済みの顔も数百件になりうる。ページ単位で読まないと、
@@ -702,11 +783,15 @@ class RegisteredFacesDialog(QDialog):
         pager.addWidget(self.next_button)
 
         age_filter = QHBoxLayout()
+        age_filter.addWidget(QLabel("種別"))
+        age_filter.addWidget(self.source_box)
+        age_filter.addSpacing(16)
         age_filter.addWidget(QLabel("年齢"))
         age_filter.addWidget(self.min_age)
         age_filter.addWidget(QLabel("歳から"))
         age_filter.addWidget(self.max_age)
         age_filter.addWidget(QLabel("歳"))
+        age_filter.addWidget(self.include_unknown_age)
         age_filter.addStretch(1)
         self.min_age.valueChanged.connect(self._reset_page)
         self.max_age.valueChanged.connect(self._reset_page)
@@ -714,6 +799,9 @@ class RegisteredFacesDialog(QDialog):
         actions = QHBoxLayout()
         actions.addWidget(self.confirm_button)
         actions.addWidget(self.unassign_button)
+        actions.addWidget(self.not_this_person_button)
+        actions.addWidget(self.undo_rejection_button)
+        actions.addWidget(self.reject_button)
         actions.addWidget(self.age_button)
         actions.addStretch(1)
 
@@ -725,7 +813,29 @@ class RegisteredFacesDialog(QDialog):
         self.reload()
 
     def _age_range(self):
-        return (self.min_age.value() or None, self.max_age.value() or None)
+        """絞り込みの下限と上限。「指定なし」は ``None``。
+
+        **`value() or None` と書かない。** 0 が偽なので、**0歳が「指定なし」に
+        化ける**（`FaceAgeDialog.age` と同じ罠）。
+        """
+        minimum = self.min_age.value()
+        maximum = self.max_age.value()
+        return (None if minimum < 0 else minimum, None if maximum < 0 else maximum)
+
+    def _source_filter(self) -> Optional[str]:
+        """選ばれている種別。「すべて」なら ``None``（＝種別で絞らない）。"""
+        index = self.source_box.currentIndex()
+        if index >= len(SOURCE_FILTERS):
+            return None
+        return SOURCE_FILTERS[index][1]
+
+    def _showing_rejections(self) -> bool:
+        """「この人物ではない」の一覧を見ているか。
+
+        **これだけは `assign_source` で絞れない**（否定は `FaceRejection` 表）ので、
+        読み出しの経路を分ける。
+        """
+        return self.source_box.currentText() == NOT_THIS_PERSON_FILTER
 
     def _reset_page(self) -> None:
         self.page = 0
@@ -742,34 +852,130 @@ class RegisteredFacesDialog(QDialog):
             self.reload()
 
     def reload(self) -> None:
+        if self._showing_rejections():
+            self._reload_rejections()
+            return
         minimum, maximum = self._age_range()
+        source = self._source_filter()
+        # **誕生日を渡すと、画面に出ている計算年齢でも絞れる。**
+        # `Face.age` は `match` が書かないので、これが無いと自動割り当ての顔は
+        # 1件も年齢で絞れない。
+        birth_date = self.person.get("birth_date")
+        include_unknown = self.include_unknown_age.isChecked()
         self.total = db.count_faces(
             self.connection,
+            assign_source=source,
             person_id=self.person["id"],
             min_age=minimum,
             max_age=maximum,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown,
         )
         pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
         self.page = min(self.page, pages - 1)
         records = db.list_faces(
             self.connection,
+            assign_source=source,
             person_id=self.person["id"],
             with_thumbnail=True,
             limit=PAGE_SIZE,
             offset=self.page * PAGE_SIZE,
             min_age=minimum,
             max_age=maximum,
+            birth_date=birth_date,
+            include_unknown_age=include_unknown,
             # **年齢の若い順。** 成長の順に並ぶので、年齢の入れ間違いや、
             # 別人が混ざっているのに気づきやすい。未設定は最後。
             order=db.ORDER_AGE,
         )
-        _fill_face_list(self.face_list, records)
+        # **自動割り当ての顔は `Face.age` が未設定**（`match` は年齢を書かない）。
+        # 人物の誕生日と撮影日時から計算して出す。これが「その割り当てが
+        # 正しいか」を人が見るときのいちばんの手がかりになる。
+        shooting_dates = db.shooting_dates_by_face(
+            self.connection, [record["id"] for record in records]
+        )
+        birth_date = self.person.get("birth_date")
+        age_labels = {
+            record["id"]: face_age_label(
+                record, birth_date, shooting_dates.get(record["id"])
+            )
+            for record in records
+        }
+        _fill_face_list(self.face_list, records, age_labels)
         self.page_label.setText(f"{self.page + 1} / {pages} ページ（全 {self.total} 件）")
         self.prev_button.setEnabled(self.page > 0)
         self.next_button.setEnabled(self.page + 1 < pages)
+        # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
+        # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで呼ぶ。
+        self._update_confirm_button()
+
+    def _reload_rejections(self) -> None:
+        """「この人物ではない」と記録した顔の一覧。**取り消せるようにするため。**
+
+        この一覧の顔は**その人物に割り当たっていない**ので、人物での絞り込みが
+        使えない。顔 id を直に引く。
+        """
+        face_ids = db.rejected_face_ids_for_person(self.connection, self.person["id"])
+        self.total = len(face_ids)
+        pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page = min(self.page, pages - 1)
+        start = self.page * PAGE_SIZE
+        records = db.faces_by_ids(
+            self.connection, face_ids[start : start + PAGE_SIZE], with_thumbnail=True
+        )
+        shooting_dates = db.shooting_dates_by_face(
+            self.connection, [record["id"] for record in records]
+        )
+        birth_date = self.person.get("birth_date")
+        age_labels = {
+            record["id"]: face_age_label(
+                record, birth_date, shooting_dates.get(record["id"])
+            )
+            for record in records
+        }
+        _fill_face_list(self.face_list, records, age_labels)
+        self.page_label.setText(
+            f"{self.page + 1} / {pages} ページ（「この人物ではない」 {self.total} 件）"
+        )
+        self.prev_button.setEnabled(self.page > 0)
+        self.next_button.setEnabled(self.page + 1 < pages)
+        self._update_confirm_button()
+
+    def _undo_rejection_selected(self) -> None:
+        """「この人物ではない」を取り消す。**押し間違いから戻れるように。**"""
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        self._run_with_progress(
+            "「この人物ではない」を取り消しています",
+            face_ids,
+            lambda progress: db.clear_person_rejections(
+                self.connection, face_ids, self.person["id"]
+            ),
+        )
 
     def _selected_ids(self) -> List[int]:
         return [item.data(Qt.UserRole)["id"] for item in self.face_list.selectedItems()]
+
+    def _update_confirm_button(self) -> None:
+        """**確定は、自動割り当てを選んでいるときだけ押せる。**
+
+        確定は `assign_source` を `'auto'` → `'manual'` に上げる操作なので、
+        **すでに手本の顔に押しても `assigned_at` が今の時刻に書き換わるだけ**で、
+        意味のある変化が起きない。押せてしまうと「何かが起きた」と誤解する。
+
+        何も選んでいないときも押せない（自動の顔が1件も入っていないため）。
+        """
+        has_auto = any(
+            item.data(Qt.UserRole).get("assign_source") == db.ASSIGN_AUTO
+            for item in self.face_list.selectedItems()
+        )
+        self.confirm_button.setEnabled(has_auto)
+        # **押せない理由を出す。** 灰色のボタンだけでは、壊れているのか
+        # 選び方が足りないのかが分からない。
+        self.confirm_button.setToolTip(
+            CONFIRM_TOOLTIP_READY if has_auto else CONFIRM_TOOLTIP_BLOCKED
+        )
 
     def _run_with_progress(self, label: str, face_ids: List[int], work) -> None:
         """件数の分かる作業を、砂時計と進み具合つきで流す。
@@ -812,6 +1018,51 @@ class RegisteredFacesDialog(QDialog):
             lambda progress: db.unassign_faces(self.connection, face_ids, progress=progress),
         )
 
+    def _reject_for_person_selected(self) -> None:
+        """**この人物ではない**、と記録する。ほかの人物には付きうる。
+
+        **「割り当てを解除」では足りない。** `match` は手本と閾値だけで決まるので、
+        未割当へ戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
+        1,785 件で起きた）。
+        """
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        self._run_with_progress(
+            "この人物ではない、と記録しています",
+            face_ids,
+            lambda progress: db.reject_faces_for_person(
+                self.connection, face_ids, self.person["id"], progress=progress
+            ),
+        )
+
+    def _reject_selected(self) -> None:
+        """**家族の誰でもない顔**として除外する。どの人物にも自動で付かなくなる。
+
+        **押し間違えると、その顔は `match` の候補から丸ごと外れる。**
+        別の人物のものかもしれない顔には「この人物ではない」のほうを使う。
+        """
+        face_ids = self._selected_ids()
+        if not face_ids:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "誰でもない顔として除外",
+                f"{len(face_ids)} 件を『家族の誰でもない顔』として除外します。\n\n"
+                "**どの人物にも自動で付かなくなります。**\n"
+                "別の人物のものかもしれない顔は『この人物ではない』を使ってください。\n\n"
+                "進めますか？",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        self._run_with_progress(
+            "除外しています",
+            face_ids,
+            lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
+        )
+
     def _set_age_selected(self) -> None:
         face_ids = self._selected_ids()
         if not face_ids:
@@ -834,7 +1085,34 @@ class RegisteredFacesDialog(QDialog):
         self._run_with_progress("年齢を設定しています", face_ids, work)
 
 
-def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
+def face_age_label(
+    record: dict, birth_date: Optional[str], shooting_date: Optional[str]
+) -> Optional[str]:
+    """一覧の1件に出す年齢。**確定した年齢と、計算しただけの年齢を見分ける。**
+
+    `Face.age` は人が確かめて入れた値で、**`match` は書かない。** そのため
+    自動割り当ての顔はすべて未設定で、年齢が1件も出なかった。
+    **自動割り当てが正しいかを人が見るとき、撮影時の年齢がいちばん効く手がかり**
+    なので、未設定なら人物の誕生日と撮影日時から計算して出す。
+
+    **計算した値は括弧で囲む。** 確定した年齢と同じ見た目にすると、
+    どちらが人の確かめた値か分からなくなる（Issue #48 の判断2と同じ理由で、
+    計算値を `Face.age` に書き戻すこともしない）。
+
+    撮影日より前に生まれていなければ「誕生前」。**これは誤割り当ての強い
+    手がかり**なので、負の数でも落とさずに出す。
+    """
+    if record.get("age") is not None:
+        return format_age(record["age"])
+    computed = format_age(calculate_age(birth_date, shooting_date))
+    return None if computed is None else f"({computed})"
+
+
+def _fill_face_list(
+    widget: QListWidget,
+    records: List[dict],
+    age_labels: Optional[Dict[int, Optional[str]]] = None,
+) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
     `clear()` は項目を1つずつ外すので、そのたびに `itemSelectionChanged` が
@@ -847,12 +1125,16 @@ def _fill_face_list(widget: QListWidget, records: List[dict]) -> None:
     """
     blocked = widget.blockSignals(True)
     try:
-        _repopulate_face_list(widget, records)
+        _repopulate_face_list(widget, records, age_labels)
     finally:
         widget.blockSignals(blocked)
 
 
-def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
+def _repopulate_face_list(
+    widget: QListWidget,
+    records: List[dict],
+    age_labels: Optional[Dict[int, Optional[str]]] = None,
+) -> None:
     widget.clear()
     for record in records:
         pixmap = QPixmap()
@@ -863,8 +1145,16 @@ def _repopulate_face_list(widget: QListWidget, records: List[dict]) -> None:
         label = str(record["id"])
         if record.get("assign_source") == db.ASSIGN_AUTO:
             label = f"{label} (自動 {record.get('assign_score') or 0:.0f})"
-        if record.get("age") is not None:
-            label = f"{label} {record['age']}歳"
+        # **年齢の出し方は呼び出し側が決める。** 人物が決まっている画面だけが
+        # 誕生日を持っているので、計算した年齢を出せるのもそこだけ。
+        if age_labels is not None:
+            age_text = age_labels.get(record["id"])
+        elif record.get("age") is not None:
+            age_text = format_age(record["age"])
+        else:
+            age_text = None
+        if age_text:
+            label = f"{label} {age_text}"
         item.setText(label)
         item.setData(Qt.UserRole, record)
         widget.addItem(item)
@@ -1434,6 +1724,27 @@ class MainWindow(QWidget):
         self.filter_box.addItems([FILTER_UNASSIGNED, FILTER_AUTO, FILTER_REJECTED])
         self.filter_box.currentIndexChanged.connect(self._reset_page)
 
+        # **撮影年月の範囲で絞る。** 家族の写っていない行事（結婚式・旅行先の
+        # 他人など）は時期でまとまっているので、**その期間だけを開いてまとめて
+        # 除外できる。** 片方だけの指定（「2015-06 以降」など）もできる。
+        self.month_from_box = QComboBox()
+        self.month_to_box = QComboBox()
+        for box, tip in (
+            (self.month_from_box, "この年月から（含む）。指定なしなら下限を決めない"),
+            (self.month_to_box, "この年月まで（含む）。指定なしなら上限を決めない"),
+        ):
+            box.setToolTip(tip)
+        self.undated_only_box = QCheckBox(MONTH_UNDATED)
+        self.undated_only_box.setToolTip(
+            "撮影日時が読めない写真の顔だけを見る。\n"
+            "EXIF の無い写真と、カメラが壊れた日時を書いた写真が入る。\n"
+            "**範囲の指定とは併用できない**（読めない日付はどの範囲にも入らない）。"
+        )
+        self._reload_months()
+        self.month_from_box.currentIndexChanged.connect(self._month_changed)
+        self.month_to_box.currentIndexChanged.connect(self._month_changed)
+        self.undated_only_box.stateChanged.connect(self._month_changed)
+
         self.face_list = QListWidget()
         self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
@@ -1460,6 +1771,11 @@ class MainWindow(QWidget):
 
         pager = QHBoxLayout()
         pager.addWidget(self.filter_box)
+        pager.addWidget(QLabel("撮影"))
+        pager.addWidget(self.month_from_box)
+        pager.addWidget(QLabel("〜"))
+        pager.addWidget(self.month_to_box)
+        pager.addWidget(self.undated_only_box)
         pager.addStretch(1)
         pager.addWidget(self.prev_button)
         pager.addWidget(self.page_label)
@@ -1704,6 +2020,69 @@ class MainWindow(QWidget):
     # 顔一覧
     # ------------------------------------------------------------------
 
+    def _reload_months(self) -> None:
+        """撮影年月の選択肢を作り直す。**いま選んでいる年月は保つ。**
+
+        `scan` のあとなどに月が増えるので、選び直しを強いないようにする。
+        **撮影日時が読めない顔が1件も無ければ、その選択肢は出さない。**
+        """
+        months = db.available_months(self.connection)
+        for box in (self.month_from_box, self.month_to_box):
+            keep = box.currentText() if box.count() else MONTH_ANY
+            blocked = box.blockSignals(True)
+            try:
+                box.clear()
+                box.addItem(MONTH_ANY)
+                box.addItems(months)
+                index = box.findText(keep)
+                box.setCurrentIndex(index if index >= 0 else 0)
+            finally:
+                box.blockSignals(blocked)
+        has_undated = bool(db.count_undated_faces(self.connection))
+        self.undated_only_box.setVisible(has_undated)
+        if not has_undated:
+            self.undated_only_box.setChecked(False)
+
+    def _month_changed(self) -> None:
+        """範囲を触ったとき。**上下が逆転したまま空の一覧を見せない。**
+
+        下限を上限より後ろにしたら、上限を押し上げる（その逆も同じ）。
+        黙って0件にすると、絞り込みが壊れているように見える。
+        """
+        if not self.undated_only_box.isChecked():
+            start, end = self._month_texts()
+            if start != MONTH_ANY and end != MONTH_ANY and start > end:
+                mover = (
+                    self.month_to_box
+                    if self.sender() is self.month_from_box
+                    else self.month_from_box
+                )
+                target = start if mover is self.month_to_box else end
+                blocked = mover.blockSignals(True)
+                try:
+                    mover.setCurrentIndex(mover.findText(target))
+                finally:
+                    mover.blockSignals(blocked)
+        # 「撮影日時なしのみ」は範囲と排他。見た目でも分かるようにする。
+        enabled = not self.undated_only_box.isChecked()
+        self.month_from_box.setEnabled(enabled)
+        self.month_to_box.setEnabled(enabled)
+        self._reset_page()
+
+    def _month_texts(self):
+        return (self.month_from_box.currentText(), self.month_to_box.currentText())
+
+    def _month_range(self):
+        """``(開始, 終了, 読めない顔だけか)``。端の「指定なし」は ``None``。"""
+        if self.undated_only_box.isChecked():
+            return None, None, True
+        start, end = self._month_texts()
+        return (
+            None if start in ("", MONTH_ANY) else start,
+            None if end in ("", MONTH_ANY) else end,
+            False,
+        )
+
     def _filter_arguments(self) -> dict:
         selected = self.filter_box.currentText()
         if selected == FILTER_AUTO:
@@ -1719,6 +2098,14 @@ class MainWindow(QWidget):
             # **変換は `event_filters` に1つだけ。** `None` を渡すと
             # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
             filters.update(event_filters(*self.event))
+        start, end, undated_only = self._month_range()
+        if undated_only:
+            filters["undated_only"] = True
+        else:
+            if start is not None:
+                filters["month_from"] = start
+            if end is not None:
+                filters["month_to"] = end
         return filters
 
     def _sync_unassign_button(self) -> None:
