@@ -51,6 +51,20 @@ from .dates import calculate_age, parse_date  # noqa: F401
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
 
+#: 顔の一覧の1枠の大きさ。**サムネイルの寸法に任せない。**
+#:
+#: `setUniformItemSizes(True)` は**先頭の項目から枠の寸法を決める。** 保存して
+#: あるサムネイルは大きさがまちまちなので（短辺の中央 160px・**112px 未満が
+#: 7.3%**）、**先頭にたまたま小さい顔が来たページでは、枠がその顔に合わせて
+#: 縮み、残りのサムネイルが切り詰められて下の文字も枠の外に出る**（利用者が
+#: 報告。実データの未割当1ページ目は先頭が 101px・残りが 160px だった）。
+#:
+#: **枠を固定すれば、どの顔が先頭に来ても同じ見た目になる。**
+#: 高さは「サムネイル＋文字2行」ぶん（自動割当の表示は
+#: `13391 (自動 55) ひより (0歳)` のように長い）。
+ITEM_WIDTH = THUMBNAIL_SIZE + 44
+ITEM_HEIGHT = THUMBNAIL_SIZE + 48
+
 #: 撮影年月の範囲で「端を決めない」を表す表示。
 #:
 #: **「指定なし」と具体的な年月を同じ値で表さない。** 下限だけ・上限だけの
@@ -838,6 +852,25 @@ def face_age_label(
     return None if computed is None else f"({computed})"
 
 
+def make_face_list(selection_mode) -> QListWidget:
+    """顔のサムネイル一覧を作る。**設定を2か所に書かない。**
+
+    メイン画面と束ねる画面で同じ見た目・同じ枠にする。`ITEM_WIDTH` /
+    `ITEM_HEIGHT` の理由はそちらに書いてある。
+    """
+    widget = QListWidget()
+    widget.setViewMode(QListWidget.ViewMode.IconMode)
+    widget.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+    widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+    widget.setUniformItemSizes(True)
+    # **枠を明示する。** 先頭の項目の大きさに引きずられないようにする。
+    widget.setGridSize(QSize(ITEM_WIDTH, ITEM_HEIGHT))
+    # 長い文字は折り返す（切り詰めるより、2行で読めるほうがよい）。
+    widget.setWordWrap(True)
+    widget.setSelectionMode(selection_mode)
+    return widget
+
+
 def _fill_face_list(
     widget: QListWidget,
     records: List[dict],
@@ -887,6 +920,9 @@ def _repopulate_face_list(
             label = f"{label} {age_text}"
         item.setText(label)
         item.setData(Qt.UserRole, record)
+        # **1件ずつにも同じ大きさを持たせる。** `setUniformItemSizes` は
+        # 先頭の項目を見るので、**明示しないと先頭のサムネイル次第で全体が縮む。**
+        item.setSizeHint(QSize(ITEM_WIDTH, ITEM_HEIGHT))
         widget.addItem(item)
 
 
@@ -1060,12 +1096,7 @@ class EventClusterDialog(QDialog):
         self.cluster_list = QListWidget()
         self.cluster_list.currentRowChanged.connect(self._on_cluster_selected)
 
-        self.face_list = QListWidget()
-        self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-        self.face_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.face_list.setUniformItemSizes(True)
-        self.face_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.face_list = make_face_list(QListWidget.SelectionMode.NoSelection)
 
         # **人物はこのダイアログで選ぶ。** 親画面の選択に従うと、束を見てから
         # 「この人だ」と決める順序にならない。
@@ -1601,12 +1632,7 @@ class MainWindow(QWidget):
         self.person_filter_row.setLayout(person_filters)
 
         # --- 顔の一覧 ---------------------------------------------------
-        self.face_list = QListWidget()
-        self.face_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.face_list.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-        self.face_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.face_list.setUniformItemSizes(True)
-        self.face_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.face_list = make_face_list(QListWidget.SelectionMode.ExtendedSelection)
         self.face_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.face_list.customContextMenuRequested.connect(self._show_face_menu)
         self.face_list.itemSelectionChanged.connect(self._on_face_selection_changed)

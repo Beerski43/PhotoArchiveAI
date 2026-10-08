@@ -35,6 +35,7 @@
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
+| `test_gui_views.py::test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **ページの先頭に小さいサムネイルが来ると、枠がそれに合わせて縮み、残りの顔が切り詰められて下の文字も消えた**（`setUniformItemSizes` は先頭の項目から寸法を決める。2026-10-09 に利用者が報告） |
 | `test_db.py::test_every_list_filter_also_works_for_counting_and_for_bulk` | 上の落ち方を**種類ごと**に防ぐ。一覧・件数・まとめて処理が同じ絞り込みを受け取ることを、`_face_filter` の引数から数えて確かめる |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
@@ -377,7 +378,7 @@
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（23件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（26件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -408,6 +409,9 @@
 | `test_the_rejection_list_can_also_be_narrowed_and_paged` | 「この人物ではない」の一覧もページ単位で読み、年月で絞れる |
 | `test_a_broken_shooting_date_is_not_counted_as_before_birth` | **読めない撮影日時を「誕生前」に数えない**（判断は `dates.parse_date` に1つだけ） |
 | `test_the_bulk_event_action_follows_the_view` | 行事のまとめ処理が表示に合わせて意味を変える。**「この人物ではない」では押せない** |
+| `test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **枠はサムネイルの寸法に任せない**（先頭の顔が小さいとページ全体が縮んでいた） |
+| `test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text` | 枠にサムネイルと文字2行が入る |
+| `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
