@@ -653,3 +653,86 @@ def test_the_bulk_event_action_follows_the_view(seeded):
     )
     assert window.bulk_event_button.isEnabled() is False
     assert "この表示では無し" in window.bulk_event_button.text()
+
+
+# ---------------------------------------------------------------------------
+# サムネイルの枠（利用者が報告した不具合）
+# ---------------------------------------------------------------------------
+
+
+def _thumbnail_bytes(size: int) -> bytes:
+    """``size`` 四方の JPEG。**保存してあるサムネイルは大きさがまちまち。**"""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (size, size), (120, 120, 120)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page(tmp_path):
+    """**先頭の顔が小さくても、ページ全体の枠は縮まない。**
+
+    `setUniformItemSizes(True)` は**先頭の項目から枠の寸法を決める。**
+    保存してあるサムネイルは大きさがまちまち（短辺の中央 160px・**112px 未満が
+    7.3%**）なので、先頭にたまたま小さい顔が来たページでは、**枠がその顔に
+    合わせて縮み、残りのサムネイルが切り詰められて下の文字も枠の外に出た**
+    （利用者が報告。実データの未割当1ページ目は先頭が 101px・残りが 160px）。
+    """
+    database = tmp_path / "cells.db"
+    connection = db.ensure_database(str(database))
+    # 撮影日時の新しい順に並ぶので、**小さいサムネイルの顔が先頭に来る**。
+    plan = [("2020-01-01T10:00:00", 101), ("2019-01-01T10:00:00", 160),
+            ("2018-01-01T10:00:00", 160)]
+    for index, (shooting_date, size) in enumerate(plan):
+        media_id = _media(connection, f"/photos/{index}.jpg", shooting_date, f"h{index}")
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
+            thumbnail=_thumbnail_bytes(size),
+        )
+    connection.commit()
+    connection.close()
+
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        hints = [
+            window.face_list.item(row).sizeHint()
+            for row in range(window.face_list.count())
+        ]
+
+        assert len(hints) == 3
+        assert len({(hint.width(), hint.height()) for hint in hints}) == 1, (
+            "枠は全件そろうこと"
+        )
+        assert hints[0].width() == photoarchive_gui.ITEM_WIDTH
+        assert hints[0].height() == photoarchive_gui.ITEM_HEIGHT
+        # **枠を明示していないと、先頭の項目の大きさがそのまま効く。**
+        assert window.face_list.gridSize().height() == photoarchive_gui.ITEM_HEIGHT
+    finally:
+        window.connection.close()
+
+
+def test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text():
+    """**サムネイルの下の文字が枠から出ないこと。**
+
+    自動割当の表示は `13391 (自動 55) ${PERSON_4} (0歳)` のように長く、2行になる。
+    """
+    assert photoarchive_gui.ITEM_HEIGHT >= photoarchive_gui.THUMBNAIL_SIZE + 32
+    assert photoarchive_gui.ITEM_WIDTH > photoarchive_gui.THUMBNAIL_SIZE
+
+
+def test_both_face_lists_are_built_the_same_way():
+    """メイン画面と束ねる画面で、一覧の設定を2か所に書かない。"""
+    from PySide6.QtWidgets import QListWidget
+
+    widget = photoarchive_gui.make_face_list(QListWidget.SelectionMode.NoSelection)
+
+    assert widget.gridSize().width() == photoarchive_gui.ITEM_WIDTH
+    assert widget.iconSize().width() == photoarchive_gui.THUMBNAIL_SIZE
+    assert widget.wordWrap() is True
+    assert widget.uniformItemSizes() is True
