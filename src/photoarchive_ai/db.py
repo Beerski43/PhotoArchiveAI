@@ -670,6 +670,13 @@ def _next_display_order(connection: sqlite3.Connection) -> int:
 ORDER_QUALITY = "quality"
 ORDER_SHOT_DESC = "shooting_desc"
 ORDER_AGE = "age"
+#: 自動割り当ての確信度が**低い順**。**誤りに早く当たるための並び。**
+#:
+#: `assign_score` は距離から作った 0〜100 で、低いほど「似ていないのに
+#: 割り当てた」顔。見直しは低いほうから見るのがいちばん効く
+#: （実データで自動割り当て 15,467 件。2026-10-08）。
+#: **確信度を持たない顔（手本・未割当）は最後**に置く。
+ORDER_SCORE_ASC = "score_asc"
 
 FACE_LIST_COLUMNS = (
     "id",
@@ -758,6 +765,7 @@ def count_faces(
     month_from: Optional[str] = None,
     month_to: Optional[str] = None,
     undated_only: bool = False,
+    rejected_for_person: Optional[int] = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -773,9 +781,52 @@ def count_faces(
         month_from=month_from,
         month_to=month_to,
         undated_only=undated_only,
+        rejected_for_person=rejected_for_person,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
+
+
+def face_counts(connection: sqlite3.Connection) -> Dict[str, Any]:
+    """画面の左に出す件数を、**1回の問い合わせで**数える。
+
+    返すもの。
+
+    ```
+    {"unassigned": 31275, "manual": 10577, "auto": 15467, "rejected": 1287,
+     "by_person": {3: {"manual": 3325, "auto": 6208}, ...}}
+    ```
+
+    **人物ごとに `count_faces` を呼ばない。** 人数ぶんの問い合わせになり、
+    人物を選び直すたびに増える。実データ（顔 58,606 件）では、この
+    `GROUP BY` ひとつで足りる。
+
+    **「残りがどれだけあるか」を画面に出すためにある。** 手作業の量が精度の
+    上限（他人の顔の 99.1% が家族の写真に混ざる。2026-10-08 実測）なので、
+    進み具合が見えること自体が作業の支えになる。
+    """
+    totals = {None: 0, ASSIGN_MANUAL: 0, ASSIGN_AUTO: 0, ASSIGN_REJECTED: 0}
+    by_person: Dict[int, Dict[str, int]] = {}
+    rows = connection.execute(
+        "SELECT person_id, assign_source, COUNT(*) FROM Face"
+        " GROUP BY person_id, assign_source"
+    )
+    for person_id, source, count in rows:
+        count = int(count)
+        if source not in totals:
+            # 知らない種別が入っていても落とさない（移行の途中など）。
+            continue
+        totals[source] += count
+        if source in (ASSIGN_MANUAL, ASSIGN_AUTO) and person_id is not None:
+            entry = by_person.setdefault(int(person_id), {"manual": 0, "auto": 0})
+            entry["manual" if source == ASSIGN_MANUAL else "auto"] += count
+    return {
+        "unassigned": totals[None],
+        "manual": totals[ASSIGN_MANUAL],
+        "auto": totals[ASSIGN_AUTO],
+        "rejected": totals[ASSIGN_REJECTED],
+        "by_person": by_person,
+    }
 
 
 def face_ids(
@@ -787,6 +838,12 @@ def face_ids(
     max_age: Optional[int] = None,
     folder: Optional[str] = None,
     day: Any = None,
+    birth_date: Optional[str] = None,
+    include_unknown_age: bool = True,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    undated_only: bool = False,
+    rejected_for_person: Optional[int] = None,
 ) -> List[int]:
     """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
 
@@ -794,9 +851,27 @@ def face_ids(
     「この行事の未割当をすべて除外」のように**ページをまたぐ操作**には使えない。
     ここは id だけを読むのでサムネイルの BLOB を持ち上げない
     （実データで最大の行事が 1,357 件）。
+
+    **絞り込みの引数は `list_faces` と同じものを全部受け取る。** 画面が渡す
+    条件はひと揃いで、**ここだけ受け取れないと「いま見えている一覧」と
+    「まとめて処理する対象」がずれる。** 撮影年月を足したときに通し忘れて
+    おり、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で
+    落ちていた（#67 で修正。`test_db.py` が引数の揃いを見張る）。
     """
     where, params = _face_filter(
-        assign_source, person_id, unassigned, min_age, max_age, folder=folder, day=day
+        assign_source,
+        person_id,
+        unassigned,
+        min_age,
+        max_age,
+        folder=folder,
+        day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
+        rejected_for_person=rejected_for_person,
     )
     rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
     return [int(row[0]) for row in rows]
@@ -1100,6 +1175,7 @@ def _face_filter(
     month_from: Optional[str] = None,
     month_to: Optional[str] = None,
     undated_only: bool = False,
+    rejected_for_person: Optional[int] = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -1121,6 +1197,18 @@ def _face_filter(
 
     ``day`` は ``None`` が「日で絞らない」、`UNDATED` が「撮影日時が読めない顔
     だけ」。**同じ値で表さない**（CLAUDE.md §8）。
+
+    ``rejected_for_person`` は「**その人物ではない**と記録した顔だけ」
+    （`FaceRejection`）。**`person_id` とは別の指示**で、この顔はその人物に
+    割り当たっていないので一緒には使わない。**`誰でもない顔` にした顔は外す** —
+    あちらは `match` の候補から顔ごと外れるので、否定の記録はもう何の仕事も
+    していない（一覧に残すと、`誰でもない顔` を押したのにサムネイルが消えない）。
+    **記録そのものは消さない**（消すと、除外を取り消した瞬間に `match` が
+    またその人物へ付ける）。
+
+    以前はこの条件だけ専用の関数（`rejected_face_ids_for_person`）で作って
+    いたため、**撮影年月・行事・年齢の絞り込みとページャが効かなかった。**
+    条件はここに1つだけ持つ。
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -1132,6 +1220,15 @@ def _face_filter(
     if person_id is not None:
         clauses.append(f"{prefix}person_id = ?")
         params.append(person_id)
+    if rejected_for_person is not None:
+        clauses.append(
+            f"{prefix}id IN (SELECT face_id FROM FaceRejection WHERE person_id = ?)"
+        )
+        params.append(rejected_for_person)
+        clauses.append(
+            f"({prefix}assign_source IS NULL OR {prefix}assign_source <> ?)"
+        )
+        params.append(ASSIGN_REJECTED)
     age_clause = _age_clause(
         prefix, min_age, max_age, birth_date, include_unknown_age, params
     )
@@ -1215,6 +1312,7 @@ def list_faces(
     month_from: Optional[str] = None,
     month_to: Optional[str] = None,
     undated_only: bool = False,
+    rejected_for_person: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1227,6 +1325,7 @@ def list_faces(
     - ``ORDER_QUALITY``: 品質スコアの高い順
     - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
     - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
+    - ``ORDER_SCORE_ASC``: 自動割り当ての確信度が低い順。**持たない顔は最後**
 
     ``folder`` / ``day`` を渡すと、その行事（フォルダ×日）の写真の顔だけに絞る
     （`_face_filter`）。渡さなければ問い合わせは従来と変わらない。
@@ -1235,41 +1334,37 @@ def list_faces(
     if with_thumbnail:
         columns.append("thumbnail")
 
+    # **絞り込みの条件を組み立てるのはここ1回だけ。** 並び順ごとに
+    # 書き分けていたため、引数が増えるたびに片方へ通し忘れる形だった。
+    filters = dict(
+        assign_source=assign_source,
+        person_id=person_id,
+        unassigned=unassigned,
+        min_age=min_age,
+        max_age=max_age,
+        folder=folder,
+        day=day,
+        birth_date=birth_date,
+        include_unknown_age=include_unknown_age,
+        month_from=month_from,
+        month_to=month_to,
+        undated_only=undated_only,
+        rejected_for_person=rejected_for_person,
+    )
     if order == ORDER_SHOT_DESC:
-        query, params = _shooting_date_query(
-            columns,
-            assign_source,
-            person_id,
-            unassigned,
-            min_age,
-            max_age,
-            folder,
-            day,
-            birth_date,
-            include_unknown_age,
-            month_from,
-            month_to,
-            undated_only,
-        )
+        # 撮影日時順だけは `Media` と結合するので、別名つきで条件を作る。
+        where, params = _face_filter(prefix="f.", **filters)
+        query = _shooting_date_query(columns, where)
     else:
-        where, params = _face_filter(
-            assign_source,
-            person_id,
-            unassigned,
-            min_age,
-            max_age,
-            folder=folder,
-            day=day,
-            birth_date=birth_date,
-            include_unknown_age=include_unknown_age,
-            month_from=month_from,
-            month_to=month_to,
-            undated_only=undated_only,
-        )
+        where, params = _face_filter(**filters)
         if order == ORDER_AGE:
             # **未設定を最後に置く。** SQLite の NULL は最小なので、
             # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
             order_by = "age IS NULL ASC, age ASC, id ASC"
+        elif order == ORDER_SCORE_ASC:
+            # **確信度を持たない顔を最後に置く。** 低い順に見たいのだから、
+            # NULL が先頭に来ると見直しの邪魔になる。
+            order_by = "assign_score IS NULL ASC, assign_score ASC, id ASC"
         else:
             order_by = "quality_score DESC, id ASC"
         query = f"SELECT {','.join(columns)} FROM Face{where} ORDER BY {order_by}"
@@ -1281,22 +1376,13 @@ def list_faces(
     return [dict(row) for row in rows]
 
 
-def _shooting_date_query(
-    columns: List[str],
-    assign_source: Optional[str],
-    person_id: Optional[int],
-    unassigned: bool,
-    min_age: Optional[int],
-    max_age: Optional[int],
-    folder: Optional[str] = None,
-    day: Any = None,
-    birth_date: Optional[str] = None,
-    include_unknown_age: bool = True,
-    month_from: Optional[str] = None,
-    month_to: Optional[str] = None,
-    undated_only: bool = False,
-) -> Tuple[str, List[Any]]:
+def _shooting_date_query(columns: List[str], where: str) -> str:
     """撮影日時の新しい順に並べる問い合わせ。
+
+    ``where`` は `_face_filter(prefix="f.")` が作った条件。**この関数に
+    絞り込みの引数を並べない** — 以前は `list_faces` と同じ13個を持っていて、
+    **絞り込みを足すたびに2か所へ通す必要があった**（通し忘れで撮影年月が
+    効かない経路ができた）。
 
     **`CROSS JOIN` は結合の順序を固定するためのもの**で、直積を作るわけでは
     ない。SQLite は左の表を外側に固定するので、`idx_media_shooting` を
@@ -1311,28 +1397,12 @@ def _shooting_date_query(
     1行事（実データの最大で 1,357 件）に絞られたあとの並べ替えなので、
     実測 0.017秒で収まる（指定なしは 0.002秒）。
     """
-    where, params = _face_filter(
-        assign_source,
-        person_id,
-        unassigned,
-        min_age,
-        max_age,
-        prefix="f.",
-        folder=folder,
-        day=day,
-        birth_date=birth_date,
-        include_unknown_age=include_unknown_age,
-        month_from=month_from,
-        month_to=month_to,
-        undated_only=undated_only,
-    )
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
-    query = (
+    return (
         f"SELECT {selected} FROM Media m CROSS JOIN Face f ON f.media_id = m.id"
         f"{where} ORDER BY {sort_key} DESC, f.id ASC"
     )
-    return query, params
 
 
 def get_face(connection: sqlite3.Connection, face_id: int) -> Optional[Dict[str, Any]]:
@@ -1521,35 +1591,14 @@ def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> i
     """その人物について「ではない」と記録された顔の件数。
 
     **「誰でもない顔」にした顔も数える。** 記録は残っているため。
-    一覧に出る件数とは一致しないことがある（`rejected_face_ids_for_person`）。
+    一覧に出る件数とは一致しないことがある
+    （一覧は `誰でもない顔` にした顔を外す。`_face_filter` の
+    ``rejected_for_person``）。
     """
     row = connection.execute(
         "SELECT COUNT(*) FROM FaceRejection WHERE person_id = ?", (person_id,)
     ).fetchone()
     return int(row[0])
-
-
-def rejected_face_ids_for_person(
-    connection: sqlite3.Connection, person_id: int
-) -> List[int]:
-    """その人物について「ではない」と記録された顔の id。一覧で見直すため。
-
-    **「誰でもない顔」にした顔は外す。** あちらは `match` の候補から顔ごと
-    外れるので、**「この人物ではない」の記録はもう何の仕事もしていない。**
-    一覧に残すと、`誰でもない顔` を押したのにサムネイルが消えない。
-
-    **記録そのものは消さない。** 消すと、除外を取り消した瞬間に `match` が
-    またその人物へ付けてしまう。除外を取り消せば、この一覧にも戻る。
-    """
-    return [
-        int(row[0])
-        for row in connection.execute(
-            "SELECT r.face_id FROM FaceRejection r JOIN Face f ON f.id = r.face_id"
-            " WHERE r.person_id = ? AND (f.assign_source IS NULL OR f.assign_source <> ?)"
-            " ORDER BY r.face_id",
-            (person_id, ASSIGN_REJECTED),
-        )
-    ]
 
 
 def reject_faces(
