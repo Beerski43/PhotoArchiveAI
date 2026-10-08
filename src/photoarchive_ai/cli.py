@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from . import db
 from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
 from .converter import convert_heic_files
 from .db import SchemaVersionError, ensure_database
@@ -193,6 +194,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Report what would be assigned without writing."
     )
     _add_log_level(match_parser)
+
+    unassign_parser = subparsers.add_parser(
+        "unassign-auto",
+        help="Remove every automatic assignment, keeping the manual ones and the rejects.",
+    )
+    unassign_parser.add_argument("--db", help="SQLite database path.")
+    unassign_parser.add_argument(
+        "--person",
+        help=(
+            "人物の名前か id。指定すると、その人物の自動割り当てだけを消す"
+            "（省略すると全員ぶん）。"
+        ),
+    )
+    unassign_parser.add_argument(
+        "--dry-run", action="store_true", help="Report how many would be removed without writing."
+    )
+    _add_log_level(unassign_parser)
 
     evaluate_parser = subparsers.add_parser(
         "evaluate",
@@ -388,6 +406,57 @@ def _parse_thresholds(raw: str) -> List[float]:
     return values
 
 
+def _resolve_person(connection, wanted: str) -> dict:
+    """``--person`` に渡された名前か id から人物を1人に決める。
+
+    **同じ名前の人物が複数いたら決めない。** `Person.name` に UNIQUE 制約は
+    まだ無いので（仕様書 Phase 3 手順7）、勝手に1人目を選ぶと**別人の
+    割り当てを消す。**
+    """
+    persons = db.list_persons(connection)
+    if wanted.isdigit():
+        matched = [person for person in persons if int(person["id"]) == int(wanted)]
+    else:
+        matched = [person for person in persons if person["name"] == wanted]
+    if not matched:
+        known = "、".join(f"{person['id']}:{person['name']}" for person in persons) or "（登録なし）"
+        raise SystemExit(f"人物が見つかりません: {wanted}\n登録されている人物: {known}")
+    if len(matched) > 1:
+        ids = "、".join(str(person["id"]) for person in matched)
+        raise SystemExit(
+            f"同じ名前の人物が複数います: {wanted}（id {ids}）。--person に id を渡してください。"
+        )
+    return matched[0]
+
+
+def _run_unassign_auto(args, db_path: str) -> None:
+    """自動割り当てだけを消す。**手本と除外には触らない。**
+
+    `match` は流すたびに自動割り当てを付け直すので、これは「`match` の結果が
+    信用できないので、いったん無かったことにする」ための口。
+    手本を直してから `photoarchive match` を流せば付け直せる。
+    """
+    with ensure_database(db_path) as connection:
+        person = _resolve_person(connection, args.person) if args.person else None
+        person_id = int(person["id"]) if person else None
+        scope = f"{person['name']} の" if person else "全員の"
+        before = db.count_faces(
+            connection, assign_source=db.ASSIGN_AUTO, person_id=person_id
+        )
+        if args.dry_run:
+            print(f"(dry-run) Would remove {before} automatic assignments ({scope}).")
+            return
+        removed = db.reset_auto_assignments(connection, person_id=person_id)
+        # **family_score を数え直す。** 消しただけだと、もう存在しない
+        # 自動割り当てから計算されたスコアが AnalysisResult に残り、
+        # `select` の family_only がその古い値で写真を選ぶ。
+        db.recompute_family_scores(connection)
+    print(
+        f"Removed {removed} automatic assignments ({scope}) "
+        "(manual assignments and rejects are untouched); family_score recomputed."
+    )
+
+
 def _run_evaluate(args, db_path: str) -> None:
     log_file = Path("data/logs") / f"evaluate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = _setup_logging(log_file, args.log_level)
@@ -464,6 +533,10 @@ def main() -> None:
 
         if args.command == "match":
             _run_match(args, db_path)
+            return
+
+        if args.command == "unassign-auto":
+            _run_unassign_auto(args, db_path)
             return
 
         if args.command == "evaluate":

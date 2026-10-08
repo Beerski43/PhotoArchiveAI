@@ -295,3 +295,257 @@ def test_a_threshold_that_is_not_a_positive_finite_number_stops(tmp_path, value)
         run_cli(["evaluate", "--db", str(database), "--thresholds", value], tmp_path)
 
     assert "正の有限の数" in str(raised.value)
+
+
+def _database_with_mixed_assignments(tmp_path):
+    """手本・自動・除外・未割当を1件ずつ持つDB。``family_score`` も入れる。"""
+    import numpy as np
+
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    connection = db.ensure_database(str(database))
+    person = db.add_person(connection, "Alice")
+    face_ids = {}
+    for index, source in enumerate(
+        (db.ASSIGN_MANUAL, db.ASSIGN_AUTO, db.ASSIGN_REJECTED, None), start=1
+    ):
+        media = db.save_media(
+            connection,
+            {
+                "path": f"/photos/{index}.jpg",
+                "filename": f"{index}.jpg",
+                "type": "image",
+                "file_hash": f"hash{index}",
+                "file_size": 100,
+                "created_time": "2026-01-01T00:00:00",
+            },
+        )
+        vector = np.zeros(db.EMBEDDING_DIM, dtype=np.float32)
+        vector[0] = index * 0.01
+        face_ids[source] = db.add_face(
+            connection,
+            media_id=media,
+            bbox=(0, 10, 10, 0),
+            embedding=vector,
+            embed_version=db.embedding_model.ACTIVE.version,
+            person_id=person if source in (db.ASSIGN_MANUAL, db.ASSIGN_AUTO) else None,
+            assign_source=source,
+            assign_score=55.0 if source == db.ASSIGN_AUTO else None,
+        )
+        db.save_media_scores(connection, media, smile_score=10.0, quality_score=20.0)
+    db.set_face_age(connection, face_ids[db.ASSIGN_MANUAL], 7)
+    connection.commit()
+    db.recompute_family_scores(connection)
+    return database, connection, face_ids
+
+
+def test_unassign_auto_removes_only_the_automatic_assignments(tmp_path, capsys):
+    """**手本と除外には触らない。** 触ると GUI で積み上げた判断が消える。"""
+    database, connection, face_ids = _database_with_mixed_assignments(tmp_path)
+    connection.close()
+    capsys.readouterr()
+
+    run_cli(["unassign-auto", "--db", str(database)], tmp_path)
+
+    connection = db.ensure_database(str(database))
+    try:
+        rows = {row["id"]: row for row in db.list_faces(connection)}
+        manual = rows[face_ids[db.ASSIGN_MANUAL]]
+        assert manual["assign_source"] == db.ASSIGN_MANUAL
+        assert manual["person_id"] is not None
+        assert manual["age"] == 7, "年齢も残る"
+        assert rows[face_ids[db.ASSIGN_REJECTED]]["assign_source"] == db.ASSIGN_REJECTED
+        automatic = rows[face_ids[db.ASSIGN_AUTO]]
+        assert automatic["assign_source"] is None
+        assert automatic["person_id"] is None
+        assert automatic["assign_score"] is None
+    finally:
+        connection.close()
+    assert "Removed 1 automatic assignments" in capsys.readouterr().out
+
+
+def test_unassign_auto_recomputes_the_family_score(tmp_path, capsys):
+    """**消しただけだと family_score が古いまま残る。**
+
+    `AnalysisResult.family_score` は「その写真に家族が写っている確からしさ」で、
+    自動割り当てから計算される。消したのに数え直さないと、**もう存在しない
+    割り当てのスコアが残り、`select` の family_only がその古い値で写真を選ぶ。**
+    """
+    database, connection, face_ids = _database_with_mixed_assignments(tmp_path)
+    auto_media = db.get_face(connection, face_ids[db.ASSIGN_AUTO])["media_id"]
+    manual_media = db.get_face(connection, face_ids[db.ASSIGN_MANUAL])["media_id"]
+    assert db.get_analysis_result(connection, auto_media)["family_score"] == 55.0
+    connection.close()
+    capsys.readouterr()
+
+    run_cli(["unassign-auto", "--db", str(database)], tmp_path)
+
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.get_analysis_result(connection, auto_media)["family_score"] == 0.0
+        # 手本の写真は 100 のまま（手動割当は確信度100として扱う）。
+        assert db.get_analysis_result(connection, manual_media)["family_score"] == 100.0
+        # scan が書いたスコアは潰れていない。
+        assert db.get_analysis_result(connection, auto_media)["smile_score"] == 10.0
+    finally:
+        connection.close()
+
+
+def test_unassign_auto_can_report_without_writing(tmp_path, capsys):
+    """`--dry-run` は数えるだけ。**消す前に件数を確かめられる。**"""
+    database, connection, _ = _database_with_mixed_assignments(tmp_path)
+    connection.close()
+    capsys.readouterr()
+
+    run_cli(["unassign-auto", "--db", str(database), "--dry-run"], tmp_path)
+
+    assert "(dry-run) Would remove 1" in capsys.readouterr().out
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) == 1
+    finally:
+        connection.close()
+
+
+def test_match_can_put_the_automatic_assignments_back(tmp_path, capsys):
+    """**解除は取り返しがつく。** 手本と閾値だけで決まるので、流し直せば戻る。"""
+    database, connection, _ = _database_with_mixed_assignments(tmp_path)
+    connection.close()
+    capsys.readouterr()
+    run_cli(["unassign-auto", "--db", str(database)], tmp_path)
+    capsys.readouterr()
+
+    run_cli(["match", "--db", str(database), "--threshold", "0.5"], tmp_path)
+
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) >= 1
+    finally:
+        connection.close()
+
+
+def _two_people_with_automatic_faces(tmp_path):
+    """2人に自動割り当てがあるDB。片方だけ消せるかを見るため。"""
+    import numpy as np
+
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    connection = db.ensure_database(str(database))
+    people = {name: db.add_person(connection, name) for name in ("Alice", "Bob")}
+    index = 0
+    for name, person in people.items():
+        for _ in range(2):
+            index += 1
+            media = db.save_media(
+                connection,
+                {
+                    "path": f"/photos/{index}.jpg",
+                    "filename": f"{index}.jpg",
+                    "type": "image",
+                    "file_hash": f"hash{index}",
+                    "file_size": 100,
+                    "created_time": "2026-01-01T00:00:00",
+                },
+            )
+            db.add_face(
+                connection,
+                media_id=media,
+                bbox=(0, 10, 10, 0),
+                embedding=np.zeros(db.EMBEDDING_DIM, dtype=np.float32),
+                embed_version=db.embedding_model.ACTIVE.version,
+                person_id=person,
+                assign_source=db.ASSIGN_AUTO,
+                assign_score=55.0,
+            )
+    connection.commit()
+    connection.close()
+    return database, people
+
+
+def test_unassign_auto_can_be_limited_to_one_person(tmp_path, capsys):
+    """**人物を指定して消せる。** 1人ぶんだけ見直したいときに、全員を巻き込まない。"""
+    database, people = _two_people_with_automatic_faces(tmp_path)
+    capsys.readouterr()
+
+    run_cli(["unassign-auto", "--db", str(database), "--person", "Alice"], tmp_path)
+
+    assert "Removed 2 automatic assignments (Alice の)" in capsys.readouterr().out
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) == 2
+        assert (
+            db.count_faces(
+                connection, assign_source=db.ASSIGN_AUTO, person_id=people["Bob"]
+            )
+            == 2
+        ), "Bob の自動割り当ては残る"
+        assert (
+            db.count_faces(
+                connection, assign_source=db.ASSIGN_AUTO, person_id=people["Alice"]
+            )
+            == 0
+        )
+    finally:
+        connection.close()
+
+
+def test_unassign_auto_accepts_a_person_id_as_well_as_a_name(tmp_path, capsys):
+    """id でも指せること。同名の人物がいるときの逃げ道になる。"""
+    database, people = _two_people_with_automatic_faces(tmp_path)
+    capsys.readouterr()
+
+    run_cli(
+        ["unassign-auto", "--db", str(database), "--person", str(people["Bob"])],
+        tmp_path,
+    )
+
+    connection = db.ensure_database(str(database))
+    try:
+        assert (
+            db.count_faces(
+                connection, assign_source=db.ASSIGN_AUTO, person_id=people["Bob"]
+            )
+            == 0
+        )
+    finally:
+        connection.close()
+
+
+def test_an_unknown_person_stops_instead_of_removing_everything(tmp_path):
+    """**名前を打ち間違えたときに全員ぶんを消さない。**
+
+    絞り込みが黙って無視されると、1人ぶんのつもりで全部消える。
+    """
+    database, _ = _two_people_with_automatic_faces(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        run_cli(["unassign-auto", "--db", str(database), "--person", "Carol"], tmp_path)
+
+    assert "人物が見つかりません" in str(error.value)
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) == 4
+    finally:
+        connection.close()
+
+
+def test_a_duplicated_person_name_stops_instead_of_guessing(tmp_path):
+    """**同じ名前が2人いたら決めない。** `Person.name` に UNIQUE 制約がまだ無い。
+
+    勝手に1人目を選ぶと、**別人の割り当てを消す。**
+    """
+    database, _ = _two_people_with_automatic_faces(tmp_path)
+    connection = db.ensure_database(str(database))
+    db.add_person(connection, "Alice")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(SystemExit) as error:
+        run_cli(["unassign-auto", "--db", str(database), "--person", "Alice"], tmp_path)
+
+    assert "同じ名前の人物が複数います" in str(error.value)
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) == 4
+    finally:
+        connection.close()
