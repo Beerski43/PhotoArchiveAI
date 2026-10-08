@@ -70,6 +70,33 @@ def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新
     return _FakeDialog
 
 
+def _person_rows(window):
+    """左の一覧のうち、**人物の行**の行番号。
+
+    一覧の先頭には表示（未割当・自動割当・除外済み）と区切り線が並ぶので、
+    行番号をそのまま人物の番号として使えない（#67）。
+    """
+    return [
+        row
+        for row in range(window.person_list.count())
+        if window.person_list.item(row).data(Qt.UserRole) is not None
+    ]
+
+
+def _select_person(window, index: int = 0):
+    """左の一覧で ``index`` 番目の人物を選ぶ。"""
+    window.person_list.setCurrentRow(_person_rows(window)[index])
+
+
+def _assign_to(window, index: int = 0):
+    """``index`` 番目の人物へ、選んだ顔を割り当てる。
+
+    **割り当て先は右クリックのメニューが持つ**（左の選択は「見るもの」）。
+    """
+    person = window.person_list.item(_person_rows(window)[index]).data(Qt.UserRole)
+    window._assign_selected(person)
+
+
 @pytest.fixture()
 def window(tmp_path):
     """人物1件と、実在する写真に紐づく顔1件を持つウィンドウ。"""
@@ -118,7 +145,7 @@ def window(tmp_path):
 def test_editing_a_person_saves_the_new_values(window, monkeypatch):
     dialog = _make_dialog_class(accepted=True)
     monkeypatch.setattr(photoarchive_gui, "PersonDialog", dialog)
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
 
     window._edit_person()
 
@@ -132,12 +159,12 @@ def test_editing_a_person_saves_the_new_values(window, monkeypatch):
         "新しいメモ",
     )
     # 一覧の表示も入れ替わっている
-    assert "新しい名前" in window.person_list.item(0).text()
+    assert "新しい名前" in window.person_list.item(_person_rows(window)[0]).text()
 
 
 def test_cancelling_the_edit_changes_nothing(window, monkeypatch):
     monkeypatch.setattr(photoarchive_gui, "PersonDialog", _make_dialog_class(accepted=False))
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
 
     window._edit_person()
 
@@ -150,7 +177,7 @@ def test_an_empty_name_is_rejected(window, monkeypatch):
         "PersonDialog",
         _make_dialog_class(accepted=True, values=("", "", "", (0, 0, 0))),
     )
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
 
     window._edit_person()
 
@@ -547,8 +574,17 @@ def test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated():
     assert "歳" not in photoarchive_gui.format_media_info(no_exif, person=person2)
 
 
-def test_the_age_line_follows_the_person_selection(window, monkeypatch):
-    """人物を選び直したら年齢の行が入れ替わる。**元写真は読み直さない。**"""
+def test_switching_the_view_does_not_reload_the_original_photo(window, monkeypatch):
+    """左で選び直しても**元写真を読み直さない。**
+
+    元写真は NFS 上で1枚 220ms かかる。選び直すたびに読むと、見比べるだけで
+    待たされる。
+
+    **人物を選ぶと「見るもの」が変わる**（その人物の割り当て済みが出る）ので、
+    以前のように「顔を選んだまま人物を切り替えて年齢を見比べる」操作は無い。
+    代わりに未割当の表示では**全員の年齢が1行に並ぶ**
+    （`test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s`）。
+    """
     connection = window.connection
     db.update_person(
         connection, db.list_persons(connection)[0]["id"], "父", "father", "", birth_date="1980-01-01"
@@ -564,13 +600,10 @@ def test_the_age_line_follows_the_person_selection(window, monkeypatch):
         "load_face_image_bytes",
         lambda path, bbox: reads.append(path) or b"",
     )
-    # 写真は 2017-12-16 撮影（window フィクスチャ）。
-    # 並びは登録順（`display_order`）なので、先に居た「父」が先頭。
+    _select_person(window)
+    _select_person(window, 1)
     window.person_list.setCurrentRow(0)
-    assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
 
-    window.person_list.setCurrentRow(1)
-    assert window.preview_info.text().splitlines()[-1] == "${PERSON_2}: 6歳"
     assert reads == []
 
 
@@ -585,7 +618,7 @@ def test_a_birth_date_can_be_registered_and_cleared(window, monkeypatch):
         "PersonDialog",
         _make_dialog_class(accepted=True, values=("父", "father", "", (1980, 1, 2))),
     )
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
     window._edit_person()
 
     assert db.list_persons(window.connection)[0]["birth_date"] == "1980-01-02"
@@ -596,7 +629,7 @@ def test_a_birth_date_can_be_registered_and_cleared(window, monkeypatch):
         "PersonDialog",
         _make_dialog_class(accepted=True, values=("父", "father", "", (0, 0, 0))),
     )
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
     window._edit_person()
 
     assert db.list_persons(window.connection)[0]["birth_date"] is None
@@ -615,7 +648,7 @@ def test_a_partly_filled_birth_date_is_rejected(window, monkeypatch):
             "PersonDialog",
             _make_dialog_class(accepted=True, values=("父", "father", "", parts)),
         )
-        window.person_list.setCurrentRow(0)
+        _select_person(window)
         window._edit_person()
 
     assert len(warned) == 4
@@ -650,7 +683,7 @@ def test_the_edit_dialog_opens_with_the_stored_birth_date(window, monkeypatch):
     window._reload_person_list()
     dialog = _make_dialog_class(accepted=False)
     monkeypatch.setattr(photoarchive_gui, "PersonDialog", dialog)
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
 
     window._edit_person()
 
@@ -699,7 +732,7 @@ def test_typing_a_birth_date_straight_from_the_keyboard(qt_app):
 
 def test_the_person_details_show_the_birth_date(window):
     """登録したことが画面から見えないと、年齢が出ない理由が分からない。"""
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
     assert "誕生日: 未設定" in window.details_label.text()
 
     db.update_person(
@@ -711,7 +744,7 @@ def test_the_person_details_show_the_birth_date(window):
         birth_date="1980-01-02",
     )
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
+    _select_person(window)
 
     assert "誕生日: 1980-01-02" in window.details_label.text()
 
@@ -785,10 +818,9 @@ def test_assigning_faces_offers_the_calculated_age_without_saving_it(window, mon
         birth_date="1980-01-02",
     )
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
 
-    window._assign_selected()
+    _assign_to(window)
 
     # 写真は 2017-12-16 撮影
     assert opened["initial_age"] == 37
@@ -845,10 +877,9 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
         birth_date="1980-01-02",
     )
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
     window.face_list.selectAll()
 
-    window._assign_selected()
+    _assign_to(window)
 
     assert "2 件すべてに同じ年齢を入れます" in opened["summary"]
     assert "2012-01-01 〜 2017-12-16 にまたがっています" in opened["summary"]
@@ -917,18 +948,21 @@ def test_a_broken_exif_date_does_not_appear_in_the_selection_notice():
     assert "にまたがっています" not in notice
 
 
-def test_the_age_line_appears_right_after_the_birth_date_is_registered(window, monkeypatch):
-    """**誕生日を登録したら、その場で年齢の行が出る。**
+def test_the_age_appears_right_after_the_birth_date_is_registered(window, monkeypatch):
+    """**誕生日を登録したら、その場で年齢が出る。**
 
-    `_reload_person_list` の `clear()` で選択が外れ、`_on_person_selected(None)` が
-    early return していたため、**人物を選び直すまで出なかった。** この機能を
-    初めて使う人には、効いていないように見える。
+    以前は `_reload_person_list` の `clear()` で選択が外れ、
+    `_on_person_selected(None)` が early return していたため、**人物を選び直す
+    まで出なかった。** この機能を初めて使う人には、効いていないように見える。
+
+    年齢が出る場所は3つある（#67）。人物の詳細・プレビューの情報欄・
+    **割り当てのメニュー**。登録した直後にそろうこと。
     """
-    window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
     window._show_preview()
     assert "歳" not in window.preview_info.text()
 
+    _select_person(window)
     monkeypatch.setattr(
         photoarchive_gui,
         "PersonDialog",
@@ -936,15 +970,28 @@ def test_the_age_line_appears_right_after_the_birth_date_is_registered(window, m
     )
     window._edit_person()
 
-    # 写真は 2017-12-16 撮影
-    assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
-    # 詳細欄も「人物を選択してください。」に戻らない
+    # 詳細欄はその場で変わる（選択も外れない）
     assert "誕生日: 1980-01-02" in window.details_label.text()
     assert window._current_person()["name"] == "父"
 
+    # 未割当に戻ると、情報欄とメニューの両方に出る（写真は 2017-12-16 撮影）
+    window.person_list.setCurrentRow(0)
+    window.face_list.setCurrentRow(0)
+    assert window.preview_info.text().splitlines()[-1] == "撮影時の年齢: 父 37歳"
+    assert "（37歳）" in window.assign_actions[0].text()
 
-def test_dropping_the_person_selection_also_drops_the_age_line(window):
-    """**前の人物の年齢を残さない。** 誰の年齢なのか分からなくなる。"""
+
+def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window):
+    """**人物を選んでいないときは、全員の撮影時の年齢を出す。**
+
+    左の一覧が「見るもの」になったので、未割当を見ているあいだは**選択中の
+    人物が居ない。** 以前はそこで年齢の行が消えていたが、未割当の作業は
+    「この顔は誰か」を決めることなので、**その写真の時点で各人が何歳か**が
+    いちばん効く手がかりになる。
+
+    **前の人物の年齢をそのまま残さない**ことも確かめる（誰の年齢なのか
+    分からなくなる）。
+    """
     db.update_person(
         window.connection,
         db.list_persons(window.connection)[0]["id"],
@@ -953,15 +1000,36 @@ def test_dropping_the_person_selection_also_drops_the_age_line(window):
         "",
         birth_date="1980-01-02",
     )
+    db.add_person(window.connection, "${PERSON_2}", "daughter", "", birth_date="2011-05-03")
+    # 同じ写真にもう1つ顔を足し、片方だけ「父」に割り当てる。
+    # **人物の表示と未割当の表示で、同じ写真を見比べるため。**
+    media_id = db.list_faces(window.connection, with_thumbnail=False)[0]["media_id"]
+    assigned = db.list_faces(window.connection, unassigned=True)[0]["id"]
+    db.add_face(
+        window.connection,
+        media_id=media_id,
+        bbox=(20, 120, 80, 40),
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=b"",
+    )
+    father = db.list_persons(window.connection)[0]["id"]
+    db.assign_faces(window.connection, [assigned], father, db.ASSIGN_MANUAL)
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
+
+    # 人物を選んでいるあいだは、その1人ぶんだけ。
+    _select_person(window)
     window.face_list.setCurrentRow(0)
     window._show_preview()
-    assert "父: 37歳" in window.preview_info.text()
+    assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
 
-    window.person_list.setCurrentRow(-1)
+    window.person_list.setCurrentRow(0)  # 「未割当」の表示
+    window.face_list.setCurrentRow(0)
+    window._show_preview()
 
-    assert "歳" not in window.preview_info.text()
+    last = window.preview_info.text().splitlines()[-1]
+    assert last == "撮影時の年齢: 父 37歳 / ${PERSON_2} 6歳"
+    assert "父: 37歳" not in window.preview_info.text(), "1人ぶんの行は残さない"
 
 
 def test_a_new_person_is_selected_so_the_age_shows_immediately(window, monkeypatch):
@@ -977,7 +1045,9 @@ def test_a_new_person_is_selected_so_the_age_shows_immediately(window, monkeypat
     window._add_person()
 
     assert window._current_person()["name"] == "${PERSON_2}"
-    assert window.preview_info.text().splitlines()[-1] == "${PERSON_2}: 6歳"
+    assert "誕生日: 2011-05-03" in window.details_label.text()
+    # 打鍵の割り当ても増える。**左の一覧に並んでいる順に 1 から振る。**
+    assert [action.data()["name"] for action in window.assign_actions] == ["父", "${PERSON_2}"]
 
 
 # ---------------------------------------------------------------------------
@@ -1001,8 +1071,12 @@ def test_the_person_order_can_be_changed_and_is_remembered(tmp_path, qt_app):
     try:
         assert [p["name"] for p in db.list_persons(window.connection)] == ["あ", "い", "う"]
 
-        # 「う」を先頭へドラッグしたのと同じこと（モデル経由で rowsMoved が出る）
-        moved = window.person_list.model().moveRow(QModelIndex(), 2, QModelIndex(), 0)
+        # 「う」を人物の先頭へドラッグしたのと同じこと（rowsMoved が出る）。
+        # **行番号は人物の行から取る**（先頭には表示と区切り線が並ぶ）。
+        rows = _person_rows(window)
+        moved = window.person_list.model().moveRow(
+            QModelIndex(), rows[2], QModelIndex(), rows[0]
+        )
         assert moved
 
         assert [p["name"] for p in db.list_persons(window.connection)] == ["う", "あ", "い"]
@@ -1013,8 +1087,8 @@ def test_the_person_order_can_be_changed_and_is_remembered(tmp_path, qt_app):
     reopened = photoarchive_gui.MainWindow(str(database))
     try:
         listed = [
-            reopened.person_list.item(row).text().split(" (")[0]
-            for row in range(reopened.person_list.count())
+            reopened.person_list.item(row).data(Qt.UserRole)["name"]
+            for row in _person_rows(reopened)
         ]
         assert listed == ["う", "あ", "い"]
     finally:
@@ -1075,14 +1149,13 @@ def test_the_preview_says_done_and_fades_after_an_assignment(window, monkeypatch
     """
     window.show()
     qt_app.processEvents()
-    window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
     window._show_preview()
     assert window.preview_status.isVisible() is False
     before = _average_alpha(window.preview_label.pixmap())
 
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
-    window._assign_selected()
+    _assign_to(window)
     qt_app.processEvents()
 
     assert window.preview_status.isVisible() is True
@@ -1097,12 +1170,11 @@ def test_the_done_label_sits_on_top_of_the_photo(window, monkeypatch, qt_app):
     """札は**顔写真に重ねて中央**に置く。画像の外だと目を離さないと気づけない。"""
     window.show()
     qt_app.processEvents()
-    window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
     window._show_preview()
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
 
-    window._assign_selected()
+    _assign_to(window)
     qt_app.processEvents()
 
     assert window.preview_status.parent() is window.preview_label
@@ -1128,11 +1200,10 @@ def test_choosing_another_face_clears_the_done_label(window, monkeypatch, qt_app
     )
     connection.commit()
     window.reload_faces()
-    window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
     window._show_preview()
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog())
-    window._assign_selected()
+    _assign_to(window)
     qt_app.processEvents()
     assert window.preview_status.isVisible() is True
 

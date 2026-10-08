@@ -399,14 +399,25 @@ def test_bulk_buttons_stay_disabled_until_an_event_is_chosen(seeded):
         window.connection.close()
 
 
-def test_the_bulk_button_changes_meaning_with_the_filter(seeded):
+def test_the_bulk_button_changes_meaning_with_the_view(seeded):
+    """**表示を切り替えたら、まとめて処理の意味も変える。**
+
+    表示は左の一覧で選ぶ（#67）。
+    """
     connection, _faces, path = seeded
     window = photoarchive_gui.MainWindow(path)
     try:
         window.event = ("/photos/wedding", "2011-04-16")
         window._sync_event_controls()
         assert "未割当をすべて除外" in window.bulk_event_button.text()
-        window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
+
+        for row in range(window.person_list.count()):
+            if (
+                window.person_list.item(row).data(photoarchive_gui.SCOPE_ROLE)
+                == photoarchive_gui.SCOPE_REJECTED
+            ):
+                window.person_list.setCurrentRow(row)
+                break
         assert "除外をすべて取り消す" in window.bulk_event_button.text()
     finally:
         window.connection.close()
