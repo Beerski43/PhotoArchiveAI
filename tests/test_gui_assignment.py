@@ -33,6 +33,38 @@ def _always_accepts_age(age):
     return _Dialog
 
 
+def _select_scope(window, scope):
+    """左の一覧で表示（未割当・自動割当・除外済み）を選ぶ。
+
+    **これが旧 `filter_box`。** 表示の選択を左の一覧へ畳んだので、
+    同じことを2か所で選ばせない（#67）。
+    """
+    for row in range(window.person_list.count()):
+        if window.person_list.item(row).data(photoarchive_gui.SCOPE_ROLE) == scope:
+            window.person_list.setCurrentRow(row)
+            return
+    raise AssertionError(f"左の一覧に表示 {scope} が無い")
+
+
+def _select_person_view(window, person_id):
+    """左の一覧でその人物を選ぶ。**これが旧「割り当て済みを確認」。**"""
+    window._reload_person_list(select_person_id=person_id)
+    assert window._current_person()["id"] == person_id
+
+
+def _person(connection, person_id):
+    return next(row for row in db.list_persons(connection) if row["id"] == person_id)
+
+
+def _total(window):
+    """いま画面が見ている件数。**一覧と同じ条件で数え直す。**"""
+    return db.count_faces(window.connection, **window._filter_arguments())
+
+
+def _labels(window):
+    return [window.face_list.item(i).text() for i in range(window.face_list.count())]
+
+
 def _seed(connection, count: int) -> None:
     media_id = db.save_media(
         connection,
@@ -186,19 +218,17 @@ def test_the_age_filter_can_also_be_typed(window, qt_app):
     次に触った人が「こちらは打てるのに、あちらは打てない」と混乱する。
     """
     person_id = db.add_person(window.connection, "父")
-    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
-    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
-    dialog.show()
+    _select_person_view(window, person_id)
+    window.show()
     qt_app.processEvents()
 
-    dialog.min_age.setFocus()
-    QTest.keyClicks(dialog.min_age, "3")
+    window.min_age.setFocus()
+    QTest.keyClicks(window.min_age, "3")
 
-    assert dialog.min_age.value() == 3
-    dialog.close()
+    assert window.min_age.value() == 3
 
 
-def test_registered_faces_dialog_pages_through_every_assigned_face(window, monkeypatch):
+def test_the_person_view_pages_through_every_assigned_face(window, monkeypatch):
     """割り当て済みの顔にページャがあること。
 
     以前は先頭の1ページぶんしか読まず、201件目以降の顔に手が届かなかった。
@@ -209,24 +239,23 @@ def test_registered_faces_dialog_pages_through_every_assigned_face(window, monke
     face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
     window.assign_faces(face_ids, person_id)
 
-    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
-    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
+    _select_person_view(window, person_id)
 
-    assert dialog.total == 5
-    assert dialog.face_list.count() == 2
-    assert dialog.prev_button.isEnabled() is False
+    assert _total(window) == 5
+    assert window.face_list.count() == 2
+    assert window.prev_button.isEnabled() is False
 
     seen = []
     for _ in range(3):
         seen.extend(item.data(photoarchive_gui.Qt.UserRole)["id"] for item in
-                    [dialog.face_list.item(i) for i in range(dialog.face_list.count())])
-        dialog._next_page()
+                    [window.face_list.item(i) for i in range(window.face_list.count())])
+        window._next_page()
 
     assert sorted(seen) == sorted(face_ids)
-    assert dialog.next_button.isEnabled() is False
+    assert window.next_button.isEnabled() is False
 
-    dialog._previous_page()
-    assert dialog.face_list.count() == 2
+    window._previous_page()
+    assert window.face_list.count() == 2
 
 
 def test_the_age_filter_returns_to_the_first_page(window, monkeypatch):
@@ -234,14 +263,13 @@ def test_the_age_filter_returns_to_the_first_page(window, monkeypatch):
     person_id = db.add_person(window.connection, "父")
     face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
     window.assign_faces(face_ids, person_id)
-    person = next(p for p in db.list_persons(window.connection) if p["id"] == person_id)
-    dialog = photoarchive_gui.RegisteredFacesDialog(window, window.connection, person)
+    _select_person_view(window, person_id)
 
-    dialog._next_page()
-    assert dialog.page == 1
+    window._next_page()
+    assert window.page == 1
 
-    dialog.min_age.setValue(3)
-    assert dialog.page == 0
+    window.min_age.setValue(3)
+    assert window.page == 0
 
 
 def test_assigning_without_an_age_keeps_the_one_already_recorded(window):
@@ -281,7 +309,7 @@ def test_zero_is_stored_as_zero_and_not_as_unset(window):
 
 
 def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypatch):
-    """「割り当て済みを確認」から年齢を直すときも、計算値を初期値に入れる。
+    """人物の表示から年齢を直すときも、計算値を初期値に入れる。
 
     こちらだけ手計算のままだと、**あとから直すときにいちばん手間がかかる。**
     """
@@ -291,9 +319,8 @@ def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypa
     person_id = db.add_person(connection, "なつ", birth_date="2011-05-03")
     face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
     window.assign_faces(face_ids, person_id)
-    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
-    dialog = photoarchive_gui.RegisteredFacesDialog(window, connection, person)
-    dialog.face_list.selectAll()
+    _select_person_view(window, person_id)
+    window.face_list.selectAll()
 
     opened = {}
 
@@ -308,12 +335,11 @@ def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypa
             return None
 
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
-    dialog._set_age_selected()
+    window._set_age_selected()
 
     assert opened["initial_age"] == 6
     # 取り消したので、年齢は未設定のまま
     assert all(row["age"] is None for row in db.list_faces(connection, person_id=person_id))
-    dialog.close()
 
 
 def _media_with_date(connection, path, shooting_date, file_hash):
@@ -368,7 +394,7 @@ def test_the_unassigned_list_starts_with_the_newest_photo(window):
 
 
 def test_the_assigned_list_is_ordered_by_age(window):
-    """「割り当て済みを確認」は**年齢順**（#53）。
+    """人物の表示は**年齢順**（#53）。
 
     成長の順に並ぶので、年齢の入れ間違いや、別人が混ざっているのに気づきやすい。
     """
@@ -378,18 +404,16 @@ def test_the_assigned_list_is_ordered_by_age(window):
     for face_id, age in zip(face_ids, (8, 2, 5, None, 0)):
         window.assign_faces([face_id], person_id, age=age)
 
-    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
-    dialog = photoarchive_gui.RegisteredFacesDialog(window, connection, person)
+    _select_person_view(window, person_id)
 
     ages = [
-        dialog.face_list.item(row).data(Qt.UserRole)["age"]
-        for row in range(dialog.face_list.count())
+        window.face_list.item(row).data(Qt.UserRole)["age"]
+        for row in range(window.face_list.count())
     ]
 
     assert ages[:4] == [0, 2, 5, 8]
     # **未設定は最後。** 先頭に来ると、年齢順に見ていく邪魔になる
     assert ages[-1] is None
-    dialog.close()
 
 
 def test_rebuilding_the_list_does_not_reload_the_preview(window, monkeypatch):
@@ -406,15 +430,14 @@ def test_rebuilding_the_list_does_not_reload_the_preview(window, monkeypatch):
         "load_face_image_bytes",
         lambda path, bbox: reads.append(path) or b"",
     )
-    db.add_person(window.connection, "父")
+    person_id = db.add_person(window.connection, "父")
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
     window.face_list.selectAll()
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
     # 選んだときの1回は正しい読み出し。数えるのは**作り直しのぶん**だけ
     reads.clear()
 
-    window._assign_selected()
+    window._assign_selected(_person(window.connection, person_id))
 
     assert reads == []
 
@@ -432,12 +455,11 @@ def test_the_progress_is_reported_for_every_face(window, monkeypatch):
 
     monkeypatch.setattr(photoarchive_gui, "WorkProgress", _Spy)
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _always_accepts_age(5))
-    db.add_person(window.connection, "父")
+    person_id = db.add_person(window.connection, "父")
     window._reload_person_list()
-    window.person_list.setCurrentRow(0)
     window.face_list.selectAll()
 
-    window._assign_selected()
+    window._assign_selected(_person(window.connection, person_id))
 
     # 最初に 0、最後に全件。件数は選んだ顔の数と一致する
     assert reported[0] == (0, 5)
@@ -479,7 +501,7 @@ def test_setting_the_age_of_many_faces_commits_once(window, monkeypatch):
 def test_a_rejected_face_can_be_put_back_to_unassigned(window):
     """**除外を取り消せること。**
 
-    除外した顔は「割り当て済みを確認」に出てこない（あちらは人物で絞るが、
+    除外した顔は人物の表示に出てこない（あちらは人物で絞るが、
     除外した顔は `person_id` を持たない）。そのため、いったん除外すると
     **誰かに割り当てる以外に戻す手段が無かった。** 「決めきれないので保留に
     戻す」ができない。
@@ -489,8 +511,7 @@ def test_a_rejected_face_can_be_put_back_to_unassigned(window):
     window._reject_selected()
     assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == len(face_ids)
 
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
-    window._reset_page()
+    _select_scope(window, photoarchive_gui.SCOPE_REJECTED)
     window.face_list.selectAll()
     window._unassign_selected()
 
@@ -508,8 +529,7 @@ def test_an_auto_assignment_can_also_be_put_back(window):
     face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
     db.assign_faces(window.connection, face_ids, person_id, db.ASSIGN_AUTO, assign_score=50.0)
 
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_AUTO)
-    window._reset_page()
+    _select_scope(window, photoarchive_gui.SCOPE_AUTO)
     window.face_list.selectAll()
     window._unassign_selected()
 
@@ -517,28 +537,32 @@ def test_an_auto_assignment_can_also_be_put_back(window):
     assert db.count_faces(window.connection, unassigned=True) == len(face_ids)
 
 
-def test_the_unassign_button_is_disabled_while_showing_unassigned_faces(window):
+def test_unassigning_is_blocked_while_showing_unassigned_faces(window):
     """**隠さずに押せなくする。** 隠すと「そんな操作は無い」と思われる。
 
     戻す先が無いときに押せると、何も起きない操作を押させることになる。
+    メニューの項目になっても同じで、押せない理由はツールチップに出す。
     """
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_UNASSIGNED)
-    window._reset_page()
-    assert window.unassign_button.isEnabled() is False
-    assert "戻す先がありません" in window.unassign_button.toolTip()
+    _select_scope(window, photoarchive_gui.SCOPE_UNASSIGNED)
+    window.face_list.selectAll()
+    assert window.action_unassign.isEnabled() is False
+    assert "戻す先がありません" in window.action_unassign.toolTip()
+    assert photoarchive_gui.ACTION_UNASSIGN not in [
+        action.text() for action in window._menu_actions()
+    ], "未割当の表示では、そもそもメニューに出さない"
 
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
-    window._reset_page()
-    assert window.unassign_button.isEnabled() is True
-    assert "未割当に戻します" in window.unassign_button.toolTip()
+    db.reject_faces(window.connection, [db.list_faces(window.connection)[0]["id"]])
+    _select_scope(window, photoarchive_gui.SCOPE_REJECTED)
+    window.face_list.selectAll()
+    assert window.action_unassign.isEnabled() is True
+    assert "未割当に戻します" in window.action_unassign.toolTip()
 
 
 def test_putting_a_face_back_says_done(window):
     """戻したあとも、プレビューに「完了」を出して薄くする（他の操作と同じ）。"""
     window.face_list.selectAll()
     window._reject_selected()
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
-    window._reset_page()
+    _select_scope(window, photoarchive_gui.SCOPE_REJECTED)
     window.face_list.selectAll()
 
     window._unassign_selected()
@@ -556,8 +580,7 @@ def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
     )
     window.face_list.selectAll()
     window._reject_selected()
-    window.filter_box.setCurrentText(photoarchive_gui.FILTER_REJECTED)
-    window._reset_page()
+    _select_scope(window, photoarchive_gui.SCOPE_REJECTED)
     window.face_list.selectAll()
     reads.clear()
 
@@ -569,7 +592,12 @@ def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
 
 
 def _assigned_person_with_faces(connection, window, *, birth_date, shooting_date, source):
-    """1人ぶんの顔を、割り当て元（手本か自動か）を指定して用意する。"""
+    """1人ぶんの顔を割り当て、**その人物をメイン画面で開く。**
+
+    割り当て元（手本か自動か）を指定する。以前はここで別ウィンドウ
+    （`RegisteredFacesDialog`）を作っていた。#67 でメイン画面に畳んだので、
+    左の一覧でその人物を選ぶ。
+    """
     if shooting_date is None:
         connection.execute("UPDATE Media SET shooting_date = NULL")
     else:
@@ -578,12 +606,8 @@ def _assigned_person_with_faces(connection, window, *, birth_date, shooting_date
     face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
     db.assign_faces(connection, face_ids, person_id, source)
     connection.commit()
-    person = next(p for p in db.list_persons(connection) if p["id"] == person_id)
-    return photoarchive_gui.RegisteredFacesDialog(window, connection, person), face_ids
-
-
-def _labels(dialog):
-    return [dialog.face_list.item(i).text() for i in range(dialog.face_list.count())]
+    _select_person_view(window, person_id)
+    return person_id, face_ids
 
 
 def test_an_automatic_face_shows_the_age_calculated_from_the_birth_date(window):
@@ -592,7 +616,7 @@ def test_an_automatic_face_shows_the_age_calculated_from_the_birth_date(window):
     `match` は年齢を書かない（実データで年齢が入っているのは手本の126件だけ）。
     **自動割り当てが正しいかを人が見るとき、撮影時の年齢がいちばん効く手がかり。**
     """
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         window.connection,
         window,
         birth_date="2011-05-03",
@@ -601,7 +625,7 @@ def test_an_automatic_face_shows_the_age_calculated_from_the_birth_date(window):
     )
 
     # 2011-05-03 生まれが 2017-12-16 に写っていれば6歳。
-    assert all("(6歳)" in label for label in _labels(dialog)), _labels(dialog)
+    assert all("(6歳)" in label for label in _labels(window)), _labels(window)
 
 
 def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
@@ -610,7 +634,7 @@ def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
     括弧つきが計算値。`Face.age` に書き戻さないのも同じ理由（Issue #48 の判断2）。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
@@ -619,9 +643,9 @@ def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
     )
     db.set_face_age(connection, face_ids[0], 6)
     connection.commit()
-    dialog.reload()
+    window.reload_faces()
 
-    labels = _labels(dialog)
+    labels = _labels(window)
     # **年齢の部分だけで見分ける。** ラベルには "(自動 0)" も入るので、
     # 括弧の有無をラベル全体で見てはいけない。
     assert any(label.endswith(" 6歳") for label in labels), labels
@@ -633,7 +657,7 @@ def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
 
 def test_a_face_taken_before_the_person_was_born_says_so(window):
     """**「誕生前」は誤割り当てのいちばん強い手がかり。** 負の数でも落とさない。"""
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         window.connection,
         window,
         birth_date="2011-05-03",
@@ -641,12 +665,12 @@ def test_a_face_taken_before_the_person_was_born_says_so(window):
         source=db.ASSIGN_AUTO,
     )
 
-    assert all("(誕生前)" in label for label in _labels(dialog)), _labels(dialog)
+    assert all("(誕生前)" in label for label in _labels(window)), _labels(window)
 
 
 def test_no_age_is_shown_when_the_shooting_date_is_missing(window):
     """**撮影日時が無ければ年齢は出せない。** 実データの 15.8% が該当する。"""
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         window.connection,
         window,
         birth_date="2011-05-03",
@@ -654,12 +678,12 @@ def test_no_age_is_shown_when_the_shooting_date_is_missing(window):
         source=db.ASSIGN_AUTO,
     )
 
-    assert all("歳" not in label for label in _labels(dialog)), _labels(dialog)
+    assert all("歳" not in label for label in _labels(window)), _labels(window)
 
 
 def test_no_age_is_shown_when_the_person_has_no_birth_date(window):
     """誕生日が未登録なら計算できない。"""
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         window.connection,
         window,
         birth_date=None,
@@ -667,7 +691,7 @@ def test_no_age_is_shown_when_the_person_has_no_birth_date(window):
         source=db.ASSIGN_AUTO,
     )
 
-    assert all("歳" not in label for label in _labels(dialog)), _labels(dialog)
+    assert all("歳" not in label for label in _labels(window)), _labels(window)
 
 
 def test_confirm_is_blocked_until_an_automatic_face_is_selected(window):
@@ -676,7 +700,7 @@ def test_confirm_is_blocked_until_an_automatic_face_is_selected(window):
     手本に押しても `assigned_at` が書き換わるだけで意味のある変化が起きない。
     押せてしまうと「何かが起きた」と誤解する。
     """
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         window.connection,
         window,
         birth_date="2011-05-03",
@@ -684,32 +708,32 @@ def test_confirm_is_blocked_until_an_automatic_face_is_selected(window):
         source=db.ASSIGN_MANUAL,
     )
 
-    assert not dialog.confirm_button.isEnabled(), "何も選んでいないので押せない"
+    assert not window.action_confirm.isEnabled(), "何も選んでいないので押せない"
 
-    dialog.face_list.selectAll()
+    window.face_list.selectAll()
 
-    assert not dialog.confirm_button.isEnabled(), "手本だけなので押せない"
-    assert "自動割り当ての顔を選んでいるときだけ" in dialog.confirm_button.toolTip()
+    assert not window.action_confirm.isEnabled(), "手本だけなので押せない"
+    assert "自動割り当ての顔を選んでいるときだけ" in window.action_confirm.toolTip()
 
 
 def test_confirm_becomes_available_when_the_selection_holds_an_automatic_face(window):
     """自動が1件でも混ざっていれば押せる。**混在した選択で押せなくしない。**"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_MANUAL,
     )
-    db.assign_faces(connection, face_ids[:1], dialog.person["id"], db.ASSIGN_AUTO)
+    db.assign_faces(connection, face_ids[:1], person_id, db.ASSIGN_AUTO)
     connection.commit()
-    dialog.reload()
+    window.reload_faces()
 
-    dialog.face_list.selectAll()
+    window.face_list.selectAll()
 
-    assert dialog.confirm_button.isEnabled()
-    assert dialog.confirm_button.toolTip() == photoarchive_gui.CONFIRM_TOOLTIP_READY
+    assert window.action_confirm.isEnabled()
+    assert window.action_confirm.toolTip() == photoarchive_gui.CONFIRM_TOOLTIP_READY
 
 
 def test_confirm_goes_back_to_blocked_after_the_list_is_rebuilt(window):
@@ -719,99 +743,99 @@ def test_confirm_goes_back_to_blocked_after_the_list_is_rebuilt(window):
     `itemSelectionChanged` が出ない。明示的に見直す必要がある。
     """
     connection = window.connection
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
-    assert dialog.confirm_button.isEnabled()
+    window.face_list.selectAll()
+    assert window.action_confirm.isEnabled()
 
-    dialog._confirm_selected()
+    window._confirm_selected()
 
-    assert dialog.face_list.selectedItems() == []
-    assert not dialog.confirm_button.isEnabled()
+    assert window.face_list.selectedItems() == []
+    assert not window.action_confirm.isEnabled()
     assert {row["assign_source"] for row in db.list_faces(connection)} == {db.ASSIGN_MANUAL}
 
 
-def _select_source(dialog, label):
+def _select_source(window, label):
     """種別を選ぶ。**コンボボックスを直に引く。**
 
     「この人物ではない」は `SOURCE_FILTERS` には無い（`assign_source` の値では
     ないため）ので、定数の一覧から引くと取りこぼす。
     """
-    index = dialog.source_box.findText(label)
+    index = window.source_box.findText(label)
     assert index >= 0, f"種別に {label} が無い"
-    dialog.source_box.setCurrentIndex(index)
+    window.source_box.setCurrentIndex(index)
 
 
 def test_the_list_can_be_filtered_down_to_the_automatic_faces(window):
     """**自動割り当てを見直すときは、自動だけを見たい。**"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_MANUAL,
     )
-    db.assign_faces(connection, face_ids[:2], dialog.person["id"], db.ASSIGN_AUTO)
+    db.assign_faces(connection, face_ids[:2], person_id, db.ASSIGN_AUTO)
     connection.commit()
-    dialog.reload()
-    assert dialog.total == len(face_ids), "「すべて」では全部見える"
+    window.reload_faces()
+    assert _total(window) == len(face_ids), "「すべて」では全部見える"
 
-    _select_source(dialog, "自動のみ")
+    _select_source(window, "自動のみ")
 
-    assert dialog.total == 2
-    assert all("(自動" in label for label in _labels(dialog)), _labels(dialog)
+    assert _total(window) == 2
+    assert all("(自動" in label for label in _labels(window)), _labels(window)
 
 
 def test_the_list_can_be_filtered_down_to_the_confirmed_faces(window):
     """**手本を見直すときは、確定済みだけを見たい。**"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_MANUAL,
     )
-    db.assign_faces(connection, face_ids[:2], dialog.person["id"], db.ASSIGN_AUTO)
+    db.assign_faces(connection, face_ids[:2], person_id, db.ASSIGN_AUTO)
     connection.commit()
-    dialog.reload()
+    window.reload_faces()
 
-    _select_source(dialog, "確定済みのみ")
+    _select_source(window, "確定済みのみ")
 
-    assert dialog.total == len(face_ids) - 2
-    assert all("(自動" not in label for label in _labels(dialog)), _labels(dialog)
+    assert _total(window) == len(face_ids) - 2
+    assert all("(自動" not in label for label in _labels(window)), _labels(window)
     # 確定済みだけを選んでいるので、確定ボタンは押せない。
-    dialog.face_list.selectAll()
-    assert not dialog.confirm_button.isEnabled()
+    window.face_list.selectAll()
+    assert not window.action_confirm.isEnabled()
 
 
 def test_changing_the_source_filter_returns_to_the_first_page(window, monkeypatch):
     """年齢の絞り込みと同じ。**絞ったのに後ろのページのままだと空に見える。**"""
     monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_MANUAL,
     )
-    db.assign_faces(connection, face_ids[:1], dialog.person["id"], db.ASSIGN_AUTO)
+    db.assign_faces(connection, face_ids[:1], person_id, db.ASSIGN_AUTO)
     connection.commit()
-    dialog.reload()
-    dialog._next_page()
-    assert dialog.page == 1
+    window.reload_faces()
+    window._next_page()
+    assert window.page == 1
 
-    _select_source(dialog, "自動のみ")
+    _select_source(window, "自動のみ")
 
-    assert dialog.page == 0
-    assert dialog.total == 1
+    assert window.page == 0
+    assert _total(window) == 1
 
 
 def test_zero_can_be_used_as_an_age_filter_bound(window):
@@ -821,7 +845,7 @@ def test_zero_can_be_used_as_an_age_filter_bound(window):
     0 を特別扱いにしていた。** QSpinBox の `specialValueText` は最小値のときに出る。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
@@ -833,15 +857,15 @@ def test_zero_can_be_used_as_an_age_filter_bound(window):
         db.set_face_age(connection, face_id, 6)
     connection.commit()
 
-    assert dialog._age_range() == (None, None), "初期値は両方「指定なし」"
+    assert window._age_range() == (None, None), "初期値は両方「指定なし」"
 
-    dialog.min_age.setValue(0)
-    dialog.max_age.setValue(0)
+    window.min_age.setValue(0)
+    window.max_age.setValue(0)
 
-    assert dialog._age_range() == (0, 0), "0 が None に化けないこと"
-    assert dialog.total == 1
+    assert window._age_range() == (0, 0), "0 が None に化けないこと"
+    assert _total(window) == 1
     assert [item.data(Qt.UserRole)["id"] for item in
-            [dialog.face_list.item(i) for i in range(dialog.face_list.count())]] == [face_ids[0]]
+            [window.face_list.item(i) for i in range(window.face_list.count())]] == [face_ids[0]]
 
 
 def test_the_age_filter_uses_the_calculated_age_when_face_age_is_unset(window):
@@ -852,7 +876,7 @@ def test_the_age_filter_uses_the_calculated_age_when_face_age_is_unset(window):
     （2026-10-07）。画面には計算年齢が出ているので、それで絞れること。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
@@ -861,19 +885,19 @@ def test_the_age_filter_uses_the_calculated_age_when_face_age_is_unset(window):
     )
     assert all(row["age"] is None for row in db.list_faces(connection)), "年齢は未設定"
 
-    dialog.min_age.setValue(6)
-    dialog.max_age.setValue(6)
-    assert dialog.total == len(face_ids), "計算年齢 6歳 で全件残る"
+    window.min_age.setValue(6)
+    window.max_age.setValue(6)
+    assert _total(window) == len(face_ids), "計算年齢 6歳 で全件残る"
 
-    dialog.min_age.setValue(7)
-    dialog.max_age.setValue(7)
-    assert dialog.total == 0, "7歳では1件も残らない"
+    window.min_age.setValue(7)
+    window.max_age.setValue(7)
+    assert _total(window) == 0, "7歳では1件も残らない"
 
 
 def test_the_calculated_age_window_respects_the_birthday_itself(window):
     """**誕生日の当日に年齢が上がる。** 境界で1年ぶんずれないこと。"""
     connection = window.connection
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
@@ -881,17 +905,17 @@ def test_the_calculated_age_window_respects_the_birthday_itself(window):
         source=db.ASSIGN_AUTO,
     )
 
-    dialog.min_age.setValue(5)
-    dialog.max_age.setValue(5)
-    assert dialog.total > 0, "前日は5歳"
+    window.min_age.setValue(5)
+    window.max_age.setValue(5)
+    assert _total(window) > 0, "前日は5歳"
 
     connection.execute("UPDATE Media SET shooting_date = '2017-05-03T12:00:00'")
     connection.commit()
-    dialog.reload()
-    assert dialog.total == 0, "当日は6歳なので、5歳の絞り込みからは外れる"
-    dialog.min_age.setValue(6)
-    dialog.max_age.setValue(6)
-    assert dialog.total > 0
+    window.reload_faces()
+    assert _total(window) == 0, "当日は6歳なので、5歳の絞り込みからは外れる"
+    window.min_age.setValue(6)
+    window.max_age.setValue(6)
+    assert _total(window) > 0
 
 
 def test_faces_with_no_age_at_all_are_left_out_unless_asked_for(window):
@@ -901,7 +925,7 @@ def test_faces_with_no_age_at_all_are_left_out_unless_asked_for(window):
     チェックを入れれば戻る。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
@@ -914,16 +938,16 @@ def test_faces_with_no_age_at_all_are_left_out_unless_asked_for(window):
         " (SELECT media_id FROM Face WHERE id = ?)", (face_ids[0],)
     )
     connection.commit()
-    dialog.reload()
+    window.reload_faces()
 
-    assert not dialog.include_unknown_age.isChecked(), "既定は含めない"
-    dialog.min_age.setValue(6)
-    dialog.max_age.setValue(6)
-    without = dialog.total
+    assert not window.include_unknown_age.isChecked(), "既定は含めない"
+    window.min_age.setValue(6)
+    window.max_age.setValue(6)
+    without = _total(window)
 
-    dialog.include_unknown_age.setChecked(True)
+    window.include_unknown_age.setChecked(True)
 
-    assert dialog.total > without, "チェックを入れると年齢不明が戻る"
+    assert _total(window) > without, "チェックを入れると年齢不明が戻る"
 
 
 def test_clearing_the_age_filter_shows_everything_again(window):
@@ -932,7 +956,7 @@ def test_clearing_the_age_filter_shows_everything_again(window):
     年齢を入れていない顔が一覧から永久に消えてしまわないこと。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date=None,  # 誕生日が無いので年齢は1件も出せない
@@ -940,14 +964,14 @@ def test_clearing_the_age_filter_shows_everything_again(window):
         source=db.ASSIGN_AUTO,
     )
 
-    dialog.min_age.setValue(6)
-    dialog.max_age.setValue(6)
-    assert dialog.total == 0, "年齢を出せないので、範囲を指定すると残らない"
+    window.min_age.setValue(6)
+    window.max_age.setValue(6)
+    assert _total(window) == 0, "年齢を出せないので、範囲を指定すると残らない"
 
-    dialog.min_age.setValue(-1)
-    dialog.max_age.setValue(-1)
+    window.min_age.setValue(-1)
+    window.max_age.setValue(-1)
 
-    assert dialog.total == len(face_ids)
+    assert _total(window) == len(face_ids)
 
 
 def test_not_this_person_records_the_rejection_and_clears_the_assignment(window):
@@ -957,17 +981,16 @@ def test_not_this_person_records_the_rejection_and_clears_the_assignment(window)
     `match` を流すと戻ってくる状態だった。**解除では判断が残らない。**
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    person_id = dialog.person["id"]
-    dialog.face_list.selectAll()
+    window.face_list.selectAll()
 
-    dialog._reject_for_person_selected()
+    window._reject_for_person_selected()
 
     assert db.count_person_rejections(connection, person_id) == len(face_ids)
     rows = {row["id"]: row for row in db.list_faces(connection)}
@@ -978,14 +1001,14 @@ def test_not_this_person_records_the_rejection_and_clears_the_assignment(window)
 def test_nobody_s_face_is_a_different_button_and_asks_first(window, monkeypatch):
     """**「誰でもない顔」はどの人物にも付かなくなる。** 取り返しがつきにくいので確認する。"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
+    window.face_list.selectAll()
     asked = {}
 
     def fake_question(parent, title, text, *args, **kwargs):
@@ -994,34 +1017,34 @@ def test_nobody_s_face_is_a_different_button_and_asks_first(window, monkeypatch)
 
     monkeypatch.setattr(photoarchive_gui.QMessageBox, "question", fake_question)
 
-    dialog._reject_selected()
+    window._reject_selected()
 
     assert "どの人物にも自動で付かなくなります" in asked["text"]
     assert "この人物ではない" in asked["text"], "もう一方のボタンを案内すること"
     rows = {row["id"]: row for row in db.list_faces(connection)}
     assert all(rows[f]["assign_source"] == db.ASSIGN_REJECTED for f in face_ids)
     # こちらは否定の記録ではない。
-    assert db.count_person_rejections(connection, dialog.person["id"]) == 0
+    assert db.count_person_rejections(connection, person_id) == 0
 
 
 def test_saying_no_to_the_confirmation_changes_nothing(window, monkeypatch):
     """確認で「いいえ」なら何も起きないこと。"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
+    window.face_list.selectAll()
     monkeypatch.setattr(
         photoarchive_gui.QMessageBox,
         "question",
         lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.No,
     )
 
-    dialog._reject_selected()
+    window._reject_selected()
 
     rows = {row["id"]: row for row in db.list_faces(connection)}
     assert all(rows[f]["assign_source"] == db.ASSIGN_AUTO for f in face_ids)
@@ -1030,25 +1053,24 @@ def test_saying_no_to_the_confirmation_changes_nothing(window, monkeypatch):
 def test_the_rejections_can_be_listed_and_undone(window):
     """**押し間違いから戻れること。** 種別から見直せる。"""
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    person_id = dialog.person["id"]
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
 
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
 
-    assert dialog.total == len(face_ids)
-    assert dialog.face_list.count() == len(face_ids)
-    assert "この人物ではない" in dialog.page_label.text()
+    assert _total(window) == len(face_ids)
+    assert window.face_list.count() == len(face_ids)
+    assert f"全 {len(face_ids)} 件" in window.page_label.text()
 
-    dialog.face_list.selectAll()
-    dialog._undo_rejection_selected()
+    window.face_list.selectAll()
+    window._undo_rejection_selected()
 
     assert db.count_person_rejections(connection, person_id) == 0
 
@@ -1056,19 +1078,19 @@ def test_the_rejections_can_be_listed_and_undone(window):
 def test_the_rejection_list_still_shows_the_calculated_age(window):
     """見直すときも年齢が要る。**年齢が誤りを見分ける手がかりだから。**"""
     connection = window.connection
-    dialog, _ = _assigned_person_with_faces(
+    person_id, _ = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
 
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
 
-    assert all("(6歳)" in label for label in _labels(dialog)), _labels(dialog)
+    assert all("(6歳)" in label for label in _labels(window)), _labels(window)
 
 
 def _window_total(window):
@@ -1283,29 +1305,29 @@ def test_a_face_made_nobody_s_disappears_from_the_not_this_person_list(window, m
     記録はもう何の仕事もしていない。** 一覧に残す意味がない。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
-    assert dialog.face_list.count() == len(face_ids)
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    assert window.face_list.count() == len(face_ids)
 
     monkeypatch.setattr(
         photoarchive_gui.QMessageBox,
         "question",
         lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.Yes,
     )
-    dialog.face_list.selectAll()
-    dialog._reject_selected()
+    window.face_list.selectAll()
+    window._reject_selected()
 
-    assert dialog.face_list.count() == 0, "押した顔が一覧から消えること"
-    assert dialog.total == 0
-    assert "0 件" in dialog.page_label.text(), "件数も合っていること"
+    assert window.face_list.count() == 0, "押した顔が一覧から消えること"
+    assert _total(window) == 0
+    assert "0 件" in window.page_label.text(), "件数も合っていること"
 
 
 def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeypatch):
@@ -1315,32 +1337,31 @@ def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeyp
     付けてしまう。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    person_id = dialog.person["id"]
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
     monkeypatch.setattr(
         photoarchive_gui.QMessageBox,
         "question",
         lambda *a, **k: photoarchive_gui.QMessageBox.StandardButton.Yes,
     )
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
-    dialog.face_list.selectAll()
-    dialog._reject_selected()
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    window.face_list.selectAll()
+    window._reject_selected()
 
     assert db.count_person_rejections(connection, person_id) == len(face_ids)
 
     # 除外を取り消すと、また一覧に戻る。
     db.unassign_faces(connection, face_ids)
-    dialog.reload()
+    window.reload_faces()
 
-    assert dialog.face_list.count() == len(face_ids)
+    assert window.face_list.count() == len(face_ids)
 
 
 def test_other_buttons_also_clear_the_face_from_the_not_this_person_list(window):
@@ -1350,23 +1371,22 @@ def test_other_buttons_also_clear_the_face_from_the_not_this_person_list(window)
     「この人物ではない」の記録が効いているあいだは残る、が筋。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    person_id = dialog.person["id"]
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
 
     # 取り消したら消える（記録そのものが無くなるため）。
-    dialog.face_list.selectAll()
-    dialog._undo_rejection_selected()
+    window.face_list.selectAll()
+    window._undo_rejection_selected()
 
-    assert dialog.face_list.count() == 0
+    assert window.face_list.count() == 0
     assert db.count_person_rejections(connection, person_id) == 0
 
 
@@ -1376,19 +1396,19 @@ def test_a_face_assigned_to_someone_else_stays_in_the_list(window):
     兄弟の顔はこうなる。ひよりではないと記録したうえで、虎太朗に付く。
     """
     connection = window.connection
-    dialog, face_ids = _assigned_person_with_faces(
+    person_id, face_ids = _assigned_person_with_faces(
         connection,
         window,
         birth_date="2011-05-03",
         shooting_date="2017-12-16T18:46:32",
         source=db.ASSIGN_AUTO,
     )
-    dialog.face_list.selectAll()
-    dialog._reject_for_person_selected()
+    window.face_list.selectAll()
+    window._reject_for_person_selected()
     other = db.add_person(connection, "きょうだい", birth_date="2009-02-19")
     db.assign_faces(connection, face_ids, other, db.ASSIGN_MANUAL)
     connection.commit()
 
-    _select_source(dialog, photoarchive_gui.NOT_THIS_PERSON_FILTER)
+    _select_source(window, photoarchive_gui.NOT_THIS_PERSON_FILTER)
 
-    assert dialog.face_list.count() == len(face_ids)
+    assert window.face_list.count() == len(face_ids)
