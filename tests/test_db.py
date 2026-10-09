@@ -974,3 +974,112 @@ def test_faces_can_be_listed_least_confident_first(tmp_path: Path):
         assert listed[-1] == faces["日時なし"]
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# 年齢の若い順は、画面に出ている年齢で全件に効く（2026-10-09 利用者の報告）
+# ---------------------------------------------------------------------------
+
+
+def _face_on(connection, index, shooting_date, person_id, age=None):
+    media_id = db.save_media(
+        connection,
+        {
+            "path": f"/photos/age{index}.jpg",
+            "filename": f"age{index}.jpg",
+            "type": "image",
+            "file_hash": f"age-hash{index}",
+            "file_size": 100,
+            "created_time": "2026-01-01T00:00:00",
+            "shooting_date": shooting_date,
+        },
+    )
+    face_id = db.add_face(
+        connection,
+        media_id=media_id,
+        bbox=(0, 10, 10, 0),
+        embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=b"",
+    )
+    db.assign_faces(connection, [face_id], person_id, db.ASSIGN_AUTO, age=age)
+    return face_id
+
+
+def test_the_age_order_uses_the_calculated_age_across_every_page(tmp_path: Path):
+    """**年齢の若い順は、画面に出ている年齢で全件を並べてからページに分ける。**
+
+    以前は `Face.age`（人が入れた確定値）だけで並べていた。実データでは
+    ${PERSON_4}の 9,502 件のうち確定値は 199 件だけで、**残り 9,303 件は id 順のまま
+    2ページ目以降に並んでいた。** 画面には括弧つきの計算年齢が出ているので、
+    利用者には「ページの中しか並んでいない」ように見えた（2026-10-09 に報告）。
+
+    **id の順と年齢の順をわざと逆にしてある。** id 順のままでも通る並びだと、
+    この不具合を捕まえられない。
+    """
+    connection = db.ensure_database(str(tmp_path / "age.db"))
+    try:
+        person_id = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
+        plan = [
+            ("13歳", "2024-06-01T10:00:00", None),
+            ("9歳", "2020-01-01T10:00:00", None),
+            ("壊れた日付", "TTTT-TT-TTTTT:TT:TT", None),
+            ("1歳", "2012-01-01T10:00:00", None),
+            # 確定値が計算値（8歳）と食い違っていても、**画面と同じく確定値**で並べる
+            ("確定 3歳", "2019-01-01T10:00:00", 3),
+            ("日付なし", None, None),
+            ("0歳", "2011-06-01T10:00:00", None),
+        ]
+        faces = {
+            name: _face_on(connection, index, shooting_date, person_id, age)
+            for index, (name, shooting_date, age) in enumerate(plan)
+        }
+        connection.commit()
+
+        listed = []
+        for page in range(4):
+            listed += [
+                row["id"]
+                for row in db.list_faces(
+                    connection,
+                    person_id=person_id,
+                    order=db.ORDER_AGE,
+                    birth_date="2010-12-01",
+                    limit=2,
+                    offset=page * 2,
+                )
+            ]
+
+        expected = ["0歳", "1歳", "確定 3歳", "9歳", "13歳"]
+        assert listed[:5] == [faces[name] for name in expected]
+        # **年齢を出せない顔は最後。** 壊れた日付も「無い」として扱う
+        assert set(listed[5:]) == {faces["壊れた日付"], faces["日付なし"]}
+        assert len(listed) == len(set(listed)) == len(plan), "重複・欠落しない"
+    finally:
+        connection.close()
+
+
+def test_the_age_order_uses_each_face_s_own_person_when_none_is_selected(tmp_path: Path):
+    """**全員ぶんの表示では、顔ごとに付いている人物の誕生日で年齢を出す。**
+
+    画面（自動割当の表示）がそう表示しているので、並びもそれに合わせる。
+    """
+    connection = db.ensure_database(str(tmp_path / "owners.db"))
+    try:
+        older = db.add_person(connection, "兄", birth_date="2005-01-01")
+        younger = db.add_person(connection, "妹", birth_date="2015-01-01")
+        # 同じ日の写真でも、兄は 15歳・妹は 5歳
+        brother = _face_on(connection, 0, "2020-06-01T10:00:00", older)
+        sister = _face_on(connection, 1, "2020-06-01T10:00:00", younger)
+        connection.commit()
+
+        listed = [
+            row["id"]
+            for row in db.list_faces(
+                connection, assign_source=db.ASSIGN_AUTO, order=db.ORDER_AGE
+            )
+        ]
+
+        assert listed == [sister, brother]
+    finally:
+        connection.close()

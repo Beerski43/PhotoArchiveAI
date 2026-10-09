@@ -35,6 +35,7 @@
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
+| `test_db.py::test_the_age_order_uses_the_calculated_age_across_every_page` | **「年齢の若い順」が確定値（`Face.age`）だけで並べていた。** 実データでは${PERSON_4}の 9,502 件のうち 199 件しか並ばず、残りは id 順のまま2ページ目以降に散っていた（2026-10-09 に利用者が報告） |
 | `test_gui_views.py::test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **ページの先頭に小さいサムネイルが来ると、枠がそれに合わせて縮み、残りの顔が切り詰められて下の文字も消えた**（`setUniformItemSizes` は先頭の項目から寸法を決める。2026-10-09 に利用者が報告） |
 | `test_db.py::test_every_list_filter_also_works_for_counting_and_for_bulk` | 上の落ち方を**種類ごと**に防ぐ。一覧・件数・まとめて処理が同じ絞り込みを受け取ることを、`_face_filter` の引数から数えて確かめる |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
@@ -67,7 +68,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（33件）
+### `test_db.py` — スキーマと永続化（35件）
 
 | テスト | 内容 |
 |---|---|
@@ -94,6 +95,8 @@
 | `test_face_counts_are_gathered_in_one_query` | 左の一覧の件数を**1回の問い合わせ**で数える（人数ぶんの問い合わせにしない） |
 | `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「誰でもない顔」は外す・記録は消さない） |
 | `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
+| `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
+| `test_the_age_order_uses_each_face_s_own_person_when_none_is_selected` | 全員ぶんの表示では、顔ごとの人物の誕生日で年齢を出して並べる |
 
 ### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（23件）
 
@@ -378,7 +381,7 @@
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（26件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（28件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -412,6 +415,8 @@
 | `test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **枠はサムネイルの寸法に任せない**（先頭の顔が小さいとページ全体が縮んでいた） |
 | `test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text` | 枠にサムネイルと文字2行が入る |
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
+| `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
+| `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
