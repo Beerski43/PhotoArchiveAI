@@ -250,6 +250,30 @@ def connect(database_path: str) -> sqlite3.Connection:
     return connection
 
 
+def backup_to(
+    source: sqlite3.Connection,
+    target_path,
+    progress: Optional[Callable[[int, int, int], None]] = None,
+) -> Path:
+    """``source`` の控えを ``target_path`` に取る。**`sqlite3 .backup` と同じ。**
+
+    **ファイルを複写しない。** このDBは WAL で動いているので、確定した書き込みが
+    まだ ``-wal`` のほうにだけ残っていることがある。本体のファイルを `cp` すると
+    **その分が控えから黙って抜ける**（`match` の前後の控えを `cp` ではなく
+    `.backup` で取っているのはこのため。2026-10-08 の申し送り）。
+
+    ``progress`` は SQLite の通知をそのまま渡す（``status, remaining, total`` ページ）。
+    """
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    destination = sqlite3.connect(str(target))
+    try:
+        source.backup(destination, pages=1024, progress=progress)
+    finally:
+        destination.close()
+    return target
+
+
 def get_schema_version(connection: sqlite3.Connection) -> int:
     return int(connection.execute("PRAGMA user_version").fetchone()[0])
 

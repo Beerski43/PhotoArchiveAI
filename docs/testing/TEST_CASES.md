@@ -35,6 +35,7 @@
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
+| `test_migration.py::test_the_backup_keeps_writes_that_are_still_in_the_wal` | **控えを `shutil.copy2` で取っていたため、WAL にだけ残っている書き込みが控えから黙って抜けていた**（WAL に全部あるときは表すら無い控えになる） |
 | `test_db.py::test_the_age_order_uses_the_calculated_age_across_every_page` | **「年齢の若い順」が確定値（`Face.age`）だけで並べていた。** 実データではひよりの 9,502 件のうち 199 件しか並ばず、残りは id 順のまま2ページ目以降に散っていた（2026-10-09 に利用者が報告） |
 | `test_gui_views.py::test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **ページの先頭に小さいサムネイルが来ると、枠がそれに合わせて縮み、残りの顔が切り詰められて下の文字も消えた**（`setUniformItemSizes` は先頭の項目から寸法を決める。2026-10-09 に利用者が報告） |
 | `test_db.py::test_every_list_filter_also_works_for_counting_and_for_bulk` | 上の落ち方を**種類ごと**に防ぐ。一覧・件数・まとめて処理が同じ絞り込みを受け取ることを、`_face_filter` の引数から数えて確かめる |
@@ -306,7 +307,7 @@
 | `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
-### `test_matcher.py` — 自動割り当て（11件）
+### `test_matcher.py` — 自動割り当て（28件）
 
 | テスト | 内容 |
 |---|---|
@@ -321,6 +322,7 @@
 | `test_dry_run_is_not_blinded_by_a_previous_match` | 2回目以降の dry-run が空振りしない |
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
+| `test_progress_is_reported_before_the_first_chunk` | **照合の前の準備（取り消し・手本の読み込み）でも進み具合を知らせる。** GUI の窓が5秒固まって見えていた |
 
 ### `test_evaluation.py` — 精度の実測（12件）
 
@@ -417,6 +419,19 @@
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
 | `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
+
+### `test_gui_match.py` — `match` を画面から流す（8件）
+
+| テスト | 内容 |
+|---|---|
+| `test_match_runs_from_the_window_and_refreshes_the_counts` | 画面から流せて、終わったら左の件数まで出し直す |
+| `test_the_backup_is_taken_when_chosen` | 控えを選んだら、**流す前の状態**がそのまま入っている |
+| `test_no_backup_is_written_when_declined` | 控えを外したら書かない |
+| `test_cancelling_the_dialog_changes_nothing` | 「やめる」なら何も変えない |
+| `test_without_teachers_it_says_so_instead_of_running` | 手本が無ければ流さずにそう言う |
+| `test_the_progress_bar_reaches_every_candidate` | 進み具合が件数で出て、最後まで届く |
+| `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
+| `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
@@ -574,7 +589,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（23件）
+### `test_migration.py` — スキーマの移行（25件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -594,6 +609,10 @@ editable install のときだけ出すこと（通常のインストールでは
 
 移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
 移行でしか効かない。黙って効かない引数を作らない）。
+
+**控えは SQLite の backup で取る**（`test_the_backup_keeps_writes_that_are_still_in_the_wal`）。
+ファイルを複写すると WAL にだけある書き込みが抜ける。控えの比較は**中身**
+（`iterdump`）で行う（backup はヘッダの変更カウンタが変わるので、バイト列は揃わない）。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、

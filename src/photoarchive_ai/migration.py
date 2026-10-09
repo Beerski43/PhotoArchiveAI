@@ -25,7 +25,6 @@ v1 → v2 の方針:
 方式をとる。SQLite は部分インデックスが参照する列を DROP COLUMN できない。
 """
 
-import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -75,16 +74,32 @@ def _table_names(connection: sqlite3.Connection) -> set:
     return {row[0] for row in rows}
 
 
-def backup_database(database_path: str, backup_path: Optional[str] = None) -> Path:
+def default_backup_path(database_path: str) -> Path:
+    """控えの既定の置き場所。DBの隣に ``<名前>.bak-<日時>``。"""
     source = Path(database_path)
-    if backup_path is None:
-        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        target = source.with_name(f"{source.name}.bak-{stamp}")
-    else:
-        target = Path(backup_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    return target
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    return source.with_name(f"{source.name}.bak-{stamp}")
+
+
+def backup_database(
+    database_path: str, backup_path: Optional[str] = None, progress=None
+) -> Path:
+    """DBの控えを取る。**ファイルの複写ではなく SQLite の backup を使う。**
+
+    以前は `shutil.copy2` で本体のファイルだけを写していた。WAL で動いている
+    DBでは、確定した書き込みが ``-wal`` にだけ残っていることがあり、**その分が
+    控えから黙って抜けていた**（#67 で `match` を GUI から流す口を作るときに
+    見つけた）。控えは戻すためにあるので、抜けがあっては意味がない。
+
+    **旧形式のDBでも動く。** 開くのは素の `sqlite3.connect` で、`db.connect` の
+    ように WAL へ切り替えない（移行の前のDBに手を入れない）。
+    """
+    target = Path(backup_path) if backup_path is not None else default_backup_path(database_path)
+    source = sqlite3.connect(str(database_path))
+    try:
+        return db.backup_to(source, target, progress=progress)
+    finally:
+        source.close()
 
 
 def describe_migration(database_path: str) -> Dict[str, Any]:

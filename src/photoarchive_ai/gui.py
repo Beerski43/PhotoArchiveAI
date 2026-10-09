@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import clustering, db, embedding, face, migration
+from . import clustering, db, embedding, face, matcher, migration
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -619,6 +619,106 @@ class MigrationDialog(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self._prefer_quit()
+
+
+def _format_size(byte_count: int) -> str:
+    """控えの大きさの目安。**空き容量を確かめてもらうため**に出す。"""
+    if byte_count >= 1024 ** 3:
+        return f"{byte_count / 1024 ** 3:.1f}GB"
+    return f"{max(byte_count, 1) / 1024 ** 2:.0f}MB"
+
+
+class MatchDialog(QDialog):
+    """`match`（自動割り当て）を GUI から流す前の確認。
+
+    **端末へ追い出さない。** GUI で手本を増やしたら、その場で `match` を流して
+    結果を見たい。毎回端末へ移ると、そこで手が止まる。
+
+    **控えを取るかは毎回選べる。既定は「取る」。** `match` は自動割り当てを
+    いったん外して付け直すので、**控えがあれば流す前の状態へ戻せる**し、
+    結果も後から再現できる（`match` は決定的。2026-10-08 に、利用者が解除した
+    1,778 件を流す前の控えから特定できた）。毎回 DB と同じ大きさのファイルが
+    できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
+    """
+
+    def __init__(self, parent, counts: dict, database_path: str):
+        super().__init__(parent)
+        self.setWindowTitle("自動割り当て（match）を実行")
+        layout = QVBoxLayout(self)
+
+        detail = QLabel(
+            f"手本 {counts['manual']:,} 件をもとに、未割当と自動割当の顔を付け直します。\n"
+            f"いまの自動割当 {counts['auto']:,} 件は、いったん外してから付け直します。\n\n"
+            "変わらないもの: 手本（手動の割り当て）・除外・「この人物ではない」・年齢\n"
+            "「割り当てを解除」しただけの顔は、また付くことがあります"
+            "（判断を残すには「この人物ではない」を使います）。\n\n"
+            f"閾値 {matcher.DEFAULT_THRESHOLD} / マージン {matcher.DEFAULT_MARGIN}"
+            "（photoarchive match と同じ既定）"
+        )
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        layout.addWidget(detail)
+
+        source = Path(database_path)
+        size = source.stat().st_size if source.exists() else 0
+        self.backup_box = QCheckBox(
+            f"実行する前に控えを取る（{source.name}.bak-<日時>・約 {_format_size(size)}）"
+        )
+        self.backup_box.setChecked(True)
+        layout.addWidget(self.backup_box)
+
+        note = QLabel("途中で止めることはできません（半分だけ付け直した状態になるため）。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox()
+        # **既定のボタンを「実行」にしない**（`MigrationDialog` と同じ理由）。
+        self.run_button = buttons.addButton("実行", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.cancel_button = buttons.addButton("やめる", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._prefer_cancel()
+
+    def _prefer_cancel(self) -> None:
+        self.run_button.setAutoDefault(False)
+        self.run_button.setDefault(False)
+        self.cancel_button.setAutoDefault(True)
+        self.cancel_button.setDefault(True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._prefer_cancel()
+
+    def makes_backup(self) -> bool:
+        return self.backup_box.isChecked()
+
+
+def format_match_summary(
+    summary: dict, persons: List[dict], backup: Optional[Path]
+) -> str:
+    """`match` を流したあとに出す結果。**CLI の出力と同じ数字を出す。**"""
+    names = {int(person["id"]): person["name"] for person in persons}
+    lines = [
+        f"手本 {summary['teachers']:,} 件をもとに、{summary['candidates']:,} 件を照合しました。",
+        "",
+        f"自動で割り当てた顔: {summary['assigned']:,} 件",
+        f"未割当のまま: {summary['unassigned']:,} 件",
+    ]
+    if summary.get("no_candidate"):
+        lines.append(
+            f"（うち、誕生日で候補が1人も残らなかった顔: {summary['no_candidate']:,} 件）"
+        )
+    per_person = summary.get("per_person") or {}
+    if per_person:
+        lines.append("")
+        lines.append("人物ごと:")
+        for person_id, count in sorted(per_person.items(), key=lambda item: -item[1]):
+            lines.append(f"  {names.get(int(person_id), person_id)}: {count:,} 件")
+    lines.append("")
+    lines.append(f"控え: {backup}" if backup else "控え: 取っていません")
+    return "\n".join(lines)
 
 
 def ensure_migrated(database_path: str, parent=None) -> bool:
@@ -1529,6 +1629,13 @@ class MainWindow(QWidget):
         self.details_label = QLabel("")
         self.details_label.setWordWrap(True)
 
+        # **手本を増やしたら、その場で `match` を流せるようにする。**
+        self.match_button = QPushButton("自動割り当て（match）を実行…")
+        self.match_button.setToolTip(
+            "手本をもとに、未割当と自動割当の顔を付け直します（photoarchive match と同じ）。"
+        )
+        self.match_button.clicked.connect(self._run_match)
+
         person_buttons = QHBoxLayout()
         person_buttons.addWidget(self.add_person_button)
         person_buttons.addWidget(self.edit_person_button)
@@ -1539,6 +1646,7 @@ class MainWindow(QWidget):
         layout.addLayout(person_buttons)
         layout.addWidget(self.person_list, 1)
         layout.addWidget(self.details_label)
+        layout.addWidget(self.match_button)
         return panel
 
     def _build_face_panel(self) -> QWidget:
@@ -2092,6 +2200,77 @@ class MainWindow(QWidget):
             return
         db.delete_person(self.connection, person["id"])
         self._reload_person_list(select_scope=SCOPE_UNASSIGNED)
+
+    # ------------------------------------------------------------------
+    # 自動割り当て（match）
+    # ------------------------------------------------------------------
+
+    def _run_match(self) -> None:
+        """`match` を流す。**進み具合を出し、終わったら結果と件数を出し直す。**
+
+        **別のスレッドに出さない。** このリポジトリの重い処理と同じく、
+        `WorkProgress` が通知のたびにイベントを回す（実データで約 26 秒）。
+        スレッドに出すと SQLite の接続を2本持つことになり、その間に画面から
+        書き込めてしまう（`WorkProgress` は窓を塞ぐので、それも起きない）。
+        """
+        counts = db.face_counts(self.connection)
+        if counts["manual"] == 0:
+            QMessageBox.information(
+                self,
+                "手本がありません",
+                "手本（手動で割り当てた顔）が1件もありません。\n"
+                "先に顔を人物へ割り当ててから実行してください。",
+            )
+            return
+        dialog = MatchDialog(self, counts, self.db_path)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        backup: Optional[Path] = None
+        progress = WorkProgress(self, "自動割り当ての準備をしています", 1, delay_ms=0)
+        try:
+            with busy_cursor():
+                if dialog.makes_backup():
+                    progress.step("控えを取っています")
+
+                    def copied(status, remaining, total):
+                        progress.step(
+                            f"控えを取っています（{(total - remaining) * 100 // max(total, 1)}%）"
+                        )
+
+                    backup = db.backup_to(
+                        self.connection,
+                        migration.default_backup_path(self.db_path),
+                        progress=copied,
+                    )
+                progress.step("自動割当をいったん外し、手本を読み込んでいます")
+                progress.base_label = "顔を照合しています"
+                summary = matcher.match_faces(
+                    self.connection,
+                    # 件数の分からない工程（取り消しの直後）は、文言だけ変える
+                    progress_callback=lambda done, total, detail: (
+                        progress(done, total)
+                        if total
+                        else progress.step("自動割当を外しました。手本を読み込んでいます")
+                    ),
+                )
+                progress.step("一覧を作り直しています")
+                self._reload_person_list()
+        except Exception as error:  # noqa: BLE001 — 画面に理由を出して止まる
+            progress.finish()
+            QMessageBox.critical(
+                self,
+                "自動割り当てに失敗しました",
+                f"{error}\n\n"
+                + (f"控え: {backup}" if backup else "控えは取っていません。"),
+            )
+            return
+        progress.finish()
+        QMessageBox.information(
+            self,
+            "自動割り当てが終わりました",
+            format_match_summary(summary, db.list_persons(self.connection), backup),
+        )
 
     # ------------------------------------------------------------------
     # 右クリックのメニューと打鍵
