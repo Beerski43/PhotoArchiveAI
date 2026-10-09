@@ -48,7 +48,10 @@ DEFAULT_MARGIN = embedding.ACTIVE.margin
 #:   割り当ての根拠にしない（2位の対抗馬としては使う）
 #: - ``aligned-age/1``（同日・#66）: 加えて、受け入れを決めた手本の年齢で閾値に
 #:   上限を置く（8歳以下 0.35・年齢不明 0.40。`embedding.ACTIVE.age_limits`）
-MATCH_RULE = "aligned-age/1"
+#: - ``aligned-age/2``（2026-10-10・PR #70 のレビュー指摘2）: 年齢の上限を
+#:   「勝った人物の使える手本のうち、どれか1件が自分の上限以内なら受け入れる」に
+#:   変えた（以前は最も近い1件の上限だけで判定していた）
+MATCH_RULE = "aligned-age/2"
 
 #: 読み出しの塊の大きさは db 側に持つ。二重定義にすると片方だけずれる。
 CHUNK_SIZE = db.MATCH_CHUNK_SIZE
@@ -141,14 +144,17 @@ def _best_match(
       他人を止めていた役目まで消える。実データでは、整列できない手本を丸ごと外すと
       **誤りが +418 件増えた**（赤ちゃんの顔の塊で、${PERSON_3}の 17 件が${PERSON_4}の対抗馬に
       なっていた）。この形なら、外して誤りが増えることは構造上無い
-    - 受け入れの距離は「勝った人物の、使える手本」までの最短。**返す距離もそれ**
-      （`assign_score` の元になる。`select` が並べ替えに使うので、受け入れと同じ
-      根拠から出す）
-
     ``limits`` は手本ごとの距離の上限（`teacher_limits`。年齢で決まる。#66）。
-    **受け入れを決める手本（勝った人物の、使える手本のうち最も近いもの）の
-    上限で判定する。** 勝者とマージンには効かせない（効かせると勝つ人物が
-    入れ替わり、マージンで止まっていた他人が流れる。実データで +258 件）。
+    **勝った人物の使える手本のうち、どれか1件でも自分の上限以内なら受け入れる。**
+    返す距離は、上限以内の手本のうち最も近いもの（`assign_score` の元になる。
+    受け入れの根拠と同じ手本から出す）。
+
+    - **「最も近い1件の上限」で決めない**（PR #70 のレビュー指摘2）。それだと
+      2歳の手本（0.36・上限 0.35）があるせいで、10歳の手本（0.40・上限 0.45）なら
+      受け入れられる顔が落ちる。**手本を足すと割り当てが減る**形になり、「年上の
+      手本を割り当てれば年上の顔が付く」が成り立たない
+    - 勝者とマージンには効かせない（効かせると勝つ人物が入れ替わり、マージンで
+      止まっていた他人が流れる。実データで +258 件）
     """
     best_index = int(np.argmin(distance_row))
     best_person = int(person_ids[best_index])
@@ -167,11 +173,13 @@ def _best_match(
         candidates = np.flatnonzero(own)
         if not candidates.size:
             return None, best_distance
-        nearest = int(candidates[np.argmin(distance_row[candidates])])
-        best_distance = float(distance_row[nearest])
-        limit = threshold if limits is None else float(limits[nearest])
-        if best_distance > limit:
+        # 使える手本の最短。受け入れなかったときに返す（距離の分布に入る値）
+        best_distance = float(np.min(distance_row[candidates]))
+        bound = threshold if limits is None else np.minimum(limits[candidates], threshold)
+        accepted = candidates[distance_row[candidates] <= bound]
+        if not accepted.size:
             return None, best_distance
+        best_distance = float(np.min(distance_row[accepted]))
     return best_person, best_distance
 
 

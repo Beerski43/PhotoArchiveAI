@@ -155,6 +155,19 @@ def test_family_only_keeps_media_where_a_family_member_is_assigned(connection):
     assert _paths(select_media(connection, {"family_only": True})) == ["family.jpg"]
 
 
+def test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away(connection):
+    """**「写っているか」と「どれだけ良いか」を同じ数で表さない**（PR #70 のレビュー指摘1）。
+
+    ボケて（鮮明さ 0）・整列できず（正面 0）・笑顔 0 の家族の顔は点が 0 になる。
+    「点 > 0」で絞ると、家族が写っているのに落ちていた（実データの複製で 433 枚）。
+    """
+    _add(connection, "crisp.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "worst.jpg", faces=[_face("${PERSON_4}", sharpness=25.0, aligned=False, smile=0.0)])
+    _add(connection, "stranger.jpg", faces=[_face(None)])
+
+    assert _paths(select_media(connection, {"family_only": True})) == ["crisp.jpg", "worst.jpg"]
+
+
 def test_a_blurred_family_photo_comes_after_a_crisp_one(connection):
     """**利用者の要望の核心。** 本人が写っていても、ボケていたら意味がない。"""
     _add(connection, "blurred.jpg", faces=[_face("${PERSON_4}", sharpness=20.0)])

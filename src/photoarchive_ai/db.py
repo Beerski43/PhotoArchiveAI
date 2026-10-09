@@ -438,7 +438,7 @@ def _row_to_dict(row: Optional[sqlite3.Row]) -> Dict[str, Any]:
 
 
 def encode_embedding(embedding: Optional[Sequence[float]]) -> Optional[bytes]:
-    """128次元の埋め込みを float32 のバイト列にする。"""
+    """`EMBEDDING_DIM` 次元の埋め込みを float32 のバイト列にする（ArcFace は512）。"""
     if embedding is None:
         return None
     array = np.asarray(embedding, dtype=EMBEDDING_DTYPE)
