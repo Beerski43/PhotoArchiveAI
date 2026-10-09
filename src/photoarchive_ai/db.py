@@ -33,7 +33,7 @@ import numpy as np
 # いくつもあり（`encode_embedding` / `add_face`）、同名だと関数の中で
 # module が見えなくなる。将来そこでモデルの記述を使おうとして踏む。
 from . import embedding as embedding_model
-from .dates import parse_date
+from .dates import calculate_age, parse_date
 
 SCHEMA_VERSION = 4
 
@@ -1324,7 +1324,9 @@ def list_faces(
 
     - ``ORDER_QUALITY``: 品質スコアの高い順
     - ``ORDER_SHOT_DESC``: 撮影日時の新しい順。**撮影日時の無い顔は最後**
-    - ``ORDER_AGE``: 年齢の若い順。**年齢が未設定の顔は最後**
+    - ``ORDER_AGE``: 年齢の若い順。**画面に出ている年齢**（確定値か、誕生日と
+      撮影日時から計算した値）で並べる。**年齢を出せない顔は最後**
+      （`_ids_in_age_order`）
     - ``ORDER_SCORE_ASC``: 自動割り当ての確信度が低い順。**持たない顔は最後**
 
     ``folder`` / ``day`` を渡すと、その行事（フォルダ×日）の写真の顔だけに絞る
@@ -1351,17 +1353,20 @@ def list_faces(
         undated_only=undated_only,
         rejected_for_person=rejected_for_person,
     )
+    if order == ORDER_AGE:
+        # **年齢順だけは SQL で並べない。** 下の `_ids_in_age_order` を見ること。
+        where, params = _face_filter(prefix="f.", **filters)
+        ordered = _ids_in_age_order(connection, where, params, birth_date)
+        if limit is not None:
+            ordered = ordered[offset : offset + limit]
+        return faces_by_ids(connection, ordered, with_thumbnail=with_thumbnail)
     if order == ORDER_SHOT_DESC:
         # 撮影日時順だけは `Media` と結合するので、別名つきで条件を作る。
         where, params = _face_filter(prefix="f.", **filters)
         query = _shooting_date_query(columns, where)
     else:
         where, params = _face_filter(**filters)
-        if order == ORDER_AGE:
-            # **未設定を最後に置く。** SQLite の NULL は最小なので、
-            # そのまま昇順にすると年齢を入れていない顔が先頭を埋める。
-            order_by = "age IS NULL ASC, age ASC, id ASC"
-        elif order == ORDER_SCORE_ASC:
+        if order == ORDER_SCORE_ASC:
             # **確信度を持たない顔を最後に置く。** 低い順に見たいのだから、
             # NULL が先頭に来ると見直しの邪魔になる。
             order_by = "assign_score IS NULL ASC, assign_score ASC, id ASC"
@@ -1374,6 +1379,68 @@ def list_faces(
         params = params + [limit, offset]
     rows = connection.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def _ids_in_age_order(
+    connection: sqlite3.Connection,
+    where: str,
+    params: List[Any],
+    birth_date: Optional[str],
+) -> List[int]:
+    """条件に当たる顔の id を、**画面に出ている年齢の若い順**に**全件**返す。
+
+    **以前は `Face.age`（人が入れた確定値）だけで並べていた。** 実データでは
+    ひよりの 9,502 件のうち確定値は **199 件だけ**で、**残り 9,303 件は id 順の
+    まま2ページ目以降に並んでいた**（2026-10-09）。画面には括弧つきの計算年齢が
+    出ているので、利用者には「ページの中しか並んでいない」ように見えた。
+
+    年齢の決め方は画面（`gui.face_age_label`）と同じ。
+
+    | その顔 | 並べる年齢 |
+    |---|---|
+    | `Face.age` が入っている | その値 |
+    | 入っていない | 誕生日と撮影日時から計算（`dates.calculate_age`） |
+    | どちらも出せない | **最後** |
+
+    誕生日は ``birth_date`` が来ていればそれ（**人物を選んでいる画面**。
+    「この人物ではない」の一覧の顔は別の人物に付いていることがあるが、表示は
+    選んでいる人物の年齢）、無ければ**その顔に付いている人物の誕生日**。
+
+    **SQL に年齢の計算を持ち込まない**（日付の判断は `dates` に1つだけ。
+    CLAUDE.md §8）。代わりに**サムネイル抜きで全件**読んで Python で並べる。
+    人物の最大で約 1 万行なので軽い（ページのサムネイルは呼び出し側が
+    `faces_by_ids` で1ページ分だけ読む）。
+
+    同じ年齢の中は撮影日時の古い順、最後に id で順を固定する
+    （**ページをまたいで重複・欠落させないため**）。
+    """
+    births: Dict[int, Optional[str]] = {}
+    if not birth_date:
+        births = {
+            int(row[0]): row[1]
+            for row in connection.execute("SELECT id, birth_date FROM Person")
+        }
+    rows = connection.execute(
+        "SELECT f.id, f.age, f.person_id, m.shooting_date"
+        f" FROM Face f JOIN Media m ON m.id = f.media_id{where}",
+        params,
+    ).fetchall()
+
+    def key(row) -> tuple:
+        age = row[1]
+        if age is None:
+            owner_birth = birth_date or births.get(row[2])
+            age = calculate_age(owner_birth, row[3])
+        taken = parse_date(row[3])
+        return (
+            age is None,
+            age if age is not None else 0,
+            taken is None,
+            taken.toordinal() if taken is not None else 0,
+            int(row[0]),
+        )
+
+    return [int(row[0]) for row in sorted(rows, key=key)]
 
 
 def _shooting_date_query(columns: List[str], where: str) -> str:

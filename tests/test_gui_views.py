@@ -736,3 +736,75 @@ def test_both_face_lists_are_built_the_same_way():
     assert widget.iconSize().width() == photoarchive_gui.THUMBNAIL_SIZE
     assert widget.wordWrap() is True
     assert widget.uniformItemSizes() is True
+
+
+# ---------------------------------------------------------------------------
+# 並び順は全件に効き、意味のない並びは選べない（2026-10-09 利用者の報告）
+# ---------------------------------------------------------------------------
+
+
+def test_orders_that_mean_nothing_in_the_view_cannot_be_chosen(seeded):
+    """**未割当では年齢と確信度の並びを押せない。** 理由はツールチップに出す。
+
+    未割当の顔は人物が決まっていないので年齢を出せず、確信度も持たない
+    （実データの未割当 31,275 件で、年齢は 2 件・確信度は 0 件）。選べると
+    id 順のまま何も変わらず、**並べ替えが壊れているように見える。**
+    """
+    window, _faces, persons = seeded
+
+    def enabled():
+        model = window.order_box.model()
+        return {
+            value: model.item(index).isEnabled()
+            for index, (_, value) in enumerate(photoarchive_gui.ORDER_CHOICES)
+        }
+
+    _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
+    state = enabled()
+    assert state[db.ORDER_AGE] is False
+    assert state[db.ORDER_SCORE_ASC] is False
+    assert state[db.ORDER_SHOT_DESC] is True
+    age_index = next(
+        i for i, (_, v) in enumerate(photoarchive_gui.ORDER_CHOICES) if v == db.ORDER_AGE
+    )
+    assert "年齢を出せません" in window.order_box.model().item(age_index).toolTip()
+
+    _select(window, person_id=persons["ひより"])
+    assert all(enabled().values()), "人物の表示ではどの並びも意味を持つ"
+
+
+def test_the_person_view_is_sorted_by_the_shown_age_on_every_page(tmp_path, monkeypatch):
+    """**画面に出ている年齢が、ページをまたいで若い順に並ぶこと。**
+
+    以前は確定値（`Face.age`）だけで並べていたので、括弧つきの計算年齢しか
+    持たない顔（実データの 98%）は id 順のまま2ページ目以降に散っていた。
+    """
+    import re
+
+    monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
+    database = tmp_path / "ages.db"
+    connection = db.ensure_database(str(database))
+    person_id = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    # id の順と年齢の順をわざと逆にする
+    for index, year in enumerate((2024, 2016, 2020, 2012, 2018)):
+        media_id = _media(connection, f"/photos/{index}.jpg", f"{year}-06-01T10:00:00", f"h{index}")
+        face_id = _add_face(connection, media_id)
+        db.assign_faces(connection, [face_id], person_id, db.ASSIGN_AUTO)
+    connection.commit()
+    connection.close()
+
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        _select(window, person_id=person_id)
+        ages = []
+        for _ in range(3):
+            ages += [
+                int(match.group(1))
+                for match in (re.search(r"\((\d+)歳\)", label) for label in _labels(window))
+                if match
+            ]
+            window._next_page()
+
+        assert ages == [1, 5, 7, 9, 13], ages
+    finally:
+        window.connection.close()

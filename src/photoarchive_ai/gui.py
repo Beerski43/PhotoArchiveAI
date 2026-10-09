@@ -141,6 +141,23 @@ DEFAULT_ORDER = {
     SCOPE_PERSON: db.ORDER_AGE,
 }
 
+#: 表示ごとに**意味を持たない並び**と、その理由。押せなくして理由を出す。
+#:
+#: **隠さずに押せなくする**（隠すと「そんな機能は無い」と思われる）。
+#: 未割当と除外済みの顔は人物が決まっていないので年齢を出せず、確信度も
+#: 持たない（実データの未割当 31,275 件で、年齢は 2 件・確信度は 0 件）。
+#: 選べると **id 順のまま何も変わらず**、並べ替えが壊れているように見える。
+ORDER_UNUSABLE = {
+    SCOPE_UNASSIGNED: {
+        db.ORDER_AGE: "未割当の顔は人物が決まっていないので、年齢を出せません",
+        db.ORDER_SCORE_ASC: "未割当の顔は自動割り当ての確信度を持ちません",
+    },
+    SCOPE_REJECTED: {
+        db.ORDER_AGE: "除外した顔は人物を持たないので、年齢を出せません",
+        db.ORDER_SCORE_ASC: "除外した顔は自動割り当ての確信度を持ちません",
+    },
+}
+
 #: 右クリックのメニューに出す操作の名前。**用語は仕様書 §1.3 に揃える。**
 ACTION_CONFIRM = "手本に確定"
 ACTION_UNASSIGN = "未割当に戻す"
@@ -1531,7 +1548,10 @@ class MainWindow(QWidget):
         for label, _ in ORDER_CHOICES:
             self.order_box.addItem(label)
         self.order_box.setToolTip(
-            "並び順。**表示を切り替えると、その表示に向いた順に戻る**"
+            "並び順。**条件に当たる全件を並べてから、ページに分けて出す**"
+            "（いま見えている200件の中だけで並べ替えるのではない）。\n"
+            "年齢は**画面に出ている年齢**（確定値か、誕生日から計算した値）で並べる。\n"
+            "表示を切り替えると、その表示に向いた順に戻る"
             "（未割当は撮影日時の新しい順、自動割当は確信度の低い順、"
             "人物は年齢の若い順）。"
         )
@@ -1937,6 +1957,13 @@ class MainWindow(QWidget):
         """
         scope = self._current_scope()
         self.person_filter_row.setVisible(scope == SCOPE_PERSON)
+        # **意味を持たない並びは押せなくする**（`ORDER_UNUSABLE`）。
+        unusable = ORDER_UNUSABLE.get(scope, {})
+        choices = self.order_box.model()
+        for index, (_, value) in enumerate(ORDER_CHOICES):
+            item = choices.item(index)
+            item.setEnabled(value not in unusable)
+            item.setToolTip(unusable.get(value, ""))
         if scope != getattr(self, "_synced_scope", None):
             self._synced_scope = scope
             order = DEFAULT_ORDER[scope]
