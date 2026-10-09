@@ -6,7 +6,8 @@
   破棄するのは旧特徴量が使えないからで、移行という操作の性質ではない
 - **v2 以降**: 列を足すだけ。``ALTER TABLE`` で済み、**何も破棄しない**。
   顔も解析結果も残る（v2 → v3 は ``Person.birth_date``、
-  v3 → v4 は ``Person.display_order``）。**足す列は
+  v3 → v4 は ``Person.display_order``、v4 → v5 は ``Face`` の見え方と
+  ``assign_rule``）。**足す列は
   `db.ADDABLE_COLUMNS` に1行書くだけでよい**
 
 **v1 の経路に v2 のDBを流し込まないこと。** 使えるはずの顔が消える。

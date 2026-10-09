@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import calculate_age, parse_date
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -175,6 +175,19 @@ SCHEMA = [
     "assigned_at TEXT,"
     "age INTEGER,"
     "created_at TEXT NOT NULL,"
+    # **顔の見え方**（v5。保存済みサムネイルから測る。`appearance.py`）。
+    # NULL＝未計測。`match` と `select` が使う顔だけを、使う前に埋める。
+    # aligned: 5点整列ができたか（1/0）。**できない顔の特徴量は整列されていない**
+    # （`face.align_for_arcface` は縮小で通す）ので、手本の根拠にしない。
+    "aligned INTEGER,"
+    # yaw: 横向きの度合い（鼻のずれ ÷ 両目の間隔。正面で 0）。整列できなければ NULL。
+    "yaw REAL,"
+    # sharpness: 鮮明さ（112px にそろえたラプラシアン分散。小さいほどボケ）。
+    "sharpness REAL,"
+    # assign_rule: 自動割り当てを付けた規則の版（`matcher.MATCH_RULE`）。
+    # **auto の行だけが意味を持つ。** 規則を変えたあとに古い判定が残っているかを
+    # `select` が見分けるため。
+    "assign_rule TEXT,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
     ")",
@@ -348,6 +361,10 @@ def describe_missing_columns(gaps: Dict[str, List[str]]) -> str:
 ADDABLE_COLUMNS = {
     ("Person", "birth_date"): "TEXT",
     ("Person", "display_order"): "INTEGER",
+    ("Face", "aligned"): "INTEGER",
+    ("Face", "yaw"): "REAL",
+    ("Face", "sharpness"): "REAL",
+    ("Face", "assign_rule"): "TEXT",
 }
 
 
@@ -630,7 +647,7 @@ def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
     """人物を削除する。紐づいていた顔は削除せず未割当に戻す。"""
     cursor = connection.cursor()
     cursor.execute(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
         " assigned_at = NULL WHERE person_id = ?",
         (person_id,),
     )
@@ -1572,13 +1589,13 @@ def assign_faces(
     if isinstance(age, _KeepAge):
         statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ? WHERE id = ?"
+            " assign_rule = NULL, assigned_at = ? WHERE id = ?"
         )
         rows = [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids]
     else:
         statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assigned_at = ?, age = ? WHERE id = ?"
+            " assign_rule = NULL, assigned_at = ?, age = ? WHERE id = ?"
         )
         rows = [
             (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
@@ -1598,7 +1615,7 @@ def unassign_faces(
     cursor = connection.cursor()
     affected = _executemany_with_progress(
         cursor,
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
         " assigned_at = NULL WHERE id = ?",
         [(face_id,) for face_id in face_ids],
         progress,
@@ -1643,7 +1660,7 @@ def reject_faces_for_person(
     )
     # その人物に割り当たっているものだけを外す。別の人物のものには触らない。
     cursor.executemany(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
         " assigned_at = NULL WHERE id = ? AND person_id = ?",
         [(face_id, person_id) for face_id in face_ids],
     )
@@ -1704,7 +1721,7 @@ def reject_faces(
     cursor = connection.cursor()
     affected = _executemany_with_progress(
         cursor,
-        "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL, assign_rule = NULL,"
         " assigned_at = ? WHERE id = ?",
         [(ASSIGN_REJECTED, now, face_id) for face_id in face_ids],
         progress,
@@ -1857,6 +1874,13 @@ class ManualFaces(NamedTuple):
     media_ids: np.ndarray
     person_ids: np.ndarray
     embeddings: np.ndarray
+    #: 割り当ての根拠にしてよい手本か（**5点整列ができなかった手本は False**）。
+    #: 未計測（NULL）は True。**分からないものを外さない。**
+    #: 根拠にしない手本も、2位の対抗馬としては使う（`matcher._best_match`）。
+    usable: np.ndarray
+    #: 撮影時の年齢。確定値（`Face.age`）、無ければ誕生日と撮影日時から計算。
+    #: 分からなければ NaN。**年齢ごとの閾値の上限**に使う（#66）。
+    ages: np.ndarray
 
 
 def load_manual_faces(connection: sqlite3.Connection) -> ManualFaces:
@@ -1869,9 +1893,12 @@ def load_manual_faces(connection: sqlite3.Connection) -> ManualFaces:
     **`load_manual_embeddings` と同じく、同じ版の特徴量だけを読む。**
     """
     rows = connection.execute(
-        "SELECT id, media_id, person_id, embedding FROM Face"
-        " WHERE person_id IS NOT NULL AND assign_source = ? AND embedding IS NOT NULL"
-        " AND embed_version = ? ORDER BY id",
+        "SELECT F.id, F.media_id, F.person_id, F.embedding, F.aligned, F.age,"
+        " M.shooting_date, P.birth_date"
+        " FROM Face F JOIN Media M ON M.id = F.media_id"
+        " LEFT JOIN Person P ON P.id = F.person_id"
+        " WHERE F.person_id IS NOT NULL AND F.assign_source = ? AND F.embedding IS NOT NULL"
+        " AND F.embed_version = ? ORDER BY F.id",
         (ASSIGN_MANUAL, embedding_model.ACTIVE.version),
     ).fetchall()
     if not rows:
@@ -1880,13 +1907,78 @@ def load_manual_faces(connection: sqlite3.Connection) -> ManualFaces:
             np.empty((0,), dtype=np.int64),
             np.empty((0,), dtype=np.int64),
             np.empty((0, EMBEDDING_DIM), dtype=EMBEDDING_DTYPE),
+            np.empty((0,), dtype=bool),
+            np.empty((0,), dtype=np.float64),
         )
     return ManualFaces(
         np.asarray([row["id"] for row in rows], dtype=np.int64),
         np.asarray([row["media_id"] for row in rows], dtype=np.int64),
         np.asarray([row["person_id"] for row in rows], dtype=np.int64),
         np.vstack([decode_embedding(row["embedding"]) for row in rows]),
+        np.asarray([row["aligned"] != 0 for row in rows], dtype=bool),
+        np.asarray([_teacher_age(row) for row in rows], dtype=np.float64),
     )
+
+
+def _teacher_age(row) -> float:
+    """手本の撮影時の年齢。**確定値を優先**し、無ければ計算する。分からなければ NaN。
+
+    日付の判断は `dates` に預ける（CLAUDE.md §8。ここで日付を読まない）。
+    """
+    if row["age"] is not None:
+        return float(row["age"])
+    age = calculate_age(row["birth_date"], row["shooting_date"])
+    return float("nan") if age is None or age < 0 else float(age)
+
+
+def faces_without_appearance(
+    connection: sqlite3.Connection, assign_sources: Sequence[str]
+) -> List[int]:
+    """見え方（`Face.sharpness` ほか）が未計測で、サムネイルのある顔の id。
+
+    ``assign_sources`` の割り当ての顔だけ。**測るのは使う顔だけ**
+    （全顔は約6万件で、1件 約17ms）。
+    """
+    if not assign_sources:
+        return []
+    placeholders = ",".join("?" for _ in assign_sources)
+    rows = connection.execute(
+        "SELECT id FROM Face WHERE sharpness IS NULL AND thumbnail IS NOT NULL"
+        f" AND assign_source IN ({placeholders}) ORDER BY id",
+        tuple(assign_sources),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def face_thumbnails(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Dict[int, Optional[bytes]]:
+    """顔 id からサムネイルを引く。**呼び出し側が塊に割って渡すこと**（BLOB は重い）。"""
+    found: Dict[int, Optional[bytes]] = {}
+    for start in range(0, len(face_ids), 500):
+        chunk = list(face_ids[start : start + 500])
+        placeholders = ",".join("?" for _ in chunk)
+        for row in connection.execute(
+            f"SELECT id, thumbnail FROM Face WHERE id IN ({placeholders})", chunk
+        ):
+            found[int(row[0])] = row[1]
+    return found
+
+
+def save_appearance(connection: sqlite3.Connection, rows: Sequence[Tuple[int, Any]]) -> int:
+    """``(face_id, appearance.Appearance)`` を書く。"""
+    if not rows:
+        return 0
+    cursor = connection.cursor()
+    cursor.executemany(
+        "UPDATE Face SET aligned = ?, yaw = ?, sharpness = ? WHERE id = ?",
+        [
+            (int(bool(item.aligned)), item.yaw, item.sharpness, face_id)
+            for face_id, item in rows
+        ],
+    )
+    connection.commit()
+    return cursor.rowcount
 
 
 #: match が一度に読み出す顔の件数。matcher と二重に持たない。
@@ -1946,17 +2038,22 @@ def iter_unassigned_embeddings(
 def apply_auto_assignments(
     connection: sqlite3.Connection,
     updates: Sequence[Tuple[int, int, float]],
+    rule: Optional[str] = None,
 ) -> int:
-    """(face_id, person_id, assign_score) をまとめて書き込む。"""
+    """(face_id, person_id, assign_score) をまとめて書き込む。
+
+    ``rule`` は割り当てを決めた規則の版（`matcher.MATCH_RULE`）。
+    **`select` が「古い規則の判定が残っている」ことに気づくための印。**
+    """
     if not updates:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
     cursor.executemany(
         "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-        " assigned_at = ? WHERE id = ?",
+        " assign_rule = ?, assigned_at = ? WHERE id = ?",
         [
-            (person_id, ASSIGN_AUTO, assign_score, now, face_id)
+            (person_id, ASSIGN_AUTO, assign_score, rule, now, face_id)
             for face_id, person_id, assign_score in updates
         ],
     )
@@ -1984,7 +2081,7 @@ def reset_auto_assignments(
         params.append(person_id)
     cursor = connection.cursor()
     cursor.execute(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
         f" assigned_at = NULL WHERE {' AND '.join(clauses)}",
         tuple(params),
     )
@@ -2013,20 +2110,64 @@ def save_media_scores(
     )
 
 
-def recompute_family_scores(connection: sqlite3.Connection) -> None:
-    """人物が紐づいた顔から family_score を計算し直す。
+def family_faces(
+    connection: sqlite3.Connection, media_ids: Optional[Sequence[int]] = None
+) -> List[Dict[str, Any]]:
+    """家族の顔（手本と自動割り当て）の、写真の良さを決める列だけを読む。
 
-    手動割当は確信度100として扱う。
+    **サムネイルも特徴量も読まない**（数万件になるため）。
+    ``media_ids`` を渡すとその写真の顔だけ。
     """
+    query = (
+        "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness, smile_score"
+        " FROM Face WHERE person_id IS NOT NULL AND assign_source IN (?, ?)"
+    )
+    params: List[Any] = [ASSIGN_MANUAL, ASSIGN_AUTO]
+    if media_ids is None:
+        return [dict(row) for row in connection.execute(query, params)]
+    found: List[Dict[str, Any]] = []
+    ids = list(media_ids)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        found.extend(
+            dict(row)
+            for row in connection.execute(
+                f"{query} AND media_id IN ({placeholders})", params + chunk
+            )
+        )
+    return found
+
+
+def recompute_family_scores(connection: sqlite3.Connection) -> None:
+    """``family_score`` を、家族の顔だけから計算し直す。
+
+    **式は `scoring.family_photo_score` に1つだけある**（`select` もそれを使う）。
+    以前は「家族の顔の確信度の最大（手本は100）」で、**ボケた家族の顔でも満点**に
+    なっていた。いまは鮮明さ・正面・笑顔と、はっきり写った家族の人数で決まる
+    （利用者の要望。2026-10-09）。
+    """
+    from . import scoring
+
+    scores = scoring.family_photo_scores(family_faces(connection))
     cursor = connection.cursor()
     cursor.execute("UPDATE AnalysisResult SET family_score = 0.0")
-    cursor.execute(
-        "INSERT INTO AnalysisResult (media_id, family_score)"
-        " SELECT media_id, MAX(COALESCE(assign_score, 100.0)) FROM Face"
-        " WHERE person_id IS NOT NULL GROUP BY media_id"
-        " ON CONFLICT(media_id) DO UPDATE SET family_score = excluded.family_score"
+    cursor.executemany(
+        "INSERT INTO AnalysisResult (media_id, family_score) VALUES (?, ?)"
+        " ON CONFLICT(media_id) DO UPDATE SET family_score = excluded.family_score",
+        list(scores.items()),
     )
     connection.commit()
+
+
+def count_stale_auto_assignments(connection: sqlite3.Connection, rule: str) -> int:
+    """``rule`` と違う規則で付いた自動割り当ての数（印の無い古いものも含む）。"""
+    row = connection.execute(
+        "SELECT COUNT(*) FROM Face WHERE assign_source = ?"
+        " AND (assign_rule IS NULL OR assign_rule != ?)",
+        (ASSIGN_AUTO, rule),
+    ).fetchone()
+    return int(row[0])
 
 
 def get_analysis_result(connection: sqlite3.Connection, media_id: int) -> Optional[Dict[str, Any]]:

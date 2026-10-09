@@ -17,6 +17,17 @@ import numpy as np
 # だけ触る。既定値を据え置くのは、既存のテストの意味を変えないため。
 FACE_MESH_STATE = {"landmarks": {}, "detected": True}
 
+#: 顔の見え方（`appearance`）を測るときに、5点が取れるかどうか。
+#:
+#: **特徴量の経路とは別に持つ。** 特徴量の経路では5点を取れないことにしている
+#: （下の `install_fake_backends`）が、見え方の判定までそうすると、**テストの手本が
+#: 全部「整列できない」になり、`match` が何も割り当てなくなる。** 既定は「正面で
+#: 整列できる」。整列できない手本を作るテストは `aligned` を False にする。
+APPEARANCE_STATE = {"aligned": True}
+
+#: 正面の顔の5点（112px の ArcFace テンプレートに近い配置）。向き（yaw）は 0。
+FRONTAL_POINTS = ((38.0, 52.0), (74.0, 52.0), (56.0, 72.0), (42.0, 92.0), (70.0, 92.0))
+
 
 def _install_fake_mediapipe_modules():
     if "mediapipe" in sys.modules:
@@ -172,7 +183,7 @@ def install_fake_backends() -> None:
     **ワーカープロセスの入口から呼ぶ。** 親では `conftest` のフィクスチャが
     同じことをしているので、二重に呼んでも害が無いようにしてある。
     """
-    from photoarchive_ai import face, scoring
+    from photoarchive_ai import appearance, face, scoring
 
     _install_fake_mediapipe_modules()
     face._load_dlib_models = lambda: (_FakeShapePredictor(), _FakeRecognitionModel())
@@ -182,6 +193,9 @@ def install_fake_backends() -> None:
     # 画像の端が黒く埋まって「色が同じなら同一人物」が崩れる。整列そのものは
     # `tests/test_face_alignment.py` が単体で確かめている。
     face.detect_five_points = lambda _rgb: None
+    appearance._five_points = lambda _rgb: (
+        np.asarray(FRONTAL_POINTS, dtype=np.float64) if APPEARANCE_STATE["aligned"] else None
+    )
     face.EMBED_MIN_FACE_PX = 4
     face.reset_model_cache()
     scoring.reset_model_cache()
