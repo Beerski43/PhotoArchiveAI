@@ -229,6 +229,8 @@ pytest -q -m "not models"  # 回帰テストと同じ範囲
 ### セッションを切る前に
 
 **次のセッションが、文書だけを読んで再開できる状態にする。**
+**手順はスキル `session-handoff`（`.claude/skills/session-handoff/SKILL.md`）にある。**
+「引き継ぎ」「クリアする前に」と言われたら、それに従う。
 
 ```bash
 python scripts/check_handoff.py
