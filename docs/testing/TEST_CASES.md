@@ -28,6 +28,8 @@
 | `test_appearance.py::test_an_unaligned_teacher_still_blocks_a_stranger_as_the_runner_up` | **整列できない手本を丸ごと外すと、誤りが +418 件増えた**（実データ・2026-10-09）。その人物が2位の対抗馬として他人を止めていた役目まで消えた |
 | `test_appearance.py::test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else` | **年齢の差を距離に足し引きすると、勝つ人物が入れ替わった**（大人の手本を締めて +258 件） |
 | `test_appearance.py::test_nothing_is_recorded_when_the_landmark_model_is_unavailable` | 目印の検出器が無い環境で「整列できない」と書くと、全部の手本が根拠から外れ二度と測り直されない（実装中にテストのフェイクで踏んだ） |
+| `test_selection.py::test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | `family_only` を「点 > 0」で絞っていたので、**家族が写っているのにボケて横を向いた写真が落ちた**（実データの複製で 433 枚） |
+| `test_appearance.py::test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | 年齢の上限を最も近い1件で判定していたので、**手本を足すと割り当てが減った** |
 | `test_selection.py::test_a_crisp_stranger_does_not_lift_a_blurred_family_photo` | 写真の笑顔・画質が「写っている顔の最良値」で、**隣の他人がくっきり笑っていればボケた家族の写真が上位に来た** |
 | `test_selection.py::test_a_change_made_in_the_gui_reaches_select_without_running_match` | `select` が保存済みの `family_score` を読んでいたので、GUI で直した割り当てが次の `match` まで届かなかった |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
@@ -532,7 +534,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（25件）
+### `test_selection.py` — 抽出とコピー（26件）
 
 | テスト | 内容 |
 |---|---|
@@ -540,6 +542,7 @@
 | `test_load_rule_reads_json` / `test_load_rule_reads_yaml` | ルールの読み込み（拡張子で分岐） |
 | `test_load_rule_raises_for_a_missing_file` | 無いファイル |
 | `test_family_only_keeps_media_where_a_family_member_is_assigned` | `family_only` は家族の顔が写っているか |
+| `test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | **点 0 の家族の写真も `family_only` で残る**（PR #70 のレビュー指摘1） |
 | `test_a_blurred_family_photo_comes_after_a_crisp_one` | **ボケた家族の写真は後ろ**（利用者の要望の核心） |
 | `test_a_profile_comes_after_a_frontal_face` | 横顔・整列できない顔は正面の後ろ |
 | `test_a_smile_ranks_above_a_straight_face` | 笑顔が上 |
@@ -561,7 +564,7 @@
 | `test_copy_skips_entries_without_a_path_and_reports_progress` | パスが無い行を飛ばす |
 | `test_copy_makes_room_when_the_name_is_taken` | 名前の衝突で連番を付ける |
 
-### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（19件。#66）
+### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）
 
 | テスト | 内容 |
 |---|---|
@@ -583,6 +586,8 @@
 | `test_the_confirmed_age_wins_over_the_calculated_one` | 年齢は確定値が優先 |
 | `test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else` | **上限は勝者とマージンに効かせない** |
 | `test_evaluate_applies_the_age_limits_too` | `evaluate` も年齢の上限を効かせる |
+| `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
+| `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
 ### `test_converter.py` — HEIC → JPEG（10件）
 

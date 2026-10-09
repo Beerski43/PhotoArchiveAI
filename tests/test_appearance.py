@@ -387,3 +387,38 @@ def test_evaluate_applies_the_age_limits_too(connection):
     summary = evaluate_match(connection, thresholds=[0.45], margin=0.05, metric=EUCLIDEAN)
 
     assert summary["thresholds"][0]["correct"] == 0, "1歳の手本どうしは 0.35 までしか当てない"
+
+
+def test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer():
+    """**手本を足して割り当てが減ってはいけない**（PR #70 のレビュー指摘2・利用者が案1を決定）。
+
+    同じ人物に2歳の手本（距離 0.36・上限 0.35）と10歳の手本（0.40・上限 0.45）が
+    あるとき、10歳の手本で受け入れる。以前は最も近い1件（2歳）の上限だけで判定し、
+    2歳の手本が無ければ受け入れられる顔を落としていた。
+    """
+    from photoarchive_ai.matcher import _best_match
+
+    row = np.array([0.36, 0.40, 0.80])
+    persons = np.array([1, 1, 2])
+    usable = np.array([True, True, True])
+    limits = np.array([0.35, 0.45, 0.45])
+
+    assert _best_match(row, persons, 0.45, 0.08, usable, limits) == (1, pytest.approx(0.40))
+    # 10歳の手本だけのときと同じ結果（手本を足しても変わらない）
+    assert _best_match(row[1:], persons[1:], 0.45, 0.08, usable[1:], limits[1:]) == (
+        1,
+        pytest.approx(0.40),
+    )
+
+
+def test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned():
+    """案1でも、上限以内の手本が1件も無ければ受け入れない。"""
+    from photoarchive_ai.matcher import _best_match
+
+    row = np.array([0.36, 0.46, 0.90])
+    persons = np.array([1, 1, 2])
+    limits = np.array([0.35, 0.45, 0.45])
+
+    person, distance = _best_match(row, persons, 0.45, 0.08, np.ones(3, bool), limits)
+    assert person is None
+    assert distance == pytest.approx(0.36)

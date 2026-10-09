@@ -3,7 +3,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -88,8 +88,16 @@ def stale_assignment_notice(connection) -> Optional[str]:
 
 def family_scores(
     connection, progress_callback: Optional[Callable[[int, int, str], None]] = None
-) -> Dict[int, float]:
-    """写真ごとの家族写真としての良さを、**いまの割り当てからその場で**計算する。
+) -> Tuple[Dict[int, float], Set[int]]:
+    """写真ごとの家族写真としての良さと、家族の顔が写っている写真の集合。
+
+    **いまの割り当てからその場で**計算する。
+
+    **「写っているか」と「どれだけ良いか」を同じ数で表さない**（PR #70 の
+    レビュー指摘1）。点は鮮明さ・正面・笑顔がすべて 0 なら 0 になるので、
+    「点 > 0」で絞ると、**家族が写っているのにボケて横を向いた写真が落ちる**
+    （実データの複製で 20,828 枚中 433 枚）。`family_only` は集合で絞り、
+    点は並びにだけ使う。
 
     **保存済みの `family_score` を読まない。** GUI で割り当てを直しても
     `AnalysisResult` は次の `match` まで古いまま（仕様書 §10.6）なので、それを
@@ -99,7 +107,8 @@ def family_scores(
     見え方が未計測の家族の顔は、先に測る（初回は数分。2回目からは差分だけ）。
     """
     appearance.fill_missing(connection, progress_callback=progress_callback)
-    return scoring.family_photo_scores(db.family_faces(connection))
+    rows = db.family_faces(connection)
+    return scoring.family_photo_scores(rows), {row["media_id"] for row in rows}
 
 
 def select_media(
@@ -108,14 +117,14 @@ def select_media(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     media_list = get_media_with_analysis(connection)
-    scores = family_scores(connection, progress_callback)
+    scores, with_family = family_scores(connection, progress_callback)
     for media in media_list:
         media["family_score"] = scores.get(media["id"], 0.0)
     filtered = [m for m in media_list if _passes_date_filter(m, rule)]
     if not rule.get("include_video", True):
         filtered = [m for m in filtered if m.get("type") != "video"]
     if rule.get("family_only"):
-        filtered = [m for m in filtered if (m.get("family_score") or 0.0) > 0.0]
+        filtered = [m for m in filtered if m["id"] in with_family]
 
     filtered.sort(key=lambda m: (
         -(m.get("family_score") or 0.0),
