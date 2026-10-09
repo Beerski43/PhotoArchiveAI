@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -50,6 +50,23 @@ class EmbeddingModel:
     cluster_threshold: float
     #: `scoring.distance_to_similarity` が 0 を返す距離。
     similarity_reference: float
+    #: **手本の年齢ごとの閾値の上限**（#66）。``((年齢の上限, 閾値), ...)`` を
+    #: 年齢の若い順に。受け入れを決めた手本の年齢がその上限以下なら、閾値は
+    #: ``min(threshold, その値)``。**締めるだけで、緩めない。**
+    age_limits: Tuple[Tuple[int, float], ...] = ()
+    #: 年齢の分からない手本の閾値の上限。None なら上限なし。
+    unknown_age_limit: Optional[float] = None
+
+    def limit_for_age(self, age: Optional[float], threshold: float) -> float:
+        """その年齢の手本で受け入れてよい距離の上限。"""
+        if age is None or age != age:  # None か NaN
+            return threshold if self.unknown_age_limit is None else min(
+                threshold, self.unknown_age_limit
+            )
+        for upper, limit in self.age_limits:
+            if age <= upper:
+                return min(threshold, limit)
+        return threshold
 
 
 #: 2017年の dlib ResNet。**2026-10-02 まで使っていたもの。**
@@ -157,6 +174,26 @@ DLIB_RESNET = EmbeddingModel(
 #:
 #: 詳細は
 #: [docs/history/details/2026-10-04-event-clustering-measured.md]。
+#:
+#: ---
+#:
+#: **8歳以下の手本は 0.35・年齢不明の手本は 0.40 を上限にする**（2026-10-09・#66）。
+#: 赤ちゃんの顔は誰でも互いに近く、ひよりの誤りの 83% が 0〜5歳の手本に
+#: 引き寄せられていた。撮影日で半分に分け、片方で選んでもう片方で確かめた
+#: （整列できない手本を根拠にしない規則を入れたうえで）。
+#:
+#: ========================== ======== ========
+#:  検証側（較正に使っていない半分） 正解     誤り
+#: ========================== ======== ========
+#:  0.45 一律（以前）              4,865    215
+#:  整列できない手本を根拠にしない    4,853    159
+#:  ＋ 8歳以下 0.35・不明 0.40       4,816    **97**
+#: ========================== ======== ========
+#:
+#: **年長を緩めても取り戻せなかった**（9〜17歳を 0.55 にしても正解 +2〜+4 件）
+#: ので、上限は締める側だけに置く。値をなめらかにしたのは、帯ごとに選ぶと
+#: 1歳と 4〜5歳だけ外れる不揃いな形になり、ばらつきに合わせただけに見えたため。
+#: 測定は docs/history/details/2026-10-09-age-threshold-measured.md。
 ARCFACE_W600K_R50 = EmbeddingModel(
     version="arcface_w600k_r50/5pt/112",
     dimensions=512,
@@ -165,6 +202,8 @@ ARCFACE_W600K_R50 = EmbeddingModel(
     margin=0.08,
     cluster_threshold=0.45,
     similarity_reference=1.0,
+    age_limits=((8, 0.35),),
+    unknown_age_limit=0.40,
 )
 
 #: いま使うモデル。**`Face.embed_version` に入る版はここで決まる。**

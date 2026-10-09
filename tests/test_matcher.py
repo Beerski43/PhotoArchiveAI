@@ -160,7 +160,8 @@ def test_match_updates_family_score(connection):
 
     match_faces(connection, metric=EUCLIDEAN, threshold=0.5)
 
-    assert db.get_analysis_result(connection, media)["family_score"] == 100.0
+    # 点は家族の顔の見え方から出る（`scoring.family_photo_score`。式は test_selection）。
+    assert db.get_analysis_result(connection, media)["family_score"] > 0.0
     assert db.get_analysis_result(connection, other_media)["family_score"] > 0.0
     assert db.get_analysis_result(connection, stranger_media).get("family_score") in (None, 0.0)
 

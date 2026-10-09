@@ -38,6 +38,18 @@ logger = logging.getLogger("photoarchive.matcher")
 DEFAULT_THRESHOLD = embedding.ACTIVE.threshold
 DEFAULT_MARGIN = embedding.ACTIVE.margin
 
+#: **自動割り当てを決める規則の版。** `Face.assign_rule` に入る。
+#:
+#: 規則を変えたら上げる。**`select` はこれと違う版の自動割り当てが残っていると
+#: 警告する**（古い判定で写真を選ばないため。利用者の要望「match と select で
+#: 選定の仕組みが異なると、結果がおかしくなる」）。
+#:
+#: - ``aligned-teachers/1``（2026-10-09・#66）: 5点整列ができなかった手本を
+#:   割り当ての根拠にしない（2位の対抗馬としては使う）
+#: - ``aligned-age/1``（同日・#66）: 加えて、受け入れを決めた手本の年齢で閾値に
+#:   上限を置く（8歳以下 0.35・年齢不明 0.40。`embedding.ACTIVE.age_limits`）
+MATCH_RULE = "aligned-age/1"
+
 #: 読み出しの塊の大きさは db 側に持つ。二重定義にすると片方だけずれる。
 CHUNK_SIZE = db.MATCH_CHUNK_SIZE
 
@@ -117,8 +129,27 @@ def _best_match(
     person_ids: np.ndarray,
     threshold: float,
     margin: float,
+    usable: Optional[np.ndarray] = None,
+    limits: Optional[np.ndarray] = None,
 ):
-    """最も近い人物と、2位の人物との距離差を見て採否を決める。"""
+    """最も近い人物と、2位の人物との距離差を見て採否を決める。
+
+    ``usable`` は「割り当ての根拠にしてよい手本」のマスク（`db.ManualFaces.usable`）。
+    **勝者とマージンは全手本で決め、受け入れだけを使える手本で判定する。**
+
+    - **根拠にしない手本も、対抗馬としては残す。** 外すと、その人物が2位として
+      他人を止めていた役目まで消える。実データでは、整列できない手本を丸ごと外すと
+      **誤りが +418 件増えた**（赤ちゃんの顔の塊で、虎太朗の 17 件がひよりの対抗馬に
+      なっていた）。この形なら、外して誤りが増えることは構造上無い
+    - 受け入れの距離は「勝った人物の、使える手本」までの最短。**返す距離もそれ**
+      （`assign_score` の元になる。`select` が並べ替えに使うので、受け入れと同じ
+      根拠から出す）
+
+    ``limits`` は手本ごとの距離の上限（`teacher_limits`。年齢で決まる。#66）。
+    **受け入れを決める手本（勝った人物の、使える手本のうち最も近いもの）の
+    上限で判定する。** 勝者とマージンには効かせない（効かせると勝つ人物が
+    入れ替わり、マージンで止まっていた他人が流れる。実データで +258 件）。
+    """
     best_index = int(np.argmin(distance_row))
     best_person = int(person_ids[best_index])
     best_distance = float(distance_row[best_index])
@@ -129,7 +160,62 @@ def _best_match(
         second = float(np.min(others))
         if second - best_distance < margin:
             return None, best_distance
+    if usable is not None or limits is not None:
+        own = person_ids == best_person
+        if usable is not None:
+            own = own & usable
+        candidates = np.flatnonzero(own)
+        if not candidates.size:
+            return None, best_distance
+        nearest = int(candidates[np.argmin(distance_row[candidates])])
+        best_distance = float(distance_row[nearest])
+        limit = threshold if limits is None else float(limits[nearest])
+        if best_distance > limit:
+            return None, best_distance
     return best_person, best_distance
+
+
+def teacher_limits(
+    faces: "db.ManualFaces", threshold: float, model: Optional[Any] = None
+) -> np.ndarray:
+    """手本ごとの距離の上限。**年齢ごとの値は `embedding.ACTIVE` に1か所**（#66）。
+
+    ``threshold`` より緩めることは無い（締めるだけ）。
+    """
+    model = model or embedding.ACTIVE
+    return np.asarray(
+        [model.limit_for_age(age, threshold) for age in np.asarray(faces.ages, dtype=float)],
+        dtype=np.float64,
+    )
+
+
+def teacher_usable(
+    connection,
+    faces: "db.ManualFaces",
+    write: bool = True,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> np.ndarray:
+    """手本ごとの「割り当ての根拠にしてよいか」。**未計測の手本はここで測る。**
+
+    ``write=False`` なら測った値を DB に書かない（`evaluate` は書かない約束）。
+    測れなかった手本（サムネイルが無い・壊れている）は使える扱いのまま。
+    **分からないものを外さない。**
+    """
+    from . import appearance
+
+    usable = np.asarray(faces.usable, dtype=bool).copy()
+    measured = appearance.fill_missing(
+        connection,
+        assign_sources=(db.ASSIGN_MANUAL,),
+        write=write,
+        progress_callback=progress_callback,
+    )
+    if measured:
+        index = {int(face_id): i for i, face_id in enumerate(faces.face_ids)}
+        for face_id, item in measured.items():
+            if face_id in index:
+                usable[index[face_id]] = bool(item.aligned)
+    return usable
 
 
 def match_faces(
@@ -150,6 +236,8 @@ def match_faces(
     """
     summary: Dict[str, Any] = {
         "teachers": 0,
+        # 5点整列ができず、割り当ての根拠にしなかった手本（対抗馬としては使う）。
+        "unusable_teachers": 0,
         "candidates": 0,
         "assigned": 0,
         "unassigned": 0,
@@ -170,8 +258,17 @@ def match_faces(
         if progress_callback is not None:
             progress_callback(0, 0, f"{summary['reset']} auto assignments cleared")
 
-    teachers, person_ids = db.load_manual_embeddings(connection)
+    # **手本の見え方を先に測る**（未計測の分だけ。初回は手本1万件で約3分）。
+    # 5点整列ができなかった手本は割り当ての根拠にしない（`_best_match`）。
+    # 測るものがあれば、測る側が進み具合を知らせる（約3分かかるので要る）。
+    faces = db.load_manual_faces(connection)
+    usable = teacher_usable(
+        connection, faces, write=not dry_run, progress_callback=progress_callback
+    )
+    teachers, person_ids = faces.embeddings, faces.person_ids
     summary["teachers"] = int(teachers.shape[0])
+    summary["unusable_teachers"] = int((~usable).sum())
+    limits = teacher_limits(faces, threshold)
     # **誕生日は候補を絞る材料。** 登録されていない人物は絞られない。
     birth_dates = {
         int(person["id"]): person["birth_date"] for person in db.list_persons(connection)
@@ -218,14 +315,19 @@ def match_faces(
             # 人物が2位に居座ってマージンを潰し、判断が保留のままになる。
             if alive.all():
                 person_id, distance = _best_match(
-                    distances[row_index], person_ids, threshold, margin
+                    distances[row_index], person_ids, threshold, margin, usable, limits
                 )
             elif not alive.any():
                 # 手本のある人物が全員、この写真の時点でまだ生まれていない。
                 person_id, distance = None, float("inf")
             else:
                 person_id, distance = _best_match(
-                    distances[row_index][alive], person_ids[alive], threshold, margin
+                    distances[row_index][alive],
+                    person_ids[alive],
+                    threshold,
+                    margin,
+                    usable[alive],
+                    limits[alive],
                 )
             # **刻みの上限は尺度に合わせる。** ユークリッド(dlib)は実質 1.5 まで、
             # コサインは 2.0 まで。固定すると遠い顔が1つの桶に潰れて分布が読めない。
@@ -249,9 +351,19 @@ def match_faces(
             progress_callback(processed, max(total, processed), f"{summary['assigned']} assigned")
 
     if updates and not dry_run:
-        db.apply_auto_assignments(connection, updates)
+        db.apply_auto_assignments(connection, updates, rule=MATCH_RULE)
 
     if not dry_run:
+        # **`select` と同じ式で `family_score` を書く**（`scoring.family_photo_score`）。
+        # 式は家族の顔の見え方を使うので、付けたばかりの顔を先に測る。
+        from . import appearance
+
+        appearance.fill_missing(
+            connection, assign_sources=(db.ASSIGN_AUTO,), progress_callback=progress_callback
+        )
         db.recompute_family_scores(connection)
+        # 見え方を測った進み具合で終わらせない。**最後は照合した件数を出す。**
+        if progress_callback is not None:
+            progress_callback(processed, max(total, processed), f"{summary['assigned']} assigned")
 
     return summary

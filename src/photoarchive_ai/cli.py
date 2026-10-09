@@ -24,7 +24,12 @@ from .migration import (
     rebuilds_faces,
 )
 from .scanner import ScanAborted, scan_directory
-from .selection import copy_selected_media, load_rule, select_media
+from .selection import (
+    copy_selected_media,
+    load_rule,
+    select_media,
+    stale_assignment_notice,
+)
 
 
 def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") -> logging.Logger:
@@ -370,6 +375,11 @@ def _run_match(args, db_path: str) -> None:
         f"{label}Matched {summary['assigned']} faces from {summary['teachers']} assigned faces; "
         f"{summary['unassigned']} left unassigned."
     )
+    if summary.get("unusable_teachers"):
+        print(
+            f"5点整列ができなかった手本 {summary['unusable_teachers']} 件は、"
+            "割り当ての根拠にしていません（2位の対抗馬としては使います）。"
+        )
     if summary["histogram"]:
         print("距離の分布:")
         for bucket in sorted(summary["histogram"]):
@@ -556,7 +566,17 @@ def main() -> None:
                 raise SystemExit("Rule file path is required via application settings or --rule.")
             with ensure_database(db_path) as connection:
                 rule = load_rule(rule_path)
-                selected = select_media(connection, rule)
+                notice = stale_assignment_notice(connection)
+                if notice:
+                    print(f"注意: {notice}")
+                selected = select_media(
+                    connection,
+                    rule,
+                    progress_callback=lambda current, total, detail: _emit_progress(
+                        current, total, detail, prefix="Measuring"
+                    ),
+                )
+                _reset_progress_state()
                 copied = copy_selected_media(
                     selected,
                     output_root,
