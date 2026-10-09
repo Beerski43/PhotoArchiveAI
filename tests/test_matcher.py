@@ -489,3 +489,22 @@ def test_marking_the_same_face_twice_is_harmless(connection):
     db.reject_faces_for_person(connection, [face_id], people["妹"])
 
     assert db.count_person_rejections(connection, people["妹"]) == 1
+
+
+def test_progress_is_reported_before_the_first_chunk(connection):
+    """**照合の前の準備でも進み具合を知らせる。**
+
+    自動割当の取り消しと手本の読み込みは、実データで約5秒かかる。そのあいだ
+    何も知らせないと、GUI から流したときに窓が固まって見える（GNOME は5秒で
+    「応答なし」と出す）。#67 で GUI から流す口を作って測った。
+    """
+    person_id = db.add_person(connection, "${PERSON_4}")
+    _add_face(connection, _add_media(connection, 0), _vector(1.0), person_id, db.ASSIGN_MANUAL)
+    _add_face(connection, _add_media(connection, 1), _vector(1.0))
+    calls = []
+
+    match_faces(connection, progress_callback=lambda done, total, detail: calls.append((done, total)))
+
+    assert calls[0] == (0, 0), "取り消しが済んだところ（件数はまだ分からない）"
+    assert calls[1] == (0, 1), "手本を読み終え、照合する件数が決まったところ"
+    assert calls[-1] == (1, 1)

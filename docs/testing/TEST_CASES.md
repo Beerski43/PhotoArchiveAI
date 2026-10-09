@@ -29,11 +29,16 @@
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
-| `test_gui_assignment.py::test_registered_faces_dialog_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
+| `test_gui_assignment.py::test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
 | `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
 | `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces` が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
-| `test_gui_person.py::test_the_age_line_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
+| `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
+| `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
+| `test_migration.py::test_the_backup_keeps_writes_that_are_still_in_the_wal` | **控えを `shutil.copy2` で取っていたため、WAL にだけ残っている書き込みが控えから黙って抜けていた**（WAL に全部あるときは表すら無い控えになる） |
+| `test_db.py::test_the_age_order_uses_the_calculated_age_across_every_page` | **「年齢の若い順」が確定値（`Face.age`）だけで並べていた。** 実データでは${PERSON_4}の 9,502 件のうち 199 件しか並ばず、残りは id 順のまま2ページ目以降に散っていた（2026-10-09 に利用者が報告） |
+| `test_gui_views.py::test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **ページの先頭に小さいサムネイルが来ると、枠がそれに合わせて縮み、残りの顔が切り詰められて下の文字も消えた**（`setUniformItemSizes` は先頭の項目から寸法を決める。2026-10-09 に利用者が報告） |
+| `test_db.py::test_every_list_filter_also_works_for_counting_and_for_bulk` | 上の落ち方を**種類ごと**に防ぐ。一覧・件数・まとめて処理が同じ絞り込みを受け取ることを、`_face_filter` の引数から数えて確かめる |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
 | `test_scanner_incremental.py::test_touching_a_file_does_not_make_every_later_scan_read_it_again` | 更新時刻だけ変わったファイルが恒久的に再ハッシュされ、441GB を毎回読み直した |
 | `test_scanner_incremental.py::test_scan_stops_when_the_embedding_model_cannot_be_loaded` | モデルが読めないと特徴量が全件 NULL のまま「スキャン済み」になり、無言で全損した |
@@ -64,7 +69,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（18件）
+### `test_db.py` — スキーマと永続化（35件）
 
 | テスト | 内容 |
 |---|---|
@@ -86,6 +91,13 @@
 | `test_pagination_does_not_repeat_or_skip_a_face` | 撮影日時が同じ顔が並んでも、ページをまたいで重複・欠落しない |
 | `test_a_broken_exif_date_does_not_take_over_the_newest_page` | **壊れた EXIF を「いちばん新しい」として先頭に出さない** |
 | `test_the_shooting_date_order_does_not_fall_back_to_a_full_sort` | **索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る |
+| `test_every_list_filter_also_works_for_counting_and_for_bulk` | **一覧・件数・まとめて処理が、同じ絞り込みを受け取ること**（`_face_filter` の引数が正本） |
+| `test_bulk_face_ids_can_be_narrowed_by_the_month_range` | まとめて処理する対象が撮影年月の絞り込みに従う |
+| `test_face_counts_are_gathered_in_one_query` | 左の一覧の件数を**1回の問い合わせ**で数える（人数ぶんの問い合わせにしない） |
+| `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「誰でもない顔」は外す・記録は消さない） |
+| `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
+| `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
+| `test_the_age_order_uses_each_face_s_own_person_when_none_is_selected` | 全員ぶんの表示では、顔ごとの人物の誕生日で年齢を出して並べる |
 
 ### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（23件）
 
@@ -295,7 +307,7 @@
 | `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
-### `test_matcher.py` — 自動割り当て（11件）
+### `test_matcher.py` — 自動割り当て（28件）
 
 | テスト | 内容 |
 |---|---|
@@ -310,6 +322,7 @@
 | `test_dry_run_is_not_blinded_by_a_previous_match` | 2回目以降の dry-run が空振りしない |
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
+| `test_progress_is_reported_before_the_first_chunk` | **照合の前の準備（取り消し・手本の読み込み）でも進み具合を知らせる。** GUI の窓が5秒固まって見えていた |
 
 ### `test_evaluation.py` — 精度の実測（12件）
 
@@ -342,7 +355,7 @@
 | `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
 
-### `test_gui_assignment.py` — GUI での割り当て（29件）
+### `test_gui_assignment.py` — GUI での割り当て（61件）
 
 | テスト | 内容 |
 |---|---|
@@ -352,23 +365,73 @@
 | `test_reject_faces_removes_them_from_the_unassigned_list` | 除外 |
 | `test_deleting_person_returns_faces_to_the_unassigned_list` | 人物削除で顔は未割当に戻る |
 | `test_face_age_dialog_keeps_zero_distinct_from_unset` | 0歳と未設定を区別する |
-| `test_registered_faces_dialog_pages_through_every_assigned_face` | 割り当て済み一覧のページャ |
+| `test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧のページャ |
 | `test_the_age_filter_returns_to_the_first_page` | 絞り込みで1ページ目に戻る |
 | `test_assigning_without_an_age_keeps_the_one_already_recorded` | 年齢を指定しない割り当ては年齢を触らない |
 | `test_an_age_can_be_cleared_back_to_unset` | 年齢を未設定へ戻せる |
 | `test_zero_is_stored_as_zero_and_not_as_unset` | 0歳は0歳として保存される |
 | `test_changing_an_age_later_also_offers_the_calculated_value` | あとから直すときも計算値が初期値に入る |
 | `test_the_unassigned_list_starts_with_the_newest_photo` | 割り当てる画面は撮影日時の新しい順 |
-| `test_the_assigned_list_is_ordered_by_age` | 「割り当て済みを確認」は年齢順（未設定は最後） |
+| `test_the_assigned_list_is_ordered_by_age` | 人物の表示は年齢順（未設定は最後） |
 | `test_rebuilding_the_list_does_not_reload_the_preview` | **一覧の作り直しで元写真を読み直さない**（200件の割り当てに17秒かかっていた） |
 | `test_the_progress_is_reported_for_every_face` | 進み具合が件数で出る |
 | `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
 | `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
 | `test_a_rejected_face_can_be_put_back_to_unassigned` | **除外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
 | `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる |
-| `test_the_unassign_button_is_disabled_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
+| `test_unassigning_is_blocked_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
+
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（28件）
+
+**この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
+上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
+ここのテストは、**手数が増える方向に戻っていないか**を見張る。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_left_list_puts_the_views_above_the_persons` | 表示3つ → 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
+| `test_the_left_list_shows_how_much_work_is_left` | 残りの件数が出て、操作のたびに数え直す |
+| `test_selecting_a_person_shows_the_faces_assigned_to_them` | **人物を選ぶことが、旧「割り当て済みを確認」。** 別ウィンドウは開かない |
+| `test_the_person_filters_only_appear_for_a_person` | 種別・年齢は人物のときだけ出す（誕生日が無いと年齢は計算できない） |
+| `test_each_view_starts_with_the_order_that_suits_it` | 表示ごとに既定の並びへ戻す。**同じ表示のあいだは選んだ並びを変えない** |
+| `test_dragging_a_person_above_the_views_does_not_move_them` | 表示3行はドラッグで動かない。人物の並び順だけを保存する |
+| `test_the_menu_only_offers_what_the_view_can_do` | **その表示でできることだけ**をメニューに出す |
+| `test_the_menu_lists_every_person_as_an_assign_target` | 割り当て先はメニューが持つ |
+| `test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth` | 人物名に撮影時の年齢を添え、**誕生前の写真が混ざっていたら印を付ける** |
+| `test_a_face_can_be_assigned_from_the_menu_without_selecting_the_person` | **人物を選び直さずに割り当てられる**（以前は「先に人物を選択してください」で止まった） |
+| `test_the_digit_keys_assign_to_the_persons_in_order` | **1〜9 の打鍵で割り当てられる。** 番号は左の一覧の並び順 |
+| `test_right_clicking_an_unselected_face_selects_it_first` | 右クリックした顔を処理する。**すでに選んでいる顔なら選択を崩さない** |
+| `test_the_hint_line_names_the_keys_that_work_here` | 右クリックは目に見えないので、効く打鍵と選択件数を1行で出す |
+| `test_the_auto_view_names_the_person_on_each_face` | 全員ぶんの表示では、顔に**誰のものか**と年齢を出す |
+| `test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person` | まとめて確定しても、**その顔に付いている人物へ**確定する |
+| `test_not_this_person_in_the_auto_view_records_it_per_person` | 「この人物ではない」も顔ごとの人物に記録する |
+| `test_confirm_is_blocked_unless_an_automatic_face_is_selected` | 確定は自動割り当てだけに効く。押せない理由はツールチップに出す |
+| `test_rejecting_from_the_unassigned_view_does_not_ask` | **毎件通る操作に確認を挟まない**（そこが遅さの正体になる） |
+| `test_rejecting_an_assigned_face_asks_first` | 割り当て済みに押すときは確認する（手作業の結果が消える） |
+| `test_the_month_range_also_narrows_a_person_s_faces` | 共通の絞り込みが人物の表示にも効く（別ウィンドウには無かった） |
+| `test_the_rejection_list_can_also_be_narrowed_and_paged` | 「この人物ではない」の一覧もページ単位で読み、年月で絞れる |
+| `test_a_broken_shooting_date_is_not_counted_as_before_birth` | **読めない撮影日時を「誕生前」に数えない**（判断は `dates.parse_date` に1つだけ） |
+| `test_the_bulk_event_action_follows_the_view` | 行事のまとめ処理が表示に合わせて意味を変える。**「この人物ではない」では押せない** |
+| `test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **枠はサムネイルの寸法に任せない**（先頭の顔が小さいとページ全体が縮んでいた） |
+| `test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text` | 枠にサムネイルと文字2行が入る |
+| `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
+| `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
+| `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
+
+### `test_gui_match.py` — `match` を画面から流す（8件）
+
+| テスト | 内容 |
+|---|---|
+| `test_match_runs_from_the_window_and_refreshes_the_counts` | 画面から流せて、終わったら左の件数まで出し直す |
+| `test_the_backup_is_taken_when_chosen` | 控えを選んだら、**流す前の状態**がそのまま入っている |
+| `test_no_backup_is_written_when_declined` | 控えを外したら書かない |
+| `test_cancelling_the_dialog_changes_nothing` | 「やめる」なら何も変えない |
+| `test_without_teachers_it_says_so_instead_of_running` | 手本が無ければ流さずにそう言う |
+| `test_the_progress_bar_reaches_every_candidate` | 進み具合が件数で出て、最後まで届く |
+| `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
+| `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
@@ -395,7 +458,7 @@
 | `test_too_many_faces_is_reported_instead_of_truncated` | 上限超過を黙って切らない |
 | `test_bulk_reject_covers_the_whole_event_but_not_other_days` | 行事まるごとの処理が別の日に漏れない |
 | `test_bulk_buttons_stay_disabled_until_an_event_is_chosen` | **行事を選ぶまで押せない**（押し間違いで全件に効くのを防ぐ） |
-| `test_the_bulk_button_changes_meaning_with_the_filter` | 表示に応じてボタンの意味が変わる |
+| `test_the_bulk_button_changes_meaning_with_the_view` | 表示に応じてボタンの意味が変わる |
 | `test_splitting_a_cluster_uses_a_tighter_distance` | 大きい束を割れる（実データは 380 件の束を作る） |
 | `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
 | `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
@@ -449,7 +512,7 @@
 | `test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken` | 壊れた EXIF も「分からない」として扱う |
 | `test_the_selection_notice_says_how_many_dates_are_unknown` | 初期値が入らない理由（不明な件数）を出す |
 | `test_a_broken_exif_date_does_not_appear_in_the_selection_notice` | `0000:00:00` を撮影日時として画面に出さない |
-| `test_the_age_line_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
+| `test_the_age_appears_right_after_the_birth_date_is_registered` | **誕生日を登録したら、その場で年齢の行が出る** |
 | `test_dropping_the_person_selection_also_drops_the_age_line` | 前の人物の年齢を残さない |
 | `test_a_new_person_is_selected_so_the_age_shows_immediately` | 追加した人物も選ばれた状態になる |
 | `test_the_person_order_can_be_changed_and_is_remembered` | **並べ替えた順が開き直しても残る**（`Person.display_order`） |
@@ -526,7 +589,7 @@ editable install のときだけ出すこと（通常のインストールでは
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
 
-### `test_migration.py` — スキーマの移行（23件）
+### `test_migration.py` — スキーマの移行（25件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -546,6 +609,10 @@ editable install のときだけ出すこと（通常のインストールでは
 
 移行前の案内が **VACUUM するかどうかを言うこと**（`--no-vacuum` は v1 からの
 移行でしか効かない。黙って効かない引数を作らない）。
+
+**控えは SQLite の backup で取る**（`test_the_backup_keeps_writes_that_are_still_in_the_wal`）。
+ファイルを複写すると WAL にだけある書き込みが抜ける。控えの比較は**中身**
+（`iterdump`）で行う（backup はヘッダの変更カウンタが変わるので、バイト列は揃わない）。
 
 移行前に何件消えるかを数える `describe_migration`、バックアップの保存先の
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、

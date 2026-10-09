@@ -164,6 +164,11 @@ def match_faces(
 
     if reset and not dry_run:
         summary["reset"] = db.reset_auto_assignments(connection)
+        # **工程の境目でも知らせる。** 照合の前の準備（取り消しと手本の読み込み）は
+        # 実データで約5秒かかり、そのあいだ何も知らせないと GUI の窓が固まって
+        # 見える（GNOME は5秒で「応答なし」と出す）。#67 で GUI から流す口を作って測った。
+        if progress_callback is not None:
+            progress_callback(0, 0, f"{summary['reset']} auto assignments cleared")
 
     teachers, person_ids = db.load_manual_embeddings(connection)
     summary["teachers"] = int(teachers.shape[0])
@@ -185,6 +190,8 @@ def match_faces(
     # dry-run が「もう割り当て済みの顔」を数え落として空振りに見える。
     include_auto = dry_run and reset
     total = db.count_match_candidates(connection, include_auto=include_auto)
+    if progress_callback is not None:
+        progress_callback(0, total, f"{summary['teachers']} teachers loaded")
     updates = []
     processed = 0
     # **マスクは撮影日時で使い回す。** 同じ写真に何件も顔があり、人物ごとの

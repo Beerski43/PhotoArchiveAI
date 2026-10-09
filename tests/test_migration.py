@@ -157,6 +157,48 @@ def test_describe_migration_on_a_current_database_has_nothing_to_drop(tmp_path):
     assert summary["faces_to_drop"] == 0
 
 
+def _dump(path):
+    """DBの**中身**。控えは中身が同じであればよい。
+
+    **ファイルのバイト列では比べない。** SQLite の backup はページを写すが、
+    ヘッダの変更カウンタなどは写した側で変わる（`cp` をやめた理由は
+    `test_the_backup_keeps_writes_that_are_still_in_the_wal`）。
+    """
+    connection = sqlite3.connect(str(path))
+    try:
+        return list(connection.iterdump())
+    finally:
+        connection.close()
+
+
+def test_the_backup_keeps_writes_that_are_still_in_the_wal(tmp_path):
+    """**WAL にだけ残っている書き込みも控えに入ること。**
+
+    以前は `shutil.copy2` で本体のファイルだけを写していた。WAL で動いている
+    DBでは、確定した書き込みがまだ ``-wal`` にだけあることがあり、**その分が
+    控えから黙って抜けていた**（#67 で見つけた）。控えは戻すためにあるので、
+    抜けがあっては意味がない。
+    """
+    database = tmp_path / "live.db"
+    writer = db.ensure_database(str(database))
+    try:
+        # 自動の書き戻し（checkpoint）を止め、書き込みを WAL に留めておく
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        db.add_person(writer, "${PERSON_4}")
+        assert (tmp_path / "live.db-wal").stat().st_size > 0, "WAL に残っている前提"
+
+        created = backup_database(str(database), str(tmp_path / "copy.db"))
+    finally:
+        writer.close()
+
+    copied = sqlite3.connect(str(created))
+    try:
+        names = [row[0] for row in copied.execute("SELECT name FROM Person")]
+    finally:
+        copied.close()
+    assert names == ["${PERSON_4}"]
+
+
 def test_backup_database_writes_to_an_explicit_path(tmp_path):
     database = tmp_path / "legacy.db"
     _build_legacy_database(database)
@@ -167,7 +209,7 @@ def test_backup_database_writes_to_an_explicit_path(tmp_path):
     # 親ディレクトリが無くても作る
     assert created == target
     assert target.is_file()
-    assert target.read_bytes() == database.read_bytes()
+    assert _dump(target) == _dump(database)
 
 
 def test_backup_database_defaults_to_a_timestamped_sibling(tmp_path):
@@ -178,7 +220,7 @@ def test_backup_database_defaults_to_a_timestamped_sibling(tmp_path):
 
     assert created.parent == database.parent
     assert created.name.startswith("legacy.db.bak-")
-    assert created.read_bytes() == database.read_bytes()
+    assert _dump(created) == _dump(database)
 
 
 def test_migrate_can_skip_the_backup_and_the_vacuum(tmp_path):
