@@ -402,7 +402,7 @@ cp config/private_terms.sample.yml config/private_terms.yml   # 実際の語を�
 git config core.hooksPath .githooks
 ```
 
-これで、公開しない語を含むコミット（中身・ファイル名・メッセージ）は止まります。回帰テストの 6/6 でも検査します。手で検査するときは `python scripts/check_private_terms.py`、置き換えるときは `--fix` を付けます。
+これで、公開しない語を含むコミット（中身・ファイル名・メッセージ）は止まります。一覧が見つからないときも、hook はコミットを止めます（検査できないまま通さないため）。git のワークツリーからコミットしても、本体の checkout の一覧で検査します。回帰テストの 6/6 でも検査します。手で検査するときは `python scripts/check_private_terms.py`、置き換えるときは `--fix` を付けます。
 
 ## ディレクトリ構成
 

@@ -101,7 +101,9 @@ echo "=== 6/6 公開しない語 ==="
 if [ -f scripts/check_private_terms.py ]; then
   private="$(python scripts/check_private_terms.py 2>&1)" || failed=1
   printf '%s\n' "$private" | tail -5 | sed 's/^/  /'
-  if [ -f config/private_terms.yml ] && [ "$(git config core.hooksPath)" != ".githooks" ]; then
+  # 一覧は本体の checkout にある（ワークツリーには無い。PR #82 のレビュー指摘1）
+  main_checkout="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  if [ -f "$main_checkout/config/private_terms.yml" ] && [ "$(git config core.hooksPath)" != ".githooks" ]; then
     echo "  コミット前の検査が有効になっていない: git config core.hooksPath .githooks"
   fi
 else

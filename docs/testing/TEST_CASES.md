@@ -922,7 +922,7 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
 
-### `test_check_private_terms.py` — 公開しない語を入れない（9件）
+### `test_check_private_terms.py` — 公開しない語を入れない（13件）
 
 語は架空のもの（実際の一覧は git に入らない）。**見つけても語を出さず変数だけを出す**（出力は PR 本文に貼られる）。
 
@@ -937,6 +937,10 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 | `test_filter_repo_expressions_keep_case_insensitive_terms` | 履歴の書き換えに渡す式（長い語から・大文字小文字の区別） |
 | `test_without_a_term_list_the_check_is_skipped` | 一覧の無い環境では止めない |
 | `test_the_repository_holds_no_private_terms` | **このリポジトリに手元の一覧の語が無い**（一覧がある環境だけ） |
+| `test_a_worktree_commit_is_checked_against_the_main_list` | **ワークツリーからのコミットも本体の一覧で止める**（以前は一覧が見えず検査が飛んだ。PR #82 のレビュー指摘1） |
+| `test_a_hook_stops_when_the_list_is_missing` | hook から呼ばれたときだけ、一覧が無ければ止める（利用者の決定・PR #82 の判断 (a)） |
+| `test_the_diff_below_the_scissors_is_not_part_of_the_message` | `git commit -v` の差分は見ない（語を消すコミットを止めない）。`-m` の `#77` 行は見る（指摘2） |
+| `test_a_broken_list_does_not_print_its_terms` | 壊れた一覧のエラーに語を出さない（指摘3） |
 
 ### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
 
