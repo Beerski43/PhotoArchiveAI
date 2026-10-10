@@ -27,13 +27,13 @@
 
 ## #24 — 検出元の複数指定
 
-- 設定は `source_roots:`（配列。古い `source_root:` も読む）。`--source` は何度でも書ける
+- 設定は `source_roots:`（配列）。**古い `source_root:` は読まずに WARNING**（PR #75 で利用者が決めた）。`--source` は何度でも書ける
 - root ごとに走査し、消えた行の削除と2割の安全弁も root ごと。**入れ子の root は止める**
 - `ScanRoot`（v7）に走査し終えた root を書く。年フォルダだけの走査は書かない。**記録済みの root を含む親は走査する前に止める**（PR #75 のレビューで利用者が決めた。記録は消さない）。無い root があればどの root も走査しない。設定に root が
   無ければ `scan` / `select` / GUI は記録を使う。**移行では推定しない**
 - GUI は root が2つ以上なら `<root の名前>/<相対>`。`select` は含む root からの相対
 - 実データの複製で v6 → v7 を流した（2026-10-10）: 2.3 秒・Media 70,297 / Face 58,606 / 手動 10,753 件がそのまま
-- 手元の設定に root を2つ書いた（`source_roots`。マージまでは旧コード用に `source_root` も残す）
+- 手元の設定に root を2つ書いた（`source_roots`）。古い `source_root` の行は、読まなくすると決めた時点で消した
 - **マージ後に利用者がすること**: `photoarchive migrate`（版7）→ `photoarchive scan`
   （root が記録される。差分スキャンなので読み直しは変わったファイルだけ）
 

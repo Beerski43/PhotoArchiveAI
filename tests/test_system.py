@@ -22,12 +22,12 @@ def _ensure_qt_app():
 
 
 def _write_app_settings(
-    config_dir: Path, database_path: str, source_root: str, output_root: str, rule_path: str
+    config_dir: Path, database_path: str, root: str, output_root: str, rule_path: str
 ) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
     settings = {
         "database_path": database_path,
-        "source_root": source_root,
+        "source_roots": [root],
         "output_root": output_root,
         "rule_path": rule_path,
     }
@@ -53,18 +53,18 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     """init-db → scan → GUIで顔を割り当て → match → select を一通り流す。"""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     config_dir = tmp_path / "config"
-    source_root = tmp_path / "source"
+    root = tmp_path / "source"
     output_root = tmp_path / "output"
-    source_root.mkdir(parents=True)
+    root.mkdir(parents=True)
     output_root.mkdir(parents=True)
 
     database_path = str(tmp_path / "photoarchive.db")
     rule_path = str(tmp_path / "rule.yml")
-    _write_app_settings(config_dir, database_path, str(source_root), str(output_root), rule_path)
+    _write_app_settings(config_dir, database_path, str(root), str(output_root), rule_path)
 
     # 同じ人物に見える2枚(同じ色)。1枚目を手で割り当て、2枚目を match に任せる。
-    first_image = write_image(source_root / "2026" / "person_a.jpg", color=(200, 120, 90))
-    write_image(source_root / "2026" / "person_b.jpg", color=(201, 121, 91))
+    first_image = write_image(root / "2026" / "person_a.jpg", color=(200, 120, 90))
+    write_image(root / "2026" / "person_b.jpg", color=(201, 121, 91))
 
     monkeypatch.chdir(tmp_path)
 
@@ -150,13 +150,13 @@ def test_scan_is_incremental_on_second_run(tmp_path: Path, monkeypatch, capsys):
     """2回目の scan がスキップだけで終わること (#9)。"""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     config_dir = tmp_path / "config"
-    source_root = tmp_path / "source"
-    source_root.mkdir(parents=True)
+    root = tmp_path / "source"
+    root.mkdir(parents=True)
     database_path = str(tmp_path / "photoarchive.db")
     _write_app_settings(
-        config_dir, database_path, str(source_root), str(tmp_path / "out"), str(tmp_path / "r.yml")
+        config_dir, database_path, str(root), str(tmp_path / "out"), str(tmp_path / "r.yml")
     )
-    write_image(source_root / "a.jpg")
+    write_image(root / "a.jpg")
     monkeypatch.chdir(tmp_path)
 
     _run_cli(["init-db"], tmp_path)
