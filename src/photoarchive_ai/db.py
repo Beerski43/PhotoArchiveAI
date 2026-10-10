@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -150,7 +150,12 @@ SCHEMA = [
     # 読み方は `dates.folder_date_range` に1つだけある。ここはその出力の保存先で、
     # `save_media` と `refresh_folder_dates` が書く。
     "folder_date_from TEXT,"
-    "folder_date_to TEXT"
+    "folder_date_to TEXT,"
+    # **写真の見た目の値**（v8・#86）。連写・似た写真を束ねるのに使う。
+    # `similar.encode` の形（`dhash8/exif:0123456789abcdef`）。NULL=未計測。
+    # `select` が候補の写真だけを測って書く。**ファイルのハッシュが変わったら消す**
+    # （`save_media`）。
+    "look_hash TEXT"
     ")",
     "CREATE TABLE IF NOT EXISTS Person ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -384,6 +389,7 @@ ADDABLE_COLUMNS = {
     ("Face", "assign_rule"): "TEXT",
     ("Media", "folder_date_from"): "TEXT",
     ("Media", "folder_date_to"): "TEXT",
+    ("Media", "look_hash"): "TEXT",
 }
 
 
@@ -496,8 +502,14 @@ _MEDIA_PATH_COLUMNS = (
     "folder_date_from",
     "folder_date_to",
 )
+# 中身から測った列。**中身が変わったら消す**（`save_media` は受け取らず NULL を書く）。
+_MEDIA_CONTENT_COLUMNS = ("look_hash",)
 _MEDIA_WRITE_COLUMNS = (
-    ("path",) + _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS + _MEDIA_PATH_COLUMNS
+    ("path",)
+    + _MEDIA_FILE_COLUMNS
+    + _MEDIA_SCAN_COLUMNS
+    + _MEDIA_PATH_COLUMNS
+    + _MEDIA_CONTENT_COLUMNS
 )
 
 
@@ -541,7 +553,8 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
     """パスをキーにメディアを登録・更新し、そのidを返す。
 
     ハッシュが変わっている場合はファイル情報を更新し、顔検出の状態を
-    リセットする(``face_count`` を NULL に戻す)。既存の ``Face`` と
+    リセットする(``face_count`` を NULL に戻す)。見た目の値(``look_hash``)も
+    消す（別の写真の値で連写を束ねないため）。既存の ``Face`` と
     ``AnalysisResult`` は呼び出し側が削除する。
 
     **ハッシュが同じでもファイル属性は書き戻す。** 中身は同じでも更新時刻
@@ -556,6 +569,10 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
     """
     media = dict(media)
     media["folder_date_from"], media["folder_date_to"] = _folder_dates(media["path"])
+    # 中身から測った値は**受け取らない。** 読み直した行をそのまま渡されても、
+    # 古い中身の値を新しい中身に付けない。
+    for column in _MEDIA_CONTENT_COLUMNS:
+        media[column] = None
     cursor = connection.cursor()
     row = cursor.execute(
         "SELECT id, file_hash FROM Media WHERE path = ?",
@@ -572,7 +589,12 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
         return cursor.lastrowid
 
     if row["file_hash"] != media["file_hash"]:
-        columns = _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS + _MEDIA_PATH_COLUMNS
+        columns = (
+            _MEDIA_FILE_COLUMNS
+            + _MEDIA_SCAN_COLUMNS
+            + _MEDIA_PATH_COLUMNS
+            + _MEDIA_CONTENT_COLUMNS
+        )
     else:
         columns = _MEDIA_FILE_COLUMNS + _MEDIA_PATH_COLUMNS
     assignments = ",".join(f"{column}=?" for column in columns)
@@ -582,6 +604,18 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
     )
     connection.commit()
     return row["id"]
+
+
+def save_look_hashes(connection: sqlite3.Connection, rows: Sequence[Tuple[int, str]]) -> int:
+    """``(media_id, 見た目の値)`` を書く（#86）。値の形は `similar.encode`。"""
+    if not rows:
+        return 0
+    cursor = connection.cursor()
+    cursor.executemany(
+        "UPDATE Media SET look_hash = ? WHERE id = ?", [(value, media_id) for media_id, value in rows]
+    )
+    connection.commit()
+    return cursor.rowcount
 
 
 def list_media(connection: sqlite3.Connection) -> List[Dict[str, Any]]:

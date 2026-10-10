@@ -341,6 +341,9 @@ family_only: true
 count_per_year: 30
 include_video: true
 remove_duplicate: true
+remove_similar: true   # 同じ場面の連写は1枚に（省略しても true）
+# similar_seconds: 10  # 連写とみなす撮影の間隔（秒）
+# similar_distance: 16 # 見た目の近さ（小さいほど厳しい）
 ```
 
 実行:
@@ -350,6 +353,8 @@ photoarchive select
 ```
 
 **家族の写真としての良さで並べます。** 家族の顔がボケていない・正面を向いている・笑顔であるほど上に来て、はっきり写った家族が多いほど優先します（他人の顔は点に入れません）。点は実行のたびにいまの割り当てから計算するので、GUI で直した割り当てもすぐ効きます。家族の顔の写り方をまだ測っていなければ、先に測ります（初回は数分）。
+
+**同じ場面の連写や見た目の似た写真は、いちばん上の1枚だけを残します。** 同じフォルダで数秒おきに撮られ、同じ家族が写っていて、見た目も近い写真を同じ場面とみなします。見た目は候補の写真だけ測ってデータベースに残すので、元写真を読むのは初回だけです（JPEG は先頭の数十KBだけ読みます）。束ねたくなければ `remove_similar: false` にします。
 
 `match` の規則が変わったあとに `match` を流し直していないと、古い判定が残っている件数を知らせます。
 
@@ -457,6 +462,7 @@ PhotoArchiveAI/
       evaluation.py            自動紐づけの精度の実測
       converter.py             HEIC/HEIF → JPEG 変換
       selection.py             ルールに基づく抽出とコピー
+      similar.py               連写・似た写真を束ねる(撮影日時・フォルダ・家族・見た目)
       logging_setup.py         ログの設定
       cli.py                   サブコマンド定義
       gui.py                   人物登録と顔の割り当て画面

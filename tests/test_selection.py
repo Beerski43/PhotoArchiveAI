@@ -546,3 +546,111 @@ def test_copy_skips_entries_without_a_path_but_keeps_their_rank(tmp_path: Path):
 
     assert copied == 1
     assert seen == [(2, 2, "0002_unknown_m2.jpg")]
+
+
+# ---------------------------------------------------------------------------
+# 連写・似た写真（#86）
+# ---------------------------------------------------------------------------
+
+from photoarchive_ai import similar  # noqa: E402
+
+from tests.helpers import burst_of, scene, write_photo  # noqa: E402
+
+
+def _burst(connection, tmp_path, *, rule=None):
+    """同じフォルダに、2秒おきの連写2枚と、1秒後に撮った別の場面1枚。"""
+    folder = tmp_path / "2019"
+    folder.mkdir()
+    first = scene(1)
+    shots = {
+        "a.jpg": (first, 50.0),
+        "b.jpg": (burst_of(first, 2), 90.0),  # 連写の2枚目のほうが写りが良い
+        "c.jpg": (scene(3), 10.0),
+    }
+    times = {"a.jpg": "10:00:00", "b.jpg": "10:00:02", "c.jpg": "10:00:03"}
+    for name, (image, quality) in shots.items():
+        path = write_photo(folder / name, image)
+        _add(connection, path, shooting_date=f"2019-05-03T{times[name]}", quality=quality,
+             faces=[_face("${PERSON_1}")])
+    return folder
+
+
+def _names(selected):
+    return [Path(media["path"]).name for media in selected]
+
+
+def test_a_burst_keeps_only_its_best_shot(connection, tmp_path: Path):
+    _burst(connection, tmp_path)
+    assert _names(select_media(connection, {})) == ["b.jpg", "c.jpg"]
+
+
+def test_the_burst_check_can_be_turned_off(connection, tmp_path: Path):
+    _burst(connection, tmp_path)
+    assert _names(select_media(connection, {"remove_similar": False})) == ["b.jpg", "a.jpg", "c.jpg"]
+
+
+def test_a_burst_counts_once_against_the_yearly_limit(connection, tmp_path: Path):
+    """束ねてから年ごとに数える。先に数えると、連写が枠を食って別の場面が落ちる。"""
+    _burst(connection, tmp_path)
+    assert _names(select_media(connection, {"count_per_year": 2})) == ["b.jpg", "c.jpg"]
+
+
+def test_shots_further_apart_than_the_rule_says_are_kept(connection, tmp_path: Path):
+    _burst(connection, tmp_path)
+    selected = select_media(connection, {"similar_seconds": 1})
+    assert _names(selected) == ["b.jpg", "a.jpg", "c.jpg"]
+
+
+def test_looks_are_saved_and_not_measured_again(connection, tmp_path: Path, monkeypatch):
+    """2回目は元写真を読まない（NFS）。"""
+    _burst(connection, tmp_path)
+    select_media(connection, {})
+    saved = connection.execute("SELECT COUNT(*) FROM Media WHERE look_hash IS NOT NULL").fetchone()[0]
+    assert saved == 3
+
+    def no_reading(path):
+        raise AssertionError(f"測り直した: {path}")
+
+    monkeypatch.setattr(similar, "measure", no_reading)
+    assert _names(select_media(connection, {})) == ["b.jpg", "c.jpg"]
+
+
+def test_a_changed_file_loses_its_look(connection, tmp_path: Path):
+    """中身が変わったら見た目の値を消す。古い値で別の写真と束ねない。"""
+    folder = _burst(connection, tmp_path)
+    select_media(connection, {})
+    path = str(folder / "a.jpg")
+    media = db.get_media_by_path(connection, path)
+    save_media(connection, dict(media, file_hash="changed"))
+    assert db.get_media_by_path(connection, path)["look_hash"] is None
+    # 中身が同じなら（更新時刻だけ変わった）消さない
+    other = str(folder / "b.jpg")
+    media = db.get_media_by_path(connection, other)
+    save_media(connection, dict(media, created_time="2030-01-01T00:00:00"))
+    assert db.get_media_by_path(connection, other)["look_hash"] is not None
+
+
+def test_an_unreadable_photo_is_kept_rather_than_bundled(connection, tmp_path: Path):
+    folder = _burst(connection, tmp_path)
+    (folder / "a.jpg").unlink()
+    assert _names(select_media(connection, {})) == ["b.jpg", "a.jpg", "c.jpg"]
+
+
+def test_relative_paths_are_measured_from_the_root(connection, tmp_path: Path):
+    folder = _burst(connection, tmp_path)
+    connection.execute(
+        "UPDATE Media SET path = substr(path, ?)", (len(str(tmp_path)) + 2,)
+    )
+    connection.commit()
+    selected = select_media(connection, {}, source_roots=[str(tmp_path)])
+    assert _names(selected) == ["b.jpg", "c.jpg"]
+    assert folder.exists()
+
+
+@pytest.mark.parametrize("key", ["similar_seconds", "similar_distance"])
+@pytest.mark.parametrize("value", [-1, "ten", True])
+def test_a_bad_similar_setting_stops_when_the_rule_is_read(tmp_path: Path, key, value):
+    rule = tmp_path / "rule.yml"
+    rule.write_text(f"{key}: {json.dumps(value)}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=key):
+        load_rule(str(rule))
