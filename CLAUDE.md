@@ -489,7 +489,8 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   架空の値を使う。**どの変数が誰かは、git に入らない `config/private_terms.yml` にだけある**
   （形は `config/private_terms.sample.yml`）。`scripts/check_private_terms.py` が検査し、
   `.githooks/` の pre-commit / commit-msg と回帰テストの 6/6 が止める。**clone したら
-  `git config core.hooksPath .githooks` を流す。** 一覧は**本体の checkout** から引くので、
+  `git config core.hooksPath .githooks` を流し、`user.name` / `user.email` を GitHub の
+  アカウント名と noreply アドレスにする**（コミットの作者欄に実名や個人のメールを残さない）。 一覧は**本体の checkout** から引くので、
   ワークツリーからのコミットも検査される。hook が有効なのに一覧が見つからなければコミットを止める コミットメッセージ・PR・Issue の本文にも書かない
   （履歴の書き換えでは GitHub 上の本文は消えない）。シェルのコマンド例に `${...}` を書かない
   （シェルが空に展開する）
