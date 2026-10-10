@@ -1,0 +1,311 @@
+"""検出元のディレクトリ（根）を複数持つこと（#24）。
+
+実データは根が2つある（`${SURNAME}/Photo` と `person2Temp/${PERSON_2}携帯`）。設定は git 管理外で、
+2026-10-02 に失ったとき **DB から根を戻せず**、共通の親で走査する危ない設定を
+書きかけた。ここで守ること:
+
+- 根ごとに走査し、消えた行の削除と2割の安全弁も根ごと
+- 走査し終えた根を DB（`ScanRoot`）に記録する。年フォルダだけの走査は根にしない
+- 入れ子の根は止める
+- v6 → v7 の移行で顔を減らさず、根は推定しない
+- GUI と `select` が、根が複数でもそれを含む根からの相対で扱う
+"""
+
+import os
+import sqlite3
+
+import pytest
+
+from photoarchive_ai import db
+from photoarchive_ai import gui as photoarchive_gui
+from photoarchive_ai.migration import migrate_database, needs_migration
+from photoarchive_ai.scanner import (
+    ScanAborted,
+    normalize_source_roots,
+    scan_directories,
+    scan_directory,
+)
+from photoarchive_ai.selection import copy_selected_media
+from tests.helpers import write_image
+
+
+@pytest.fixture()
+def connection(tmp_path):
+    connection = db.ensure_database(str(tmp_path / "test.db"))
+    yield connection
+    connection.close()
+
+
+def _paths(connection):
+    return sorted(row["path"] for row in db.list_media(connection))
+
+
+# ---------------------------------------------------------------------------
+# 走査
+# ---------------------------------------------------------------------------
+
+
+def test_two_roots_are_both_scanned_and_recorded(tmp_path, connection):
+    photo = tmp_path / "Photo"
+    phone = tmp_path / "phone"
+    write_image(photo / "2021" / "a.jpg")
+    write_image(phone / "2021" / "b.jpg", color=(10, 200, 30))
+
+    summary = scan_directories([str(photo), str(phone)], connection, workers=1)
+
+    assert summary["processed"] == 2
+    assert [part["root"] for part in summary["roots"]] == [str(photo), str(phone)]
+    assert _paths(connection) == [str(photo / "2021/a.jpg"), str(phone / "2021/b.jpg")]
+    assert db.list_scan_roots(connection) == sorted([str(photo), str(phone)])
+
+
+def test_a_missing_root_does_not_make_the_other_roots_media_prunable(tmp_path, connection):
+    """**片方の根だけを走査しても、もう片方のメディアは削除候補にならない。**
+
+    根を1つ（もう1つは記録だけ）で走査し直したとき、外の 5,323 件（実データ）が
+    「見つからない」に数えられると、2割の安全弁で止まるか、`--force-prune` で消える。
+    """
+    photo = tmp_path / "Photo"
+    phone = tmp_path / "phone"
+    write_image(photo / "a.jpg")
+    for index in range(3):
+        write_image(phone / f"b{index}.jpg", color=(10 + index, 200, 30))
+    scan_directories([str(photo), str(phone)], connection, workers=1)
+
+    summary = scan_directories([str(photo)], connection, workers=1)
+
+    assert summary["pruned"] == 0
+    assert len(_paths(connection)) == 4
+
+
+def test_the_safety_valve_still_works_per_root(tmp_path, connection):
+    photo = tmp_path / "Photo"
+    phone = tmp_path / "phone"
+    write_image(photo / "a.jpg")
+    for index in range(5):
+        write_image(phone / f"b{index}.jpg", color=(10 + index, 200, 30))
+    scan_directories([str(photo), str(phone)], connection, workers=1)
+    for index in range(1, 5):
+        (phone / f"b{index}.jpg").unlink()
+
+    with pytest.raises(ScanAborted):
+        scan_directories([str(photo), str(phone)], connection, workers=1)
+
+    assert len(_paths(connection)) == 6
+
+
+def test_nested_roots_are_refused(tmp_path):
+    """**親を根にすること自体が事故**（共通の親で走査すると他家の写真まで入る）。"""
+    parent = tmp_path / "photo"
+    (parent / "person2Temp").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="入れ子"):
+        normalize_source_roots([str(parent), str(parent / "person2Temp")])
+
+
+def test_the_same_root_written_twice_is_scanned_once(tmp_path):
+    root = tmp_path / "Photo"
+    root.mkdir()
+
+    assert normalize_source_roots([str(root), str(root) + "/", str(root / ".")]) == [root]
+
+
+def test_a_root_given_through_a_symlink_is_recorded_by_its_real_path(tmp_path, connection):
+    """`Media.path` は実体のパス。記録も実体にそろえないと、根で範囲を決められない。"""
+    real = tmp_path / "nfs" / "Photo"
+    write_image(real / "a.jpg")
+    alias = tmp_path / "alias"
+    os.symlink(real, alias)
+
+    scan_directories([str(alias)], connection, workers=1)
+
+    assert db.list_scan_roots(connection) == [str(real)]
+
+
+# ---------------------------------------------------------------------------
+# 根の記録
+# ---------------------------------------------------------------------------
+
+
+def test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root(tmp_path, connection):
+    root = tmp_path / "Photo"
+    write_image(root / "2021" / "a.jpg")
+    write_image(root / "2022" / "b.jpg", color=(10, 200, 30))
+    scan_directory(str(root), connection, workers=1)
+
+    scan_directory(str(root / "2021"), connection, workers=1)
+
+    assert db.list_scan_roots(connection) == [str(root)]
+
+
+def test_an_outer_root_replaces_the_inner_records(connection):
+    assert db.record_scan_root(connection, "/mnt/photo/2021") is True
+    assert db.record_scan_root(connection, "/mnt/photo") is True
+
+    assert db.list_scan_roots(connection) == ["/mnt/photo"]
+
+
+def test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root(connection):
+    """`/mnt/Photo2` は `/mnt/Photo` の内側ではない（文字列の前方一致で判断しない）。"""
+    db.record_scan_root(connection, "/mnt/Photo")
+
+    assert db.record_scan_root(connection, "/mnt/Photo2") is True
+    assert db.list_scan_roots(connection) == ["/mnt/Photo", "/mnt/Photo2"]
+
+
+def test_an_aborted_scan_does_not_record_its_root(tmp_path, connection):
+    empty = tmp_path / "unmounted"
+    empty.mkdir()
+
+    with pytest.raises(ScanAborted):
+        scan_directory(str(empty), connection, workers=1)
+
+    assert db.list_scan_roots(connection) == []
+
+
+# ---------------------------------------------------------------------------
+# 移行
+# ---------------------------------------------------------------------------
+
+
+def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path):
+    """**v6 → v7 で顔を1件も失わない**（CLAUDE.md §4）。根は推定しない。"""
+    database = tmp_path / "v6.db"
+    photo = write_image(tmp_path / "Photo" / "a.jpg")
+    connection = db.ensure_database(str(database))
+    person_id = db.add_person(connection, "父", "father", "")
+    media_id = db.save_media(
+        connection,
+        {
+            "path": str(photo),
+            "filename": photo.name,
+            "type": "image",
+            "file_hash": "hash",
+            "file_size": 1,
+            "created_time": "2026-01-01T00:00:00",
+        },
+    )
+    for _ in range(2):
+        db.add_face(
+            connection,
+            media_id=media_id,
+            bbox=(0, 10, 10, 0),
+            embedding=[0.0] * db.EMBEDDING_DIM,
+            embed_version=db.embedding_model.ACTIVE.version,
+            person_id=person_id,
+            assign_source=db.ASSIGN_MANUAL,
+        )
+    connection.commit()
+    connection.close()
+    raw = sqlite3.connect(str(database))
+    raw.execute("DROP TABLE ScanRoot")
+    raw.execute("PRAGMA user_version = 6")
+    raw.commit()
+    raw.close()
+    assert needs_migration(str(database))
+
+    messages = []
+    migrate_database(str(database), make_backup=False, log=messages.append)
+
+    raw = sqlite3.connect(str(database))
+    try:
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 7
+        assert raw.execute("SELECT COUNT(*) FROM Face WHERE assign_source = 'manual'").fetchone()[0] == 2
+        # **推定しない。** 次の scan が書く
+        assert raw.execute("SELECT COUNT(*) FROM ScanRoot").fetchone()[0] == 0
+    finally:
+        raw.close()
+    assert any("ScanRoot" in message for message in messages)
+    assert needs_migration(str(database)) is False
+    db.ensure_database(str(database)).close()
+
+
+# ---------------------------------------------------------------------------
+# GUI の表示と select のコピー先
+# ---------------------------------------------------------------------------
+
+
+def test_with_several_roots_the_folder_is_prefixed_with_the_root_name(tmp_path):
+    """どちらの根にも `2021/` があるので、根の名前を付けないと別のフォルダが同じ名前になる。"""
+    photo = tmp_path / "Photo"
+    phone = tmp_path / "${PERSON_2}携帯"
+    roots = [str(photo), str(phone)]
+
+    assert photo_label(photo / "2021", roots) == "Photo/2021"
+    assert photo_label(phone / "2021", roots) == "${PERSON_2}携帯/2021"
+    assert photo_label(phone, roots) == "${PERSON_2}携帯"
+    assert photo_label(tmp_path / "elsewhere", roots) == str(tmp_path / "elsewhere")
+
+
+def test_with_one_root_the_folder_is_shown_as_before(tmp_path):
+    photo = tmp_path / "Photo"
+
+    assert photo_label(photo / "2021", [str(photo)]) == "2021"
+    assert photo_label(photo / "2021", str(photo)) == "2021"
+    assert photo_label(photo, [str(photo)]) == "（source_root 直下）"
+
+
+def photo_label(folder, roots):
+    return photoarchive_gui.format_folder(str(folder), roots)
+
+
+def test_the_window_falls_back_to_the_roots_recorded_in_the_database(tmp_path):
+    """設定に根が無くても、DB の記録で相対表示にする（設定を失っても読める）。"""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    _app = QApplication.instance() or QApplication([])
+    database = tmp_path / "gui.db"
+    connection = db.ensure_database(str(database))
+    db.record_scan_root(connection, str(tmp_path / "Photo"))
+    db.record_scan_root(connection, str(tmp_path / "phone"))
+    connection.commit()
+    connection.close()
+
+    window = photoarchive_gui.MainWindow(str(database))
+    try:
+        assert window.source_root == [str(tmp_path / "Photo"), str(tmp_path / "phone")]
+    finally:
+        window.connection.close()
+
+
+def test_select_copies_relative_to_the_root_that_holds_each_photo(tmp_path):
+    photo = tmp_path / "Photo"
+    phone = tmp_path / "phone"
+    first = write_image(photo / "2021" / "a.jpg")
+    second = write_image(phone / "2021" / "a.jpg", color=(10, 200, 30))
+    output = tmp_path / "out"
+    progress = []
+
+    copied = copy_selected_media(
+        [{"path": str(first)}, {"path": str(second)}],
+        str(output),
+        [str(photo), str(phone)],
+        progress_callback=lambda current, total, detail: progress.append(detail),
+    )
+
+    assert copied == 2
+    # 年のフォルダは根をまたいで1つ。同じ名前は連番で避ける
+    assert sorted(path.name for path in (output / "2021").iterdir()) == ["a.jpg", "a_1.jpg"]
+    assert progress == ["2021/a.jpg", "2021/a.jpg"]
+
+
+def test_select_copies_a_photo_outside_every_root_by_its_name(tmp_path):
+    """どの根の外のメディアはファイル名だけで置く。
+
+    以前はここで `str` に `as_posix()` を呼んで落ちていた（本筋の外だが直した）。
+    """
+    outside = write_image(tmp_path / "elsewhere" / "deep" / "c.jpg")
+    output = tmp_path / "out"
+    progress = []
+
+    copied = copy_selected_media(
+        [{"path": str(outside)}],
+        str(output),
+        [str(tmp_path / "Photo")],
+        progress_callback=lambda current, total, detail: progress.append(detail),
+    )
+
+    assert copied == 1
+    assert (output / "c.jpg").exists()
+    assert progress == ["c.jpg"]

@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -215,6 +215,16 @@ SCHEMA = [
     "FOREIGN KEY (face_id) REFERENCES Face(id) ON DELETE CASCADE,"
     "FOREIGN KEY (person_id) REFERENCES Person(id) ON DELETE CASCADE"
     ")",
+    # **走査した根**（v7・#24）。`scan` が根を1つ走査し終えるたびに書く。
+    #
+    # 設定ファイルは git 管理外で、2026-10-02 に失ったとき **DB から根を戻せなかった。**
+    # `Media.path` の共通接頭辞で推定すると親（`${NFS_ROOT}`）になり、
+    # そのまま走査すると他家の写真まで入る。**根は推定せず、走査した事実だけを書く。**
+    # 既存の根の内側（年フォルダだけの `--source`）は書かない（`record_scan_root`）。
+    "CREATE TABLE IF NOT EXISTS ScanRoot ("
+    "path TEXT PRIMARY KEY,"
+    "last_scanned_at TEXT NOT NULL"
+    ")",
     "CREATE TABLE IF NOT EXISTS AnalysisResult ("
     "media_id INTEGER PRIMARY KEY,"
     "family_score REAL,"
@@ -243,7 +253,7 @@ SCHEMA = [
     f"CREATE INDEX IF NOT EXISTS idx_media_event ON Media({folder_expression()}, {day_expression()})",
 ]
 
-KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult")
+KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult", "ScanRoot")
 
 
 class SchemaVersionError(RuntimeError):
@@ -624,6 +634,38 @@ def delete_media(connection: sqlite3.Connection, media_ids: Iterable[int]) -> in
         deleted += cursor.rowcount
     connection.commit()
     return deleted
+
+
+def _is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def record_scan_root(connection: sqlite3.Connection, root: str) -> bool:
+    """走査し終えた根を記録する。記録したら True。
+
+    - **既存の根の内側は書かない。** 年フォルダだけを ``--source`` で流すのは
+      根の一部をやり直しただけで、新しい根ではない
+    - 既存の根を内側に含む根を走査したら、内側の記録は外して外側を残す
+      （そのメディアは外側の走査で覆われている）
+    """
+    root = str(root)
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    recorded = list_scan_roots(connection)
+    if root in recorded:
+        connection.execute("UPDATE ScanRoot SET last_scanned_at = ? WHERE path = ?", (now, root))
+        return True
+    if any(_is_within(root, existing) for existing in recorded):
+        return False
+    for existing in recorded:
+        if _is_within(existing, root):
+            connection.execute("DELETE FROM ScanRoot WHERE path = ?", (existing,))
+    connection.execute("INSERT INTO ScanRoot (path, last_scanned_at) VALUES (?, ?)", (root, now))
+    return True
+
+
+def list_scan_roots(connection: sqlite3.Connection) -> List[str]:
+    """記録された根。パスの順。"""
+    return [row[0] for row in connection.execute("SELECT path FROM ScanRoot ORDER BY path")]
 
 
 def get_media_with_analysis(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
