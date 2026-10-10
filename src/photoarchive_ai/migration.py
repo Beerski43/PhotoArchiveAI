@@ -254,7 +254,26 @@ def _create_missing_tables(connection: sqlite3.Connection, emit: Callable[[str],
         )
 
 
-def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dict[str, Any]:
+#: 移行の進み具合。``(終わった量, 全体の量, いまの段)``。
+MigrationProgress = Optional[Callable[[int, Optional[int], str], None]]
+
+
+def _step(progress: MigrationProgress, name: str, run: Callable[[], Any]) -> Any:
+    """中の進み具合を測れない段（integrity_check・VACUUM など）を、始めと終わりで知らせる。
+
+    1つの SQL 文で数分かかる段がある。何も出さないと止まって見える（#78）。
+    """
+    if progress is not None:
+        progress(0, 1, name)
+    value = run()
+    if progress is not None:
+        progress(1, 1, name)
+    return value
+
+
+def _add_missing_columns(
+    database_path: str, emit: Callable[[str], None], progress: MigrationProgress = None
+) -> Dict[str, Any]:
     """v2 以降のDBへ、足りない列を足すだけの移行。**何も破棄しない。**
 
     ``ALTER TABLE ... ADD COLUMN`` は既存行に NULL を入れるだけなので、
@@ -268,11 +287,15 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
     connection = sqlite3.connect(str(database_path))
     connection.row_factory = sqlite3.Row
     try:
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        integrity = _step(
+            progress,
+            "整合性を確かめています",
+            lambda: connection.execute("PRAGMA integrity_check").fetchone()[0],
+        )
         if integrity != "ok":
             raise RuntimeError(f"integrity_check failed: {integrity}")
 
-        _apply_addable_columns(connection, emit)
+        _step(progress, "列を足しています", lambda: _apply_addable_columns(connection, emit))
 
         remaining = db.missing_columns(connection)
         if remaining:
@@ -285,7 +308,11 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
             )
 
         _create_missing_tables(connection, emit)
-        _fill_folder_dates(connection, emit)
+        _step(
+            progress,
+            "フォルダ名から撮影時期を起こしています",
+            lambda: _fill_folder_dates(connection, emit),
+        )
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
         after = {
@@ -316,8 +343,12 @@ def migrate_database(
     vacuum: bool = True,
     make_backup: bool = True,
     log: Optional[Callable[[str], None]] = None,
+    progress: MigrationProgress = None,
 ) -> Dict[str, Any]:
     """データベースを現行スキーマへ移行する。すでに現行なら何もしない。
+
+    ``progress`` には段ごとの進み具合を ``(終わった量, 全体の量, いまの段)`` で知らせる
+    （#78）。控えはページ数で、測れない段は始めと終わりだけ。
 
     ``vacuum`` が効くのは **v1 からの移行だけ**。テーブルを組み直すので
     ファイルが縮む。列を足すだけの移行（v2 以降）は組み直さないため、
@@ -370,7 +401,17 @@ def migrate_database(
     result["before"] = summary
 
     if make_backup:
-        backup = backup_database(str(path), backup_path)
+        backup = backup_database(
+            str(path),
+            backup_path,
+            progress=(
+                None
+                if progress is None
+                else lambda status, remaining, total: progress(
+                    total - remaining, total, "控えを作成しています"
+                )
+            ),
+        )
         result["backup"] = str(backup)
         emit(f"バックアップを作成しました: {backup}")
 
@@ -378,17 +419,23 @@ def migrate_database(
         # v2 以降は列を足すだけ。**顔も解析結果も触らない。**
         # v1 の再構築経路へ流すと、使えるはずの顔が消える。
         # 版だけ進んで形が古いDBもここへ来る（版は 2 以上なので再構築しない）。
-        after = _add_missing_columns(str(path), emit)
+        after = _add_missing_columns(str(path), emit, progress)
         result.update(migrated=True, schema_version=db.SCHEMA_VERSION, after=after)
         return result
 
     connection = sqlite3.connect(str(path))
     connection.row_factory = sqlite3.Row
     try:
-        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        integrity = _step(
+            progress,
+            "整合性を確かめています",
+            lambda: connection.execute("PRAGMA integrity_check").fetchone()[0],
+        )
         if integrity != "ok":
             raise RuntimeError(f"integrity_check failed: {integrity}")
 
+        if progress is not None:
+            progress(0, 1, "テーブルを作り直しています")
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute("BEGIN IMMEDIATE")
 
@@ -428,6 +475,8 @@ def migrate_database(
         _fill_folder_dates(connection, emit)
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
+        if progress is not None:
+            progress(1, 1, "テーブルを作り直しています")
     except Exception:
         connection.rollback()
         connection.close()
@@ -438,8 +487,10 @@ def migrate_database(
         connection.execute("PRAGMA foreign_keys = ON")
         db.create_tables(connection)
         if vacuum:
-            emit("VACUUM を実行しています...")
-            connection.execute("VACUUM")
+            if progress is None:
+                # GUI は進捗を出さず、この記録を失敗時に「ここまでの記録」として見せる
+                emit("VACUUM を実行しています...")
+            _step(progress, "VACUUM を実行しています", lambda: connection.execute("VACUUM"))
         after = {
             "media": connection.execute("SELECT COUNT(*) FROM Media").fetchone()[0],
             "persons": connection.execute("SELECT COUNT(*) FROM Person").fetchone()[0],
