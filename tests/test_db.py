@@ -1083,3 +1083,101 @@ def test_the_age_order_uses_each_face_s_own_person_when_none_is_selected(tmp_pat
         assert listed == [sister, brother]
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# 並びの逆向き（#69 のコメント「高い順があるなら低い順もあるべき」）
+# ---------------------------------------------------------------------------
+
+
+def test_every_order_has_its_reverse_and_keeps_missing_values_last(tmp_path: Path):
+    """**逆向きでも、値を持たない顔は最後。** 逆にしたとたん撮影日時の無い顔や
+    確信度の無い顔が先頭に並ぶと、見たい顔が2ページ目以降に押し出される。"""
+    connection = db.ensure_database(str(tmp_path / "reverse.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        no_quality = db.add_face(
+            connection,
+            media_id=db.get_face(connection, faces["日時なし"])["media_id"],
+            bbox=(0, 10, 10, 0),
+            embedding=None,
+            embed_version=db.embedding_model.ACTIVE.version,
+            thumbnail=b"",
+        )
+        db.apply_auto_assignments(
+            connection,
+            [
+                (faces["古い"], person_id, 80.0),
+                (faces["中間"], person_id, 20.0),
+                (faces["新しい"], person_id, 50.0),
+            ],
+        )
+        connection.commit()
+
+        def listed(order, **filters):
+            return [row["id"] for row in db.list_faces(connection, order=order, **filters)]
+
+        assert listed(db.ORDER_SHOT_ASC)[:3] == [faces["古い"], faces["中間"], faces["新しい"]]
+        assert listed(db.ORDER_SHOT_ASC)[3:] == [faces["日時なし"], no_quality]
+        assert listed(db.ORDER_SCORE_DESC)[:3] == [faces["古い"], faces["新しい"], faces["中間"]]
+        assert set(listed(db.ORDER_SCORE_DESC)[3:]) == {faces["日時なし"], no_quality}
+        assert listed(db.ORDER_QUALITY_ASC) == [
+            faces["新しい"], faces["中間"], faces["日時なし"], faces["古い"], no_quality,
+        ]
+        assert listed(db.ORDER_QUALITY)[-1] == no_quality
+
+        # 年齢は誕生日から計算した値。2010-01-01 生まれ → 古い 2歳・中間 7歳・新しい 11歳。
+        assert listed(
+            db.ORDER_AGE_DESC, person_id=person_id, birth_date="2010-01-01"
+        ) == [faces["新しい"], faces["中間"], faces["古い"]]
+        assert listed(
+            db.ORDER_AGE, person_id=person_id, birth_date="2010-01-01"
+        ) == [faces["古い"], faces["中間"], faces["新しい"]]
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# 人物の画面で未割当を見るとき、候補になりえない顔を外す（#69）
+# ---------------------------------------------------------------------------
+
+
+def test_unassigned_faces_shot_before_the_birth_are_left_out(tmp_path: Path):
+    """**生まれる前の写真には写れない。** 撮影日時が読めない顔は外さない
+    （分からないものを弾かない）。誕生日の当日は残す。"""
+    connection = db.ensure_database(str(tmp_path / "born.db"))
+    try:
+        _person_id, faces = _seed_for_ordering(connection)
+        born_on_the_day = _face_on(connection, 99, "2017-06-01T09:00:00", _person_id)
+        db.unassign_faces(connection, [born_on_the_day])
+
+        kept = db.face_ids(connection, unassigned=True, born_by="2017-06-01")
+
+        assert kept == sorted(
+            [faces["中間"], faces["新しい"], faces["日時なし"], born_on_the_day]
+        )
+        assert db.count_faces(connection, unassigned=True, born_by="2017-06-01") == 4
+        # 誕生日が読めなければ、何も外さない。
+        assert len(db.face_ids(connection, unassigned=True, born_by="0000-00-00")) == 5
+    finally:
+        connection.close()
+
+
+def test_unassigned_faces_marked_not_this_person_are_left_out(tmp_path: Path):
+    """**「この人物ではない」と人が決めた顔は、その人物の候補に出さない。**
+    ほかの人物の候補には出る。"""
+    connection = db.ensure_database(str(tmp_path / "not-this.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        other = db.add_person(connection, "ひより")
+        db.reject_faces_for_person(connection, [faces["古い"]], person_id)
+        connection.commit()
+
+        listed = db.face_ids(connection, unassigned=True, not_rejected_for_person=person_id)
+
+        assert faces["古い"] not in listed and len(listed) == 3
+        assert faces["古い"] in db.face_ids(
+            connection, unassigned=True, not_rejected_for_person=other
+        )
+    finally:
+        connection.close()

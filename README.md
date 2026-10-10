@@ -412,6 +412,7 @@ PhotoArchiveAI/
       scoring.py               笑顔・画質のスコアと、家族写真としての良さ
       appearance.py            顔の写り方(整列できるか・向き・鮮明さ)をサムネイルから測る
       matcher.py               自動紐づけ
+      recommend.py             顔を「この人物に似た順」に並べる(GUI の顔候補の推薦)
       clustering.py            行事の中で顔を束ねる(平均連結)
       evaluation.py            自動紐づけの精度の実測
       converter.py             HEIC/HEIF → JPEG 変換

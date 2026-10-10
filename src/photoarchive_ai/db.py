@@ -718,6 +718,13 @@ ORDER_AGE = "age"
 #: （実データで自動割り当て 15,467 件。2026-10-08）。
 #: **確信度を持たない顔（手本・未割当）は最後**に置く。
 ORDER_SCORE_ASC = "score_asc"
+#: **上の4つの逆向き**（#69 のコメント「高い順があるなら低い順もあるべき」）。
+#: **値を持たない顔は、どちらの向きでも最後。** 逆にしたとたんに撮影日時の
+#: 無い顔や確信度の無い手本が先頭に並ぶと、見たいものが2ページ目以降へ押し出される。
+ORDER_QUALITY_ASC = "quality_asc"
+ORDER_SHOT_ASC = "shooting_asc"
+ORDER_AGE_DESC = "age_desc"
+ORDER_SCORE_DESC = "score_desc"
 
 FACE_LIST_COLUMNS = (
     "id",
@@ -807,6 +814,8 @@ def count_faces(
     month_to: Optional[str] = None,
     undated_only: bool = False,
     rejected_for_person: Optional[int] = None,
+    born_by: Optional[str] = None,
+    not_rejected_for_person: Optional[int] = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -823,6 +832,8 @@ def count_faces(
         month_to=month_to,
         undated_only=undated_only,
         rejected_for_person=rejected_for_person,
+        born_by=born_by,
+        not_rejected_for_person=not_rejected_for_person,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -885,6 +896,8 @@ def face_ids(
     month_to: Optional[str] = None,
     undated_only: bool = False,
     rejected_for_person: Optional[int] = None,
+    born_by: Optional[str] = None,
+    not_rejected_for_person: Optional[int] = None,
 ) -> List[int]:
     """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
 
@@ -913,6 +926,8 @@ def face_ids(
         month_to=month_to,
         undated_only=undated_only,
         rejected_for_person=rejected_for_person,
+        born_by=born_by,
+        not_rejected_for_person=not_rejected_for_person,
     )
     rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
     return [int(row[0]) for row in rows]
@@ -1217,6 +1232,8 @@ def _face_filter(
     month_to: Optional[str] = None,
     undated_only: bool = False,
     rejected_for_person: Optional[int] = None,
+    born_by: Optional[str] = None,
+    not_rejected_for_person: Optional[int] = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -1250,6 +1267,15 @@ def _face_filter(
     以前はこの条件だけ専用の関数（`rejected_face_ids_for_person`）で作って
     いたため、**撮影年月・行事・年齢の絞り込みとページャが効かなかった。**
     条件はここに1つだけ持つ。
+
+    ``born_by`` と ``not_rejected_for_person`` は、**人物の画面で未割当の顔を
+    見るとき**（#69）のもの。その人物の候補になりえない顔を外す。
+
+    - ``born_by``（誕生日）: **撮影日がそれより前の顔を外す。** 生まれる前の
+      写真には写れない（`matcher._persons_alive_at` と同じ事実）。撮影日時が
+      読めない顔と、誕生日が読めない場合は外さない（**分からないものを弾かない**）
+    - ``not_rejected_for_person``: その人物について「この人物ではない」と
+      記録した顔を外す。``rejected_for_person`` の**逆**で、別の指示
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -1270,6 +1296,11 @@ def _face_filter(
             f"({prefix}assign_source IS NULL OR {prefix}assign_source <> ?)"
         )
         params.append(ASSIGN_REJECTED)
+    if not_rejected_for_person is not None:
+        clauses.append(
+            f"{prefix}id NOT IN (SELECT face_id FROM FaceRejection WHERE person_id = ?)"
+        )
+        params.append(not_rejected_for_person)
     age_clause = _age_clause(
         prefix, min_age, max_age, birth_date, include_unknown_age, params
     )
@@ -1296,6 +1327,13 @@ def _face_filter(
         if month_to is not None:
             media_conditions.append(f"{month_expression()} <= ?")
             params.append(month_to)
+    # **日付の判断は `dates.parse_date` に預ける**（`_birth_year_shift` と同じ。
+    # CLAUDE.md §8）。0年ずらすと、読めた誕生日を `YYYY-MM-DD` にそろえるだけになる。
+    birth = None if not born_by else _birth_year_shift(born_by, 0)
+    if birth is not None:
+        day = day_expression()
+        media_conditions.append(f"({day} IS NULL OR {day} >= ?)")
+        params.append(birth)
     if media_conditions:
         clauses.append(
             f"{prefix}media_id IN"
@@ -1354,6 +1392,8 @@ def list_faces(
     month_to: Optional[str] = None,
     undated_only: bool = False,
     rejected_for_person: Optional[int] = None,
+    born_by: Optional[str] = None,
+    not_rejected_for_person: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1369,6 +1409,10 @@ def list_faces(
       撮影日時から計算した値）で並べる。**年齢を出せない顔は最後**
       （`_ids_in_age_order`）
     - ``ORDER_SCORE_ASC``: 自動割り当ての確信度が低い順。**持たない顔は最後**
+    - ``ORDER_QUALITY_ASC`` / ``ORDER_SHOT_ASC`` / ``ORDER_AGE_DESC`` /
+      ``ORDER_SCORE_DESC``: 上の逆向き。**値を持たない顔はやはり最後**
+
+    「この人物に似た順」はここでは並べない（手本との距離が要る。`recommend`）。
 
     ``folder`` / ``day`` を渡すと、その行事（フォルダ×日）の写真の顔だけに絞る
     （`_face_filter`）。渡さなければ問い合わせは従来と変わらない。
@@ -1393,24 +1437,33 @@ def list_faces(
         month_to=month_to,
         undated_only=undated_only,
         rejected_for_person=rejected_for_person,
+        born_by=born_by,
+        not_rejected_for_person=not_rejected_for_person,
     )
-    if order == ORDER_AGE:
+    if order in (ORDER_AGE, ORDER_AGE_DESC):
         # **年齢順だけは SQL で並べない。** 下の `_ids_in_age_order` を見ること。
         where, params = _face_filter(prefix="f.", **filters)
-        ordered = _ids_in_age_order(connection, where, params, birth_date)
+        ordered = _ids_in_age_order(
+            connection, where, params, birth_date, descending=order == ORDER_AGE_DESC
+        )
         if limit is not None:
             ordered = ordered[offset : offset + limit]
         return faces_by_ids(connection, ordered, with_thumbnail=with_thumbnail)
-    if order == ORDER_SHOT_DESC:
+    if order in (ORDER_SHOT_DESC, ORDER_SHOT_ASC):
         # 撮影日時順だけは `Media` と結合するので、別名つきで条件を作る。
         where, params = _face_filter(prefix="f.", **filters)
-        query = _shooting_date_query(columns, where)
+        query = _shooting_date_query(columns, where, ascending=order == ORDER_SHOT_ASC)
     else:
         where, params = _face_filter(**filters)
         if order == ORDER_SCORE_ASC:
             # **確信度を持たない顔を最後に置く。** 低い順に見たいのだから、
             # NULL が先頭に来ると見直しの邪魔になる。
             order_by = "assign_score IS NULL ASC, assign_score ASC, id ASC"
+        elif order == ORDER_SCORE_DESC:
+            order_by = "assign_score IS NULL ASC, assign_score DESC, id ASC"
+        elif order == ORDER_QUALITY_ASC:
+            # SQLite は NULL を最小として扱う。**明示しないと先頭に来る。**
+            order_by = "quality_score IS NULL ASC, quality_score ASC, id ASC"
         else:
             order_by = "quality_score DESC, id ASC"
         query = f"SELECT {','.join(columns)} FROM Face{where} ORDER BY {order_by}"
@@ -1427,8 +1480,12 @@ def _ids_in_age_order(
     where: str,
     params: List[Any],
     birth_date: Optional[str],
+    descending: bool = False,
 ) -> List[int]:
     """条件に当たる顔の id を、**画面に出ている年齢の若い順**に**全件**返す。
+
+    ``descending`` なら年齢の高い順（同じ年齢の中は撮影日時の新しい順）。
+    **年齢を出せない顔はどちらでも最後。**
 
     **以前は `Face.age`（人が入れた確定値）だけで並べていた。** 実データでは
     ひよりの 9,502 件のうち確定値は **199 件だけ**で、**残り 9,303 件は id 順の
@@ -1473,19 +1530,20 @@ def _ids_in_age_order(
             owner_birth = birth_date or births.get(row[2])
             age = calculate_age(owner_birth, row[3])
         taken = parse_date(row[3])
+        sign = -1 if descending else 1
         return (
             age is None,
-            age if age is not None else 0,
+            sign * age if age is not None else 0,
             taken is None,
-            taken.toordinal() if taken is not None else 0,
+            sign * taken.toordinal() if taken is not None else 0,
             int(row[0]),
         )
 
     return [int(row[0]) for row in sorted(rows, key=key)]
 
 
-def _shooting_date_query(columns: List[str], where: str) -> str:
-    """撮影日時の新しい順に並べる問い合わせ。
+def _shooting_date_query(columns: List[str], where: str, ascending: bool = False) -> str:
+    """撮影日時の新しい順（``ascending`` なら古い順）に並べる問い合わせ。
 
     ``where`` は `_face_filter(prefix="f.")` が作った条件。**この関数に
     絞り込みの引数を並べない** — 以前は `list_faces` と同じ13個を持っていて、
@@ -1504,12 +1562,20 @@ def _shooting_date_query(columns: List[str], where: str) -> str:
     （`USE TEMP B-TREE FOR ORDER BY` が出る）。対象が `idx_media_event` で
     1行事（実データの最大で 1,357 件）に絞られたあとの並べ替えなので、
     実測 0.017秒で収まる（指定なしは 0.002秒）。
+
+    **古い順も撮影日時の無い顔を最後に置く。** SQLite は NULL を最小として
+    扱うので、索引を逆向きに歩くと先頭に来る。`IS NULL` を先に置くと索引が
+    使えなくなり、ページごとに並べ替える（既定の並びではないので許す）。
     """
     selected = ",".join(f"f.{column}" for column in columns)
     sort_key = SHOOTING_DATE_SORT_KEY.replace("shooting_date", "m.shooting_date")
+    if ascending:
+        order_by = f"{sort_key} IS NULL ASC, {sort_key} ASC, f.id ASC"
+    else:
+        order_by = f"{sort_key} DESC, f.id ASC"
     return (
         f"SELECT {selected} FROM Media m CROSS JOIN Face f ON f.media_id = m.id"
-        f"{where} ORDER BY {sort_key} DESC, f.id ASC"
+        f"{where} ORDER BY {order_by}"
     )
 
 
@@ -1861,6 +1927,34 @@ def load_manual_embeddings(
     matrix = np.vstack([decode_embedding(row["embedding"]) for row in rows])
     person_ids = np.asarray([row["person_id"] for row in rows], dtype=np.int64)
     return matrix, person_ids
+
+
+def embeddings_for_faces(
+    connection: sqlite3.Connection, face_ids: Sequence[int]
+) -> Tuple[np.ndarray, np.ndarray]:
+    """与えた顔の特徴量を (id配列, 行列) で返す。**いまのモデルの版のものだけ。**
+
+    特徴量の無い顔と版の違う顔は返さない（**距離を出せない**ので、呼び出し側が
+    並びの最後に回す）。並びは id 順。`IN (...)` の上限があるので塊に割って読む。
+    """
+    ids: List[int] = []
+    vectors: List[np.ndarray] = []
+    chunk = 500
+    ordered = sorted(set(int(face_id) for face_id in face_ids))
+    for start in range(0, len(ordered), chunk):
+        part = ordered[start : start + chunk]
+        placeholders = ",".join("?" for _ in part)
+        rows = connection.execute(
+            f"SELECT id, embedding FROM Face WHERE id IN ({placeholders})"
+            " AND embedding IS NOT NULL AND embed_version = ? ORDER BY id",
+            (*part, embedding_model.ACTIVE.version),
+        ).fetchall()
+        for row in rows:
+            ids.append(int(row[0]))
+            vectors.append(decode_embedding(row[1]))
+    if not ids:
+        return np.empty((0,), dtype=np.int64), np.empty((0, EMBEDDING_DIM), dtype=EMBEDDING_DTYPE)
+    return np.asarray(ids, dtype=np.int64), np.vstack(vectors)
 
 
 class ManualFaces(NamedTuple):
