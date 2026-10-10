@@ -75,7 +75,7 @@ def test_migrate_reports_that_a_fresh_database_is_current(tmp_path, capsys):
 
 EMPTY_SCAN_SUMMARY = {
     "total_files": 0, "processed": 0, "skipped": 0, "faces": 0, "pruned": 0, "errors": 0,
-    "media_ids": [],
+    "excluded": 0, "unconverted_heic": [], "media_ids": [],
 }
 
 

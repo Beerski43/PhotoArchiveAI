@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | 1 | #27 | 設定ファイルとルールを YAML にする | **YAML だけを読む**。手元の JSON は YAML に変換する | PR 起票 |
 | 2 | #24 | 検出元ディレクトリを配列で指定する | **走査した root を DB に記録する（スキーマ版7）** | PR 起票 |
-| 3 | #26 | scan 以降の処理から HEIC を外す | **既存の HEIC の行は引き継がずに消す** | 未着手 |
+| 3 | #26 | scan 以降の処理から HEIC を外す | **既存の HEIC の行は引き継がずに消す** | PR 起票 |
 
 ## #27 — YAML 化
 
@@ -41,7 +41,14 @@
 `${NFS_ROOT}/${SURNAME}/Photo` と `${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯`。
 **共通の親（`${NFS_ROOT}`）で走査すると他家の写真まで入る。** root は推定しない。
 
-## #26 — HEIC を外す（設計は Issue のコメント）
+## #26 — HEIC を外す
+
+- `scanner.IMAGE_EXTENSIONS` から `heic` / `heif` を外し、`face.py` の HEIF デコーダ登録もやめた
+- 既存の HEIC の行は**対象外の拡張子として**消す（`scanner.prune_excluded_types`）。
+  安全弁の母数にも分子にも入れない
+- 同名の JPEG が無い HEIC は `scan` が知らせる（実データでは 3 件。`IMG_6463〜6465.HEIC`）
+- **マージ後に利用者がすること**: 先に `photoarchive convert-heic`（JPEG の無い3件）→ `scan`
+  （2026-10-10 時点で HEIC の行 1,761 件と顔 941 件が消える）
 
 実データの HEIC はすべて `${PERSON_2}携帯` 側で、その root の 33%（2026-10-10。`sqlite3` で
 `SELECT COUNT(*) FROM Media WHERE lower(path) LIKE '%.heic'`）。**2割の安全弁に掛けない
