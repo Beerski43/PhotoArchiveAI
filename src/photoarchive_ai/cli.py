@@ -245,14 +245,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_log_level(evaluate_parser)
 
-    select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
+    select_parser = subparsers.add_parser("select", help="Select media by rule and copy them into output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
-    select_parser.add_argument("--output", help="Output directory for selected media.")
+    select_parser.add_argument("--output", help="Output directory, used only by select. Files are copied directly under it; every file already there is removed first (subfolders are kept).")
     select_parser.add_argument(
         "--source",
         action="append",
-        help="コピー先の相対パスを作る root。何度でも書ける。",
+        help="相対パスで登録されたメディアを解く root。何度でも書ける。",
     )
 
     return parser
@@ -657,14 +657,17 @@ def main() -> None:
                     ),
                 )
                 _reset_progress_state()
-                copied = copy_selected_media(
-                    selected,
-                    output_root,
-                    source_roots,
-                    progress_callback=lambda current, total, detail: _emit_progress(
-                        current, total, detail, prefix="Copying"
-                    ),
-                )
+                try:
+                    copied = copy_selected_media(
+                        selected,
+                        output_root,
+                        source_roots,
+                        progress_callback=lambda current, total, detail: _emit_progress(
+                            current, total, detail, prefix="Copying"
+                        ),
+                    )
+                except (OSError, ValueError) as error:
+                    raise SystemExit(f"Copying stopped: {error}") from error
             print(f"Copied {copied} files to {output_root}.")
             return
     except SchemaVersionError as error:

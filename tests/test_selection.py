@@ -1,3 +1,4 @@
+import os
 import json
 from pathlib import Path
 
@@ -122,8 +123,9 @@ def test_select_media_filters_by_rule(tmp_path: Path):
 
     copied = copy_selected_media(selected, str(output_dir), str(root))
     assert copied == 1
-    expected_output_file = output_dir / "2025" / source_file.name
-    assert expected_output_file.exists()
+    [output] = list(output_dir.iterdir())
+    assert output.name == f"0001_2025_m{selected[0]['id']}.jpg"
+    assert output.read_text() == "dummy"
 
 
 def test_load_rule_refuses_json_and_names_the_yaml_to_write(tmp_path: Path):
@@ -382,68 +384,165 @@ def test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates(conne
     assert sorted(media["path"] for media in selected) == ["by-created.jpg", "dated.jpg"]
 
 
-def test_copy_keeps_the_layout_below_the_root(tmp_path: Path):
+def _photo(path: Path, text: str = "a") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_copies_sit_directly_under_the_output(tmp_path: Path):
+    """#83: 階層を作らず、出力先の直下にコピーを置く（リンクではない）。元ファイルは変えない。"""
     root = tmp_path / "src"
-    (root / "2019" / "trip").mkdir(parents=True)
-    (root / "2019" / "trip" / "photo.jpg").write_text("a", encoding="utf-8")
+    original = _photo(root / "2019" / "trip" / "photo.jpg", "original")
     output = tmp_path / "out"
 
     copied = copy_selected_media(
-        [{"path": "2019/trip/photo.jpg"}], str(output), str(root)
+        [{"id": 7, "path": "2019/trip/photo.jpg", "shooting_date": "2019-05-03T14:22:10"}],
+        str(output),
+        str(root),
     )
 
     assert copied == 1
-    assert (output / "2019" / "trip" / "photo.jpg").exists()
+    [copy] = list(output.iterdir())
+    assert copy.name == "0001_2019_m7.jpg"
+    assert copy.is_file() and not copy.is_symlink()
+    assert copy.read_text(encoding="utf-8") == "original"
+    assert original.read_text(encoding="utf-8") == "original"
 
 
-def test_copy_flattens_media_that_lives_outside_the_root(tmp_path: Path):
+def test_output_names_follow_the_selected_order_and_mark_unknown_years(tmp_path: Path):
+    """名前は ``<順位>_<年>_m<ID><拡張子>``。名前順に並べると select の並びになる。"""
     root = tmp_path / "src"
-    root.mkdir()
-    outside = tmp_path / "elsewhere"
-    outside.mkdir()
-    (outside / "stray.jpg").write_text("a", encoding="utf-8")
+    _photo(root / "b.JPG")
+    _photo(root / "a.mp4")
     output = tmp_path / "out"
 
-    copied = copy_selected_media(
-        [{"path": str(outside / "stray.jpg")}], str(output), str(root)
+    copy_selected_media(
+        [
+            {"id": 12, "path": "b.JPG", "shooting_date": "2016-01-01T09:00:00"},
+            {"id": 3, "path": "a.mp4", "shooting_date": None, "created_time": None},
+        ],
+        str(output),
+        str(root),
     )
 
-    assert copied == 1
-    assert (output / "stray.jpg").exists()
+    assert sorted(path.name for path in output.iterdir()) == [
+        "0001_2016_m12.JPG",
+        "0002_unknown_m3.mp4",
+    ]
 
 
-def test_copy_skips_entries_without_a_path_and_reports_progress(tmp_path: Path):
+def test_rank_is_padded_to_the_number_of_selected_media(tmp_path: Path):
     root = tmp_path / "src"
-    root.mkdir()
-    (root / "photo.jpg").write_text("a", encoding="utf-8")
+    _photo(root / "p.jpg")
+    selected = [{"id": number, "path": None} for number in range(9_999)]
+    selected.append({"id": 9_999, "path": "p.jpg", "shooting_date": None, "created_time": None})
+
+    copy_selected_media(selected, str(tmp_path / "out"), str(root))
+
+    assert [path.name for path in (tmp_path / "out").iterdir()] == ["10000_unknown_m9999.jpg"]
+
+
+def test_rerun_removes_every_file_directly_under_the_output_but_keeps_folders(tmp_path: Path):
+    """出力は平らなので、前回の出力が残ると区別できない。**出力先は select 専用**で、
+    直下のファイルは置いたのが誰でも消す（利用者が決めた・PR #85）。
+    リンクで出力していた頃のリンク（壊れたものも）も消す。サブフォルダには触らない。
+    """
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    copy_selected_media([{"id": 1, "path": "a.jpg", "created_time": None},
+                         {"id": 2, "path": "a.jpg", "created_time": None}], str(output), str(root))
+    _photo(output / "mine.txt", "mine")
+    (output / "old-link.jpg").symlink_to(root / "a.jpg")
+    (output / "broken-link.jpg").symlink_to(root / "gone.jpg")
+    kept_folder = _photo(output / "2019" / "old.jpg", "copied before")
+
+    copied = copy_selected_media([{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root))
+
+    assert copied == 1
+    assert sorted(path.name for path in output.iterdir()) == ["0001_unknown_m1.jpg", "2019"]
+    assert kept_folder.read_text(encoding="utf-8") == "copied before"
+    assert (root / "a.jpg").exists()
+
+
+def _stops_without_touching_the_output(output: Path, call) -> str:
+    """止まったとき、出力の中身が止まる前と同じであること（PR #85 のレビュー指摘1）。"""
+    before = sorted((path.name, path.is_symlink()) for path in output.iterdir())
+    with pytest.raises((OSError, ValueError)) as raised:
+        call()
+    assert sorted((path.name, path.is_symlink()) for path in output.iterdir()) == before
+    return str(raised.value)
+
+
+def test_a_missing_original_stops_before_removing_the_previous_output(tmp_path: Path):
+    """消してからコピーの途中で落ちると、前回の結果も今回の結果も揃っていない出力が残る。"""
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    # 前回は別の写真を選んでいた（名前が今回と違うので、消されたら分かる）
+    copy_selected_media([{"id": 5, "path": "a.jpg", "created_time": None}], str(output), str(root))
+
+    message = _stops_without_touching_the_output(output, lambda: copy_selected_media(
+        [{"id": 1, "path": "a.jpg", "created_time": None},
+         {"id": 2, "path": "gone.jpg", "created_time": None}],
+        str(output), str(root),
+    ))
+
+    assert "gone.jpg" in message
+
+
+def test_a_folder_with_the_same_name_stops_before_removing_anything(tmp_path: Path):
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    _photo(output / "previous.jpg")
+    (output / "0001_unknown_m1.jpg").mkdir()
+
+    message = _stops_without_touching_the_output(output, lambda: copy_selected_media(
+        [{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root),
+    ))
+
+    assert "0001_unknown_m1.jpg" in message
+
+
+@pytest.mark.parametrize("where", ["root", "inside"])
+def test_an_output_inside_a_root_is_refused_before_removing_the_originals(tmp_path: Path, where):
+    """**直下のファイルを全部消すので、出力先を root に向けると元写真が消える。**"""
+    root = tmp_path / "src"
+    original = _photo(root / "2019" / "a.jpg", "original")
+    output = root / "2019" if where == "inside" else root
+
+    _stops_without_touching_the_output(output, lambda: copy_selected_media(
+        [{"id": 1, "path": "2019/a.jpg", "created_time": None}], str(output), str(root),
+    ))
+
+    assert original.read_text(encoding="utf-8") == "original"
+
+
+def test_an_output_holding_an_original_outside_every_root_is_refused(tmp_path: Path):
+    output = tmp_path / "out"
+    original = _photo(output / "stray.jpg", "original")
+
+    _stops_without_touching_the_output(output, lambda: copy_selected_media(
+        [{"id": 1, "path": str(original), "created_time": None}], str(output), str(tmp_path / "src"),
+    ))
+
+    assert original.read_text(encoding="utf-8") == "original"
+
+
+def test_copy_skips_entries_without_a_path_but_keeps_their_rank(tmp_path: Path):
+    """番号を select の並びと一致させるため、飛ばした項目の順位は詰めない。"""
+    root = tmp_path / "src"
+    _photo(root / "photo.jpg")
     seen = []
 
     copied = copy_selected_media(
-        [{"path": None}, {"path": "photo.jpg"}],
+        [{"id": 1, "path": None}, {"id": 2, "path": "photo.jpg", "created_time": None}],
         str(tmp_path / "out"),
         str(root),
         progress_callback=lambda *args: seen.append(args),
     )
 
     assert copied == 1
-    assert seen == [(2, 2, "photo.jpg")]
-
-
-def test_copy_makes_room_when_the_name_is_taken(tmp_path: Path):
-    root = tmp_path / "src"
-    (root / "a").mkdir(parents=True)
-    (root / "b").mkdir()
-    (root / "a" / "photo.jpg").write_text("a", encoding="utf-8")
-    (root / "b" / "photo.jpg").write_text("b", encoding="utf-8")
-    output = tmp_path / "out"
-
-    copied = copy_selected_media(
-        [{"path": str(root / "a" / "photo.jpg")},
-         {"path": str(root / "b" / "photo.jpg")}],
-        str(output),
-        str(tmp_path / "unrelated"),
-    )
-
-    assert copied == 2
-    assert (output / "photo.jpg").read_text(encoding="utf-8") == "a"
-    assert (output / "photo_1.jpg").read_text(encoding="utf-8") == "b"
+    assert seen == [(2, 2, "0002_unknown_m2.jpg")]

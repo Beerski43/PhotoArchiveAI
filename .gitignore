@@ -18,10 +18,10 @@ dist/
 .pytest_cache/
 
 # 実データと生成物
-mediaFiles/
-data/
-output/
-models/
+/mediaFiles
+/data
+/output
+/models
 
 # 利用者ごとの設定。sample だけ管理する
 # (ファイル名を名指しにしない。形式を変えても漏れないように)

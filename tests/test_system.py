@@ -139,8 +139,11 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     Path(rule_path).write_text(yaml.safe_dump(rule), encoding="utf-8")
     _run_cli(["select"], tmp_path)
 
-    copied_files = [path for path in output_root.rglob("*") if path.is_file()]
-    assert len(copied_files) == 1
+    # #83: 出力先の直下にコピーを1つ。2回流しても前回の出力は残らない
+    first_run = list(output_root.iterdir())
+    assert len(first_run) == 1 and first_run[0].is_file() and not first_run[0].is_symlink()
+    _run_cli(["select"], tmp_path)
+    assert [path.name for path in output_root.iterdir()] == [first_run[0].name]
 
     window.connection.close()
 
