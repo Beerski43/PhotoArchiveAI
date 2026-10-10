@@ -5,12 +5,15 @@
 手本にしない・距離の無い顔は最後）。
 """
 
+import io
 import math
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from photoarchive_ai import db, recommend
+from tests.fakes import APPEARANCE_STATE
 
 
 def _vector(angle_degrees):
@@ -43,7 +46,14 @@ def _media(connection, name, shooting_date="2020-01-01T00:00:00"):
     )
 
 
-def _face(connection, angle, version=None, name=None):
+def _jpeg():
+    """見え方を測れるサムネイル（中身は問わない。整列の判定はフェイクが決める）。"""
+    buffer = io.BytesIO()
+    Image.fromarray(np.full((40, 40, 3), 128, dtype=np.uint8)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def _face(connection, angle, version=None, name=None, thumbnail=b""):
     media_id = _media(connection, name or f"m{angle}-{version}")
     return db.add_face(
         connection,
@@ -51,7 +61,7 @@ def _face(connection, angle, version=None, name=None):
         bbox=(0, 10, 10, 0),
         embedding=None if angle is None else _vector(angle),
         embed_version=version or db.embedding_model.ACTIVE.version,
-        thumbnail=b"",
+        thumbnail=thumbnail,
     )
 
 
@@ -241,3 +251,47 @@ def test_removing_a_teacher_measures_everything_again(connection):
     similarity.update(connection, [candidate])
 
     assert similarity.distances[candidate] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_teachers_not_yet_measured_are_measured_before_use(connection):
+    """**GUI で割り当てたばかりの手本は見え方が未計測。** 測ってから使う
+    （PR #71 レビュー指摘1）。測らずに使うと、横倒しの顔を割り当てた直後に
+    横倒しの候補が本人らしい顔より上に来る。`match` と同じく
+    `matcher.teacher_usable` で測り、結果を DB に残す。"""
+    person = db.add_person(connection, "${PERSON_4}", "長女")
+    good = _face(connection, 0, name="good", thumbnail=_jpeg())
+    db.assign_faces(connection, [good], person, db.ASSIGN_MANUAL)
+    connection.execute("UPDATE Face SET aligned = 1, sharpness = 1.0 WHERE id = ?", (good,))
+    sideways = _face(connection, 90, name="sideways", thumbnail=_jpeg())
+    db.assign_faces(connection, [sideways], person, db.ASSIGN_MANUAL)
+    near_person = _face(connection, 20, name="near-person")
+    near_sideways = _face(connection, 88, name="near-sideways")
+    connection.commit()
+    APPEARANCE_STATE["aligned"] = False
+
+    similarity = recommend.PersonSimilarity(person)
+    count = similarity.update(connection, [near_person, near_sideways])
+
+    assert count == 1, "整列できないと分かった手本は根拠にしない"
+    assert recommend.rank([near_person, near_sideways], similarity.distances) == [
+        near_person, near_sideways,
+    ]
+    aligned = connection.execute("SELECT aligned FROM Face WHERE id = ?", (sideways,)).fetchone()[0]
+    assert aligned == 0, "測った値は match と同じく残す（次の match で測り直さない）"
+
+
+def test_a_teacher_that_cannot_be_measured_is_still_used(connection):
+    """**「測れない」と「整列できなかった」を混ぜない**（CLAUDE.md §8）。サムネイルが
+    読めない手本は未計測のまま残し、根拠からも外さない。"""
+    person = db.add_person(connection, "${PERSON_4}", "長女")
+    broken = _face(connection, 0, name="broken", thumbnail=b"not a jpeg")
+    db.assign_faces(connection, [broken], person, db.ASSIGN_MANUAL)
+    candidate = _face(connection, 10, name="cand")
+    connection.commit()
+    APPEARANCE_STATE["aligned"] = False
+
+    similarity = recommend.PersonSimilarity(person)
+
+    assert similarity.update(connection, [candidate]) == 1
+    aligned = connection.execute("SELECT aligned FROM Face WHERE id = ?", (broken,)).fetchone()[0]
+    assert aligned is None

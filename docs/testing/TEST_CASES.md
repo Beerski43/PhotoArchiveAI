@@ -430,7 +430,7 @@
 | `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
 
-### `test_recommend.py` — 顔を「この人物に似た順」に並べる（11件）
+### `test_recommend.py` — 顔を「この人物に似た順」に並べる（13件）
 
 **点はその人物の手本との最小距離**（#69。2026-10-08 の測定と同じ）。
 
@@ -447,6 +447,8 @@
 | `test_similarity_only_measures_faces_it_has_not_seen` | **ページを送るたびに計算し直さない** |
 | `test_adding_a_teacher_updates_the_ranking_without_measuring_everything_again` | 手本が増えたら、**増えた手本とだけ**比べて並びを良くする |
 | `test_removing_a_teacher_measures_everything_again` | 手本が減ったら全部測り直す（最小距離が大きくなりうる） |
+| `test_teachers_not_yet_measured_are_measured_before_use` | **GUI で割り当てたばかりの手本（見え方が未計測）を、使う前に測る。** 測らずに使うと横倒しの候補が上位に来た（PR #71 レビュー指摘1） |
+| `test_a_teacher_that_cannot_be_measured_is_still_used` | サムネイルが読めない手本は未計測のまま根拠に残す（**測れないと整列できないを混ぜない**） |
 
 ### `test_gui_recommend.py` — 人物の未割当を似た順に見る画面（12件）
 
