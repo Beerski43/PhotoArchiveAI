@@ -239,11 +239,11 @@ def copy_selected_media(
     source_roots: Union[str, Sequence[str]],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> int:
-    """選んだメディアをコピーする。コピー先は**それを含む根からの相対**（#24）。
+    """選んだメディアをコピーする。コピー先は**それを含む root からの相対**（#24）。
 
-    根が複数でも、出力に根の名前は挟まない（年のフォルダが根をまたいで1つにまとまる）。
-    同じ相対パスがぶつかったら連番で避ける（`_free_path`）。どの根にも入らない
-    メディアはファイル名だけになる。相対パスで登録されたメディアは先頭の根から解く。
+    root が複数でも、出力に root の名前は挟まない（年のフォルダが root をまたいで1つにまとまる）。
+    同じ相対パスがぶつかったら連番で避ける（`_free_path`）。どの root にも入らない
+    メディアはファイル名だけになる。相対パスで登録されたメディアは先頭の root から解く。
     """
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]

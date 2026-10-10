@@ -215,12 +215,12 @@ SCHEMA = [
     "FOREIGN KEY (face_id) REFERENCES Face(id) ON DELETE CASCADE,"
     "FOREIGN KEY (person_id) REFERENCES Person(id) ON DELETE CASCADE"
     ")",
-    # **走査した根**（v7・#24）。`scan` が根を1つ走査し終えるたびに書く。
+    # **走査した root**（v7・#24）。`scan` が root を1つ走査し終えるたびに書く。
     #
-    # 設定ファイルは git 管理外で、2026-10-02 に失ったとき **DB から根を戻せなかった。**
+    # 設定ファイルは git 管理外で、2026-10-02 に失ったとき **DB から root を戻せなかった。**
     # `Media.path` の共通接頭辞で推定すると親（`${NFS_ROOT}`）になり、
-    # そのまま走査すると他家の写真まで入る。**根は推定せず、走査した事実だけを書く。**
-    # 既存の根の内側（年フォルダだけの `--source`）は書かない（`record_scan_root`）。
+    # そのまま走査すると他家の写真まで入る。**root は推定せず、走査した事実だけを書く。**
+    # 既存の root の内側（年フォルダだけの `--source`）は書かない（`record_scan_root`）。
     "CREATE TABLE IF NOT EXISTS ScanRoot ("
     "path TEXT PRIMARY KEY,"
     "last_scanned_at TEXT NOT NULL"
@@ -641,13 +641,13 @@ def _is_within(path: str, root: str) -> bool:
 
 
 def record_scan_root(connection: sqlite3.Connection, root: str) -> bool:
-    """走査し終えた根を記録する。記録したら True。
+    """走査し終えた root を記録する。記録したら True。
 
-    - **既存の根の内側は書かない。** 年フォルダだけを ``--source`` で流すのは
-      根の一部をやり直しただけで、新しい根ではない
-    - **記録を消さない。** 既存の根を内側に含む根（親）は ``scan`` が走査の前に止める
+    - **既存の root の内側は書かない。** 年フォルダだけを ``--source`` で流すのは
+      root の一部をやり直しただけで、新しい root ではない
+    - **記録を消さない。** 既存の root を内側に含む root（親）は ``scan`` が走査の前に止める
       （``scanner.refuse_parents_of_recorded_roots``）。以前はここで内側の記録を消して
-      親に置き換えており、間違えて親を1回走査しただけで記録が親だけになり、正しい根で
+      親に置き換えており、間違えて親を1回走査しただけで記録が親だけになり、正しい root で
       走査し直しても戻らなかった（PR #75 のレビュー (a)）。ここまで来たら両方を残す
       （残れば、記録で走査するときに入れ子の検査で止まる）
     """
@@ -664,7 +664,7 @@ def record_scan_root(connection: sqlite3.Connection, root: str) -> bool:
 
 
 def list_scan_roots(connection: sqlite3.Connection) -> List[str]:
-    """記録された根。パスの順。"""
+    """記録された root。パスの順。"""
     return [row[0] for row in connection.execute("SELECT path FROM ScanRoot ORDER BY path")]
 
 

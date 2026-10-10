@@ -320,7 +320,7 @@ def suggested_age(
     return None if age < 0 else age
 
 
-#: 根1つか、根の並び（#24）。フォルダの表示を相対にするためだけに使う。
+#: root 1つか、root の並び（#24）。フォルダの表示を相対にするためだけに使う。
 SourceRoots = Union[str, Sequence[str], None]
 
 
@@ -346,15 +346,15 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
 
 
 def format_folder(folder: str, source_root: SourceRoots = None) -> str:
-    """フォルダを、画面に出す形にする。**それを含む根からの相対。**
+    """フォルダを、画面に出す形にする。**それを含む root からの相対。**
 
     絶対パスは長すぎて読めない（実データは
-    `${NFS_ROOT}/${SURNAME}/Photo/2011/...`）。どの根の外にある
+    `${NFS_ROOT}/${SURNAME}/Photo/2011/...`）。どの root の外にある
     ものは絶対パスのまま出す。
 
-    ``source_root`` は根1つか、根の並び（#24）。**根が2つ以上なら、相対の前に根の
-    名前を付ける**（`Photo/2011/...`・`${PERSON_2}携帯/2021/...`）。どちらの根にも `2021/` が
-    あるので、付けないと別のフォルダが同じ名前で並ぶ。根が1つなら今までどおり付けない。
+    ``source_root`` は root 1つか、root の並び（#24）。**root が2つ以上なら、相対の前に root の
+    名前を付ける**（`Photo/2011/...`・`${PERSON_2}携帯/2021/...`）。どちらの root にも `2021/` が
+    あるので、付けないと別のフォルダが同じ名前で並ぶ。root が1つなら今までどおり付けない。
 
     **プレビューの情報欄と行事の選択で、同じ規則を使う。** 別々に書くと、
     同じフォルダが画面によって違う名前で出る。
@@ -374,7 +374,7 @@ def format_folder(folder: str, source_root: SourceRoots = None) -> str:
             # source_root 直下は "." になる。それでは何のことか読めない。
             return "（source_root 直下）" if str(relative) == "." else str(relative)
         return root_path.name if str(relative) == "." else f"{root_path.name}/{relative}"
-    # どの根の外にあるメディア。絶対パスのまま出す。
+    # どの root の外にあるメディア。絶対パスのまま出す。
     return str(path)
 
 
@@ -1671,8 +1671,8 @@ class MainWindow(QWidget):
         super().__init__()
         self.db_path = database_path
         self.connection = db.ensure_database(database_path)
-        #: プレビューのフォルダ表示を相対パスにするためだけに使う（根1つか並び）。
-        #: **渡されなければ DB に記録された根を使う**（#24。設定を失っても読める表示に
+        #: プレビューのフォルダ表示を相対パスにするためだけに使う（root 1つか並び）。
+        #: **渡されなければ DB に記録された root を使う**（#24。設定を失っても読める表示に
         #: なる）。それも無ければ絶対パスで出すので、渡さなくても動く。
         self.source_root = source_root or db.list_scan_roots(self.connection) or None
         self.setWindowTitle("PhotoArchiveAI 人物登録と顔の割り当て")
@@ -3388,7 +3388,7 @@ def main() -> None:
     settings = load_settings()
     db_path = args.db or get_database_path(settings)
     # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く
-    # （無ければ MainWindow が DB に記録された根を使う）。
+    # （無ければ MainWindow が DB に記録された root を使う）。
     source_root = [resolve_source_root(root) for root in get_source_roots(settings)]
     if not db_path:
         legacy = find_legacy_settings_path()

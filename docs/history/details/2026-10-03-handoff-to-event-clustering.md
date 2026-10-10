@@ -129,7 +129,7 @@ photoarchive match --db data/photoarchive.db
 - `source_root` は `${NFS_ROOT}/${SURNAME}/Photo`。
   **共通接頭辞の `${NFS_ROOT}` にしてはいけない**（他家の写真 `katayama` と
   `temp` を取り込む）。経緯は Issue #24 のコメント
-- 実データは2つの根を切り替えて2回スキャンして作られている。
+- 実データは2つの root を切り替えて2回スキャンして作られている。
   `mediaFiles/${SURNAME}Family` と `mediaFiles/photo_person2` がその記録（**アプリは
   `mediaFiles/` を見ない**）
 - **バックアップの置き場**: `${HOME}/photoarchive-recovery/`（読み取り専用で保持）

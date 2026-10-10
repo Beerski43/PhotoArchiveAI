@@ -165,7 +165,7 @@ def test_comments_and_japanese_paths_are_read(tmp_path, monkeypatch):
     path = tmp_path / "config/app_settings.yml"
     path.parent.mkdir(parents=True)
     path.write_text(
-        "# 実データの根\nsource_root: /mnt/nfs/写真/${PERSON_2}携帯  # 注釈\ndlib_model_dir: null\n",
+        "# 実データの root\nsource_root: /mnt/nfs/写真/${PERSON_2}携帯  # 注釈\ndlib_model_dir: null\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)

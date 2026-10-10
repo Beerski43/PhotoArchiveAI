@@ -1,14 +1,14 @@
-"""検出元のディレクトリ（根）を複数持つこと（#24）。
+"""検出元のディレクトリ（root）を複数持つこと（#24）。
 
-実データは根が2つある（`${SURNAME}/Photo` と `person2Temp/${PERSON_2}携帯`）。設定は git 管理外で、
-2026-10-02 に失ったとき **DB から根を戻せず**、共通の親で走査する危ない設定を
+実データは root が2つある（`${SURNAME}/Photo` と `person2Temp/${PERSON_2}携帯`）。設定は git 管理外で、
+2026-10-02 に失ったとき **DB から root を戻せず**、共通の親で走査する危ない設定を
 書きかけた。ここで守ること:
 
-- 根ごとに走査し、消えた行の削除と2割の安全弁も根ごと
-- 走査し終えた根を DB（`ScanRoot`）に記録する。年フォルダだけの走査は根にしない
-- 入れ子の根は止める
-- v6 → v7 の移行で顔を減らさず、根は推定しない
-- GUI と `select` が、根が複数でもそれを含む根からの相対で扱う
+- root ごとに走査し、消えた行の削除と2割の安全弁も root ごと
+- 走査し終えた root を DB（`ScanRoot`）に記録する。年フォルダだけの走査は root にしない
+- 入れ子の root は止める
+- v6 → v7 の移行で顔を減らさず、root は推定しない
+- GUI と `select` が、root が複数でもそれを含む root からの相対で扱う
 """
 
 import os
@@ -60,9 +60,9 @@ def test_two_roots_are_both_scanned_and_recorded(tmp_path, connection):
 
 
 def test_a_missing_root_does_not_make_the_other_roots_media_prunable(tmp_path, connection):
-    """**片方の根だけを走査しても、もう片方のメディアは削除候補にならない。**
+    """**片方の root だけを走査しても、もう片方のメディアは削除候補にならない。**
 
-    根を1つ（もう1つは記録だけ）で走査し直したとき、外の 5,323 件（実データ）が
+    root を1つ（もう1つは記録だけ）で走査し直したとき、外の 5,323 件（実データ）が
     「見つからない」に数えられると、2割の安全弁で止まるか、`--force-prune` で消える。
     """
     photo = tmp_path / "Photo"
@@ -95,7 +95,7 @@ def test_the_safety_valve_still_works_per_root(tmp_path, connection):
 
 
 def test_nested_roots_are_refused(tmp_path):
-    """**親を根にすること自体が事故**（共通の親で走査すると他家の写真まで入る）。"""
+    """**親を root にすること自体が事故**（共通の親で走査すると他家の写真まで入る）。"""
     parent = tmp_path / "photo"
     (parent / "person2Temp").mkdir(parents=True)
 
@@ -111,7 +111,7 @@ def test_the_same_root_written_twice_is_scanned_once(tmp_path):
 
 
 def test_a_root_given_through_a_symlink_is_recorded_by_its_real_path(tmp_path, connection):
-    """`Media.path` は実体のパス。記録も実体にそろえないと、根で範囲を決められない。"""
+    """`Media.path` は実体のパス。記録も実体にそろえないと、root で範囲を決められない。"""
     real = tmp_path / "nfs" / "Photo"
     write_image(real / "a.jpg")
     alias = tmp_path / "alias"
@@ -123,7 +123,7 @@ def test_a_root_given_through_a_symlink_is_recorded_by_its_real_path(tmp_path, c
 
 
 # ---------------------------------------------------------------------------
-# 根の記録
+# root の記録
 # ---------------------------------------------------------------------------
 
 
@@ -141,9 +141,9 @@ def test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root(tmp_pat
 def test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything(tmp_path, connection):
     """**共通の親を1つだけ渡しても、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
 
-    根を思い出せずに親を渡すと他家の写真まで入る（2026-10-02）。入れ子の検査は同じ指定の
+    root を思い出せずに親を渡すと他家の写真まで入る（2026-10-02）。入れ子の検査は同じ指定の
     中の親と子しか見ないので、記録と突き合わせる。以前は走査したうえで記録が親だけに
-    置き換わり、正しい根で走査し直しても戻らなかった。
+    置き換わり、正しい root で走査し直しても戻らなかった。
     """
     parent = tmp_path / "nanoPi"
     photo = parent / "${SURNAME}" / "Photo"
@@ -151,7 +151,7 @@ def test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything(tmp_
     write_image(parent / "katayama" / "other.jpg", color=(10, 200, 30))
     scan_directories([str(photo)], connection, workers=1)
 
-    with pytest.raises(ScanAborted, match="記録済みの根"):
+    with pytest.raises(ScanAborted, match="記録済みの root"):
         scan_directories([str(parent)], connection, workers=1)
 
     assert _paths(connection) == [str(photo / "a.jpg")]
@@ -159,7 +159,7 @@ def test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything(tmp_
 
 
 def test_a_year_folder_inside_a_recorded_root_is_still_scanned(tmp_path, connection):
-    """止めるのは親だけ。根の内側（年フォルダ）の走査は今までどおり通す。"""
+    """止めるのは親だけ。root の内側（年フォルダ）の走査は今までどおり通す。"""
     root = tmp_path / "Photo"
     write_image(root / "2021" / "a.jpg")
     scan_directories([str(root)], connection, workers=1)
@@ -183,7 +183,7 @@ def test_recording_an_outer_root_never_drops_the_inner_records(tmp_path, connect
 
 
 def test_a_root_that_does_not_exist_stops_before_any_root_is_scanned(tmp_path, connection):
-    """後ろの根が無いと、前の根を走査し終えてから落ちていた（PR #75 のレビュー指摘1）。"""
+    """後ろの root が無いと、前の root を走査し終えてから落ちていた（PR #75 のレビュー指摘1）。"""
     root = tmp_path / "Photo"
     write_image(root / "a.jpg")
 
@@ -218,7 +218,7 @@ def test_an_aborted_scan_does_not_record_its_root(tmp_path, connection):
 
 
 def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path):
-    """**v6 → v7 で顔を1件も失わない**（CLAUDE.md §4）。根は推定しない。"""
+    """**v6 → v7 で顔を1件も失わない**（CLAUDE.md §4）。root は推定しない。"""
     database = tmp_path / "v6.db"
     photo = write_image(tmp_path / "Photo" / "a.jpg")
     connection = db.ensure_database(str(database))
@@ -275,7 +275,7 @@ def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path)
 
 
 def test_with_several_roots_the_folder_is_prefixed_with_the_root_name(tmp_path):
-    """どちらの根にも `2021/` があるので、根の名前を付けないと別のフォルダが同じ名前になる。"""
+    """どちらの root にも `2021/` があるので、root の名前を付けないと別のフォルダが同じ名前になる。"""
     photo = tmp_path / "Photo"
     phone = tmp_path / "${PERSON_2}携帯"
     roots = [str(photo), str(phone)]
@@ -299,7 +299,7 @@ def photo_label(folder, roots):
 
 
 def test_the_window_falls_back_to_the_roots_recorded_in_the_database(tmp_path):
-    """設定に根が無くても、DB の記録で相対表示にする（設定を失っても読める）。"""
+    """設定に root が無くても、DB の記録で相対表示にする（設定を失っても読める）。"""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
@@ -334,13 +334,13 @@ def test_select_copies_relative_to_the_root_that_holds_each_photo(tmp_path):
     )
 
     assert copied == 2
-    # 年のフォルダは根をまたいで1つ。同じ名前は連番で避ける
+    # 年のフォルダは root をまたいで1つ。同じ名前は連番で避ける
     assert sorted(path.name for path in (output / "2021").iterdir()) == ["a.jpg", "a_1.jpg"]
     assert progress == ["2021/a.jpg", "2021/a.jpg"]
 
 
 def test_select_copies_a_photo_outside_every_root_by_its_name(tmp_path):
-    """どの根の外のメディアはファイル名だけで置く。
+    """どの root の外のメディアはファイル名だけで置く。
 
     以前はここで `str` に `as_posix()` を呼んで落ちていた（本筋の外だが直した）。
     """

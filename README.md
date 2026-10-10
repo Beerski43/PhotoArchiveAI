@@ -126,7 +126,7 @@ cp config/app_settings.sample.yml config/app_settings.yml
 
 必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。
 
-**写真の置き場所（根）が複数あれば、`source_roots` に並べます**（#24）。
+**写真の置き場所（root）が複数あれば、`source_roots` に並べます**（#24）。
 
 ```yaml
 source_roots:
@@ -134,7 +134,7 @@ source_roots:
   - ${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯
 ```
 
-**共通の親（`${NFS_ROOT}`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった根は止めます。以前の `source_root:`（1つ）もそのまま読みます。
+**共通の親（`${NFS_ROOT}`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つ）もそのまま読みます。
 
 **設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身は YAML として読めるので、**空白で字下げしていれば** `mv config/app_settings.json config/app_settings.yml` でも移れます（タブで字下げしていると読めません）（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
 
@@ -203,9 +203,9 @@ photoarchive scan --force-rescan
 
 実体が見つからないメディアが登録数の2割を超えた場合は、ソースの指定間違いやNFSの未マウントを疑って処理を中断します。意図した削除であれば `--force-prune` を付けて再実行してください。
 
-**根が複数あれば根ごとに走査し、消えた行の削除と2割の判定も根ごとに行います。** 片方の NFS が外れていても、もう片方の写真は消えません。`--source` は何度でも書けます（`--source A --source B`）。
+**root が複数あれば root ごとに走査し、消えた行の削除と2割の判定も root ごとに行います。** 片方の NFS が外れていても、もう片方の写真は消えません。`--source` は何度でも書けます（`--source A --source B`）。
 
-**走査し終えた根はデータベースに記録されます。** 設定ファイルを失っても、`--source` も設定も無い `photoarchive scan` は記録された根で走査します（何を使うかを表示します）。年フォルダだけを `--source` で流しても根としては記録しません。**記録した根を内側に含む親フォルダを `--source` に渡すと、走査する前に止めます**（関係の無い写真を取り込まないため）。指定した根が1つでも無ければ、どの根も走査せずに止めます。
+**走査し終えた root はデータベースに記録されます。** 設定ファイルを失っても、`--source` も設定も無い `photoarchive scan` は記録された root で走査します（何を使うかを表示します）。年フォルダだけを `--source` で流しても root としては記録しません。**記録した root を内側に含む親フォルダを `--source` に渡すと、走査する前に止めます**（関係の無い写真を取り込まないため）。指定した root が1つでも無ければ、どの root も走査せずに止めます。
 
 ログは `data/logs/scan_*.log` に出力されます。ログレベルは `--log-level` で `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` を指定できます（既定は `WARNING`）。
 

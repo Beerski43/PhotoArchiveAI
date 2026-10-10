@@ -169,7 +169,7 @@ def get_database_path(settings: Dict[str, Any]) -> Optional[str]:
 
 
 def get_source_roots(settings: Dict[str, Any]) -> List[str]:
-    """走査するメディアの根（#24）。**順序を保ち、空の値は落とす。**
+    """走査するメディアの root（#24）。**順序を保ち、空の値は落とす。**
 
     ``source_roots:`` に配列で書く。1つだけなら文字列でもよい。#24 より前の
     ``source_root:``（文字列）も1要素として読む（両方あれば ``source_roots``）。
