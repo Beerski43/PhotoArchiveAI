@@ -25,7 +25,7 @@ from photoarchive_ai.scanner import (
     scan_directories,
     scan_directory,
 )
-from photoarchive_ai.selection import copy_selected_media
+from photoarchive_ai.selection import link_selected_media
 from tests.helpers import write_image
 
 
@@ -270,7 +270,7 @@ def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path)
 
 
 # ---------------------------------------------------------------------------
-# GUI の表示と select のコピー先
+# GUI の表示と select の出力
 # ---------------------------------------------------------------------------
 
 
@@ -318,43 +318,57 @@ def test_the_window_falls_back_to_the_roots_recorded_in_the_database(tmp_path):
         window.connection.close()
 
 
-def test_select_copies_relative_to_the_root_that_holds_each_photo(tmp_path):
+def test_select_links_same_named_photos_from_different_roots(tmp_path):
+    """#83: 出力は平らで元の名前を使わないので、別の root の同じ名前もぶつからない。"""
     photo = tmp_path / "Photo"
     phone = tmp_path / "phone"
     first = write_image(photo / "2021" / "a.jpg")
     second = write_image(phone / "2021" / "a.jpg", color=(10, 200, 30))
     output = tmp_path / "out"
-    progress = []
 
-    copied = copy_selected_media(
-        [{"path": str(first)}, {"path": str(second)}],
+    linked = link_selected_media(
+        [{"id": 1, "path": str(first)}, {"id": 2, "path": str(second)}],
         str(output),
         [str(photo), str(phone)],
-        progress_callback=lambda current, total, detail: progress.append(detail),
     )
 
-    assert copied == 2
-    # 年のフォルダは root をまたいで1つ。同じ名前は連番で避ける
-    assert sorted(path.name for path in (output / "2021").iterdir()) == ["a.jpg", "a_1.jpg"]
-    assert progress == ["2021/a.jpg", "2021/a.jpg"]
+    assert linked == 2
+    links = sorted(output.iterdir())
+    assert [link.resolve() for link in links] == [first.resolve(), second.resolve()]
 
 
-def test_select_copies_a_photo_outside_every_root_by_its_name(tmp_path):
-    """どの root の外のメディアはファイル名だけで置く。
+def test_select_resolves_a_relative_path_from_the_first_root(tmp_path):
+    photo = tmp_path / "Photo"
+    first = write_image(photo / "2021" / "b.jpg")
+    output = tmp_path / "out"
 
-    以前はここで `str` に `as_posix()` を呼んで落ちていた（本筋の外だが直した）。
+    linked = link_selected_media(
+        [{"id": 1, "path": "2021/b.jpg"}], str(output), [str(photo), str(tmp_path / "phone")]
+    )
+
+    assert linked == 1
+    [link] = list(output.iterdir())
+    assert link.resolve() == first.resolve()
+
+
+def test_select_links_a_photo_outside_every_root(tmp_path):
+    """どの root の外のメディアも、ほかと同じく直下にリンクする。
+
+    以前（コピーで出力していた頃）はここで `str` に `as_posix()` を呼んで落ちていた。
+    実データでは root の外が 5,323 件あった（#24）。
     """
     outside = write_image(tmp_path / "elsewhere" / "deep" / "c.jpg")
     output = tmp_path / "out"
     progress = []
 
-    copied = copy_selected_media(
-        [{"path": str(outside)}],
+    linked = link_selected_media(
+        [{"id": 9, "path": str(outside)}],
         str(output),
         [str(tmp_path / "Photo")],
         progress_callback=lambda current, total, detail: progress.append(detail),
     )
 
-    assert copied == 1
-    assert (output / "c.jpg").exists()
-    assert progress == ["c.jpg"]
+    assert linked == 1
+    [link] = list(output.iterdir())
+    assert link.resolve() == outside.resolve()
+    assert progress == [link.name]

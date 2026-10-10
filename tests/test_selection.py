@@ -1,3 +1,4 @@
+import os
 import json
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from photoarchive_ai.matcher import MATCH_RULE
 from photoarchive_ai.selection import (
     _build_duplicate_groups,
     _get_media_year,
-    copy_selected_media,
+    link_selected_media,
     load_rule,
     select_media,
     stale_assignment_notice,
@@ -120,10 +121,11 @@ def test_select_media_filters_by_rule(tmp_path: Path):
     source_file = root / media_record_photo["path"]
     source_file.write_text("dummy")
 
-    copied = copy_selected_media(selected, str(output_dir), str(root))
-    assert copied == 1
-    expected_output_file = output_dir / "2025" / source_file.name
-    assert expected_output_file.exists()
+    linked = link_selected_media(selected, str(output_dir), str(root))
+    assert linked == 1
+    [link] = list(output_dir.iterdir())
+    assert link.name == f"0001_2025_m{selected[0]['id']}.jpg"
+    assert link.resolve() == source_file.resolve()
 
 
 def test_load_rule_refuses_json_and_names_the_yaml_to_write(tmp_path: Path):
@@ -382,68 +384,123 @@ def test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates(conne
     assert sorted(media["path"] for media in selected) == ["by-created.jpg", "dated.jpg"]
 
 
-def test_copy_keeps_the_layout_below_the_root(tmp_path: Path):
+def _photo(path: Path, text: str = "a") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_links_sit_directly_under_the_output_and_point_at_the_original(tmp_path: Path):
+    """#83: 階層を作らず、出力先の直下に元ファイルへのリンクを置く。元ファイルは変えない。"""
     root = tmp_path / "src"
-    (root / "2019" / "trip").mkdir(parents=True)
-    (root / "2019" / "trip" / "photo.jpg").write_text("a", encoding="utf-8")
+    original = _photo(root / "2019" / "trip" / "photo.jpg", "original")
     output = tmp_path / "out"
 
-    copied = copy_selected_media(
-        [{"path": "2019/trip/photo.jpg"}], str(output), str(root)
+    linked = link_selected_media(
+        [{"id": 7, "path": "2019/trip/photo.jpg", "shooting_date": "2019-05-03T14:22:10"}],
+        str(output),
+        str(root),
     )
 
-    assert copied == 1
-    assert (output / "2019" / "trip" / "photo.jpg").exists()
+    assert linked == 1
+    [link] = list(output.iterdir())
+    assert link.is_symlink()
+    assert link.name == "0001_2019_m7.jpg"
+    assert Path(os.readlink(link)).is_absolute()
+    assert link.resolve() == original.resolve()
+    assert original.read_text(encoding="utf-8") == "original"
+    assert not original.is_symlink()
 
 
-def test_copy_flattens_media_that_lives_outside_the_root(tmp_path: Path):
+def test_link_names_follow_the_selected_order_and_mark_unknown_years(tmp_path: Path):
+    """名前は ``<順位>_<年>_m<ID><拡張子>``。名前順に並べると select の並びになる。"""
     root = tmp_path / "src"
-    root.mkdir()
-    outside = tmp_path / "elsewhere"
-    outside.mkdir()
-    (outside / "stray.jpg").write_text("a", encoding="utf-8")
+    _photo(root / "b.JPG")
+    _photo(root / "a.mp4")
     output = tmp_path / "out"
 
-    copied = copy_selected_media(
-        [{"path": str(outside / "stray.jpg")}], str(output), str(root)
+    link_selected_media(
+        [
+            {"id": 12, "path": "b.JPG", "shooting_date": "2016-01-01T09:00:00"},
+            {"id": 3, "path": "a.mp4", "shooting_date": None, "created_time": None},
+        ],
+        str(output),
+        str(root),
     )
 
-    assert copied == 1
-    assert (output / "stray.jpg").exists()
+    assert sorted(path.name for path in output.iterdir()) == [
+        "0001_2016_m12.JPG",
+        "0002_unknown_m3.mp4",
+    ]
 
 
-def test_copy_skips_entries_without_a_path_and_reports_progress(tmp_path: Path):
+def test_rank_is_padded_to_the_number_of_links(tmp_path: Path):
     root = tmp_path / "src"
-    root.mkdir()
-    (root / "photo.jpg").write_text("a", encoding="utf-8")
+    _photo(root / "p.jpg")
+    selected = [{"id": number, "path": "p.jpg", "shooting_date": None, "created_time": None}
+                for number in range(10_000)]
+
+    link_selected_media(selected, str(tmp_path / "out"), str(root))
+
+    names = sorted(path.name for path in (tmp_path / "out").iterdir())
+    assert names[0] == "00001_unknown_m0.jpg"
+    assert names[-1] == "10000_unknown_m9999.jpg"
+
+
+def test_rerun_removes_previous_links_but_keeps_real_files(tmp_path: Path):
+    """出力は平らなので、前回のリンクが残ると区別できない。リンクだけを消す。
+
+    通常のファイルとサブフォルダ（コピーで出力していた頃の写真など）には触らない。
+    リンク先が消えた壊れたリンクも消す。
+    """
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    gone = _photo(root / "gone.jpg")
+    output = tmp_path / "out"
+    link_selected_media(
+        [{"id": 1, "path": "a.jpg"}, {"id": 2, "path": "gone.jpg"}], str(output), str(root)
+    )
+    gone.unlink()
+    kept_file = _photo(output / "kept.jpg", "mine")
+    kept_folder = _photo(output / "2019" / "old.jpg", "copied before")
+    folder_link = output / "folder-link"
+    folder_link.symlink_to(root)
+
+    linked = link_selected_media([{"id": 1, "path": "a.jpg"}], str(output), str(root))
+
+    assert linked == 1
+    assert sorted(path.name for path in output.iterdir()) == [
+        "0001_unknown_m1.jpg", "2019", "kept.jpg",
+    ]
+    assert kept_file.read_text(encoding="utf-8") == "mine"
+    assert kept_folder.read_text(encoding="utf-8") == "copied before"
+    assert (root / "a.jpg").exists()
+
+
+def test_a_real_file_with_the_same_name_is_not_overwritten(tmp_path: Path):
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    existing = _photo(output / "0001_unknown_m1.jpg", "mine")
+
+    with pytest.raises(FileExistsError):
+        link_selected_media([{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root))
+
+    assert existing.read_text(encoding="utf-8") == "mine"
+
+
+def test_link_skips_entries_without_a_path_but_keeps_their_rank(tmp_path: Path):
+    """番号を select の並びと一致させるため、飛ばした項目の順位は詰めない。"""
+    root = tmp_path / "src"
+    _photo(root / "photo.jpg")
     seen = []
 
-    copied = copy_selected_media(
-        [{"path": None}, {"path": "photo.jpg"}],
+    linked = link_selected_media(
+        [{"id": 1, "path": None}, {"id": 2, "path": "photo.jpg"}],
         str(tmp_path / "out"),
         str(root),
         progress_callback=lambda *args: seen.append(args),
     )
 
-    assert copied == 1
-    assert seen == [(2, 2, "photo.jpg")]
-
-
-def test_copy_makes_room_when_the_name_is_taken(tmp_path: Path):
-    root = tmp_path / "src"
-    (root / "a").mkdir(parents=True)
-    (root / "b").mkdir()
-    (root / "a" / "photo.jpg").write_text("a", encoding="utf-8")
-    (root / "b" / "photo.jpg").write_text("b", encoding="utf-8")
-    output = tmp_path / "out"
-
-    copied = copy_selected_media(
-        [{"path": str(root / "a" / "photo.jpg")},
-         {"path": str(root / "b" / "photo.jpg")}],
-        str(output),
-        str(tmp_path / "unrelated"),
-    )
-
-    assert copied == 2
-    assert (output / "photo.jpg").read_text(encoding="utf-8") == "a"
-    assert (output / "photo_1.jpg").read_text(encoding="utf-8") == "b"
+    assert linked == 1
+    assert seen == [(2, 2, "0002_unknown_m2.jpg")]

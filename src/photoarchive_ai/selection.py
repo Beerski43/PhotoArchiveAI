@@ -1,5 +1,4 @@
 import os
-import shutil
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -216,43 +215,54 @@ def select_media(
     return filtered
 
 
-def _free_path(destination: Path) -> Path:
-    """空いているコピー先を返す。
+def _link_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:
+    """リンクの名前。``<順位>_<年>_m<Media.id><元の拡張子>``（#83）。
 
-    以前は「コピー済みの総数」を連番に使っていたため、一意である保証が
-    無く、名前の意味も取れなかった。空くまで数を増やす。
+    名前を見れば `select` の並びと年が分かり、名前順に並べると `select` の順になる。
+    **元のファイル名は引き継がない。** ID が入るので、別の root にある同じ名前の
+    写真もぶつからない。
     """
-    if not destination.exists():
-        return destination
-    stem, suffix = destination.stem, destination.suffix
-    number = 1
-    while True:
-        candidate = destination.with_name(f"{stem}_{number}{suffix}")
-        if not candidate.exists():
-            return candidate
-        number += 1
+    year = _get_media_year(media)
+    return f"{rank:0{width}d}_{year if year is not None else 'unknown'}_m{media.get('id')}{source_path.suffix}"
 
 
-def copy_selected_media(
+def _remove_previous_links(output_root: Path) -> None:
+    """前回の出力（出力先の**直下にあるシンボリックリンク**）を消す。
+
+    出力は平らなので、残すと前回の結果と区別が付かない。**通常のファイルと
+    サブフォルダには触らない**（利用者が置いたものや、コピーで出力していた
+    頃の写真を消さない）。リンク先が消えた壊れたリンクも消す。
+    """
+    for entry in output_root.iterdir():
+        if entry.is_symlink():
+            entry.unlink()
+
+
+def link_selected_media(
     selected_media: List[Dict[str, Any]],
     output_dir: str,
     source_roots: Union[str, Sequence[str]],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> int:
-    """選んだメディアをコピーする。コピー先は**それを含む root からの相対**（#24）。
+    """選んだメディアへのシンボリックリンクを、出力先の**直下**に張る（#83）。
 
-    root が複数でも、出力に root の名前は挟まない（年のフォルダが root をまたいで1つにまとまる）。
-    同じ相対パスがぶつかったら連番で避ける（`_free_path`）。どの root にも入らない
-    メディアはファイル名だけになる。相対パスで登録されたメディアは先頭の root から解く。
+    名前は `_link_name`、リンク先は元ファイルの絶対パス。**元ファイルは読まない・
+    変えない。** 張る前に前回のリンクを消す（`_remove_previous_links`）。
+    順位は渡された並びの 1 からで、``path`` の無い項目は飛ばすが**順位は詰めない**
+    （番号が `select` の並びと一致する）。相対パスで登録されたメディアは先頭の
+    root から解く。同じ名前の実体のファイルがあれば、上書きせずに
+    ``FileExistsError`` で止まる。
     """
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots]
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
-    copied = 0
+    _remove_previous_links(output_root)
+    linked = 0
     total = len(selected_media)
-    for index, media in enumerate(selected_media, start=1):
+    width = max(4, len(str(total)))
+    for rank, media in enumerate(selected_media, start=1):
         path_value = media.get("path")
         if path_value is None:
             continue
@@ -261,13 +271,9 @@ def copy_selected_media(
             source_path = root_paths[0] / source_path
         source_path = source_path.resolve()
 
-        containing = next((root for root in root_paths if root in source_path.parents), None)
-        relative = source_path.relative_to(containing) if containing else Path(source_path.name)
-        destination = output_root.joinpath(relative)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination = _free_path(destination)
-        shutil.copy2(source_path, destination)
-        copied += 1
+        name = _link_name(rank, width, media, source_path)
+        (output_root / name).symlink_to(source_path)
+        linked += 1
         if progress_callback is not None:
-            progress_callback(index, total, relative.as_posix())
-    return copied
+            progress_callback(rank, total, name)
+    return linked
