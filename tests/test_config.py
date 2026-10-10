@@ -85,14 +85,14 @@ def test_settings_that_are_not_a_mapping_are_ignored(tmp_path, monkeypatch):
 def test_the_accessors_read_the_expected_keys():
     settings = {
         "database_path": "db",
-        "source_root": "src",
+        "source_roots": ["src", "phone"],
         "output_root": "out",
         "rule_path": "rule",
         "dlib_model_dir": "models",
     }
 
     assert config.get_database_path(settings) == "db"
-    assert config.get_source_root(settings) == "src"
+    assert config.get_source_roots(settings) == ["src", "phone"]
     assert config.get_output_root(settings) == "out"
     assert config.get_rule_path(settings) == "rule"
     assert config.get_dlib_model_dir(settings) == "models"
@@ -327,3 +327,23 @@ def test_the_stop_message_does_not_repeat_the_warning(tmp_path, monkeypatch, cap
 
     assert config.legacy_settings_message(legacy) in caplog.text
     assert config.legacy_settings_message(legacy) not in str(raised.value)
+
+# ---------------------------------------------------------------------------
+# #24: 検出元は配列。1つなら文字列でもよく、古い source_root も読む
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_source_root_may_be_written_as_a_string():
+    assert config.get_source_roots({"source_roots": "/mnt/photo"}) == ["/mnt/photo"]
+
+
+def test_the_old_source_root_key_is_read_as_one_root():
+    """#24 より前の設定（`source_root:` に文字列）でも動き続けること。"""
+    assert config.get_source_roots({"source_root": "/mnt/photo"}) == ["/mnt/photo"]
+
+
+def test_source_roots_wins_over_the_old_key_and_drops_empty_values():
+    settings = {"source_roots": ["/a", "", None, "/b"], "source_root": "/old"}
+
+    assert config.get_source_roots(settings) == ["/a", "/b"]
+    assert config.get_source_roots({}) == []

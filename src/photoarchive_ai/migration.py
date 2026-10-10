@@ -9,6 +9,8 @@
   v3 → v4 は ``Person.display_order``、v4 → v5 は ``Face`` の見え方と
   ``assign_rule``）。**足す列は
   `db.ADDABLE_COLUMNS` に1行書くだけでよい**
+- **足りないテーブルは `db.SCHEMA` から作る**（v6 → v7 の ``ScanRoot``）。
+  **中身は推定しない。** 根の記録は次の ``scan`` が書く（#24）
 
 **v1 の経路に v2 のDBを流し込まないこと。** 使えるはずの顔が消える。
 
@@ -167,7 +169,7 @@ def describe_for_operator(database_path: str) -> str:
         # 消えると読めると、実行をためらって移行が進まなくなる。
         lines.append(
             f"  顔データ {info.get('faces_kept', 0)} 件はそのまま残ります"
-            "（列を追加するだけの移行です）。"
+            "（列やテーブルを追加するだけの移行です）。"
         )
         # **黙って効かない引数を作らない。** 列を足すだけの移行はテーブルを
         # 組み直さないので VACUUM する理由が無い。`--no-vacuum` を付けても
@@ -234,6 +236,24 @@ def _fill_folder_dates(connection: sqlite3.Connection, emit: Callable[[str], Non
         emit(f"フォルダ名から撮影時期を起こしました: Media {filled}件。")
 
 
+def _create_missing_tables(connection: sqlite3.Connection, emit: Callable[[str], None]) -> None:
+    """`db.SCHEMA` のうち、まだ無いテーブルと索引を作る。
+
+    **作るものを、ここに書き足さない。** `SCHEMA` は ``IF NOT EXISTS`` なので、
+    丸ごと流せば足りないものだけができる（列はこの前に足してあるので、索引も張れる）。
+    """
+    before = _table_names(connection)
+    for statement in db.SCHEMA:
+        connection.execute(statement)
+    added = sorted(_table_names(connection) - before)
+    if added:
+        emit(f"テーブルを追加しました: {', '.join(added)}。")
+    if "ScanRoot" in added:
+        emit(
+            "走査した根は、次の scan で記録されます（既存のメディアからは推定しません）。"
+        )
+
+
 def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dict[str, Any]:
     """v2 以降のDBへ、足りない列を足すだけの移行。**何も破棄しない。**
 
@@ -264,6 +284,7 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
                 "（`db.ADDABLE_COLUMNS` に型を書けば足せます）"
             )
 
+        _create_missing_tables(connection, emit)
         _fill_folder_dates(connection, emit)
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()

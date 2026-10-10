@@ -22,7 +22,7 @@ WARNING を出す。黙って空の設定を返すと、``scan`` が「source ro
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import yaml
 
@@ -168,8 +168,21 @@ def get_database_path(settings: Dict[str, Any]) -> Optional[str]:
     return settings.get("database_path")
 
 
-def get_source_root(settings: Dict[str, Any]) -> Optional[str]:
-    return settings.get("source_root")
+def get_source_roots(settings: Dict[str, Any]) -> List[str]:
+    """走査するメディアの根（#24）。**順序を保ち、空の値は落とす。**
+
+    ``source_roots:`` に配列で書く。1つだけなら文字列でもよい。#24 より前の
+    ``source_root:``（文字列）も1要素として読む（両方あれば ``source_roots``）。
+    入れ子かどうかの検査は ``scanner.normalize_source_roots`` がする。
+    """
+    value = settings.get("source_roots")
+    if value is None:
+        value = settings.get("source_root")
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        value = [value]
+    return [str(item) for item in value if item]
 
 
 def get_output_root(settings: Dict[str, Any]) -> Optional[str]:

@@ -320,6 +320,10 @@ def suggested_age(
     return None if age < 0 else age
 
 
+#: 根1つか、根の並び（#24）。フォルダの表示を相対にするためだけに使う。
+SourceRoots = Union[str, Sequence[str], None]
+
+
 def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     """設定に書かれた相対パスを、**設定ファイルの置き場所**を起点に解く。
 
@@ -341,30 +345,42 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     return str(settings_path.parent.parent / source_root)
 
 
-def format_folder(folder: str, source_root: Optional[str] = None) -> str:
-    """フォルダを、画面に出す形にする。**`source_root` からの相対。**
+def format_folder(folder: str, source_root: SourceRoots = None) -> str:
+    """フォルダを、画面に出す形にする。**それを含む根からの相対。**
 
     絶対パスは長すぎて読めない（実データは
-    `/mnt/nfs/nanoPi-NEO2/suzuki/Photo/2011/...`）。`source_root` の外にある
+    `/mnt/nfs/nanoPi-NEO2/suzuki/Photo/2011/...`）。どの根の外にある
     ものは絶対パスのまま出す。
+
+    ``source_root`` は根1つか、根の並び（#24）。**根が2つ以上なら、相対の前に根の
+    名前を付ける**（`Photo/2011/...`・`な携帯/2021/...`）。どちらの根にも `2021/` が
+    あるので、付けないと別のフォルダが同じ名前で並ぶ。根が1つなら今までどおり付けない。
 
     **プレビューの情報欄と行事の選択で、同じ規則を使う。** 別々に書くと、
     同じフォルダが画面によって違う名前で出る。
     """
+    if isinstance(source_root, (str, Path)):
+        roots = [source_root]
+    else:
+        roots = [root for root in (source_root or []) if root]
     path = Path(folder)
-    if source_root:
+    for root in roots:
+        root_path = Path(root).expanduser().resolve()
         try:
-            path = path.relative_to(Path(source_root).expanduser().resolve())
+            relative = path.relative_to(root_path)
         except ValueError:
-            # source_root の外にあるメディア。絶対パスのまま出す。
-            pass
-    if str(path) == ".":
-        # source_root 直下。"." では何のことか読めない。
-        return "（source_root 直下）"
+            continue
+        if len(roots) == 1:
+            # source_root 直下は "." になる。それでは何のことか読めない。
+            return "（source_root 直下）" if str(relative) == "." else str(relative)
+        return root_path.name if str(relative) == "." else f"{root_path.name}/{relative}"
+    # どの根の外にあるメディア。絶対パスのまま出す。
     return str(path)
 
 
-def format_event(folder: str, day: Optional[str], source_root: Optional[str] = None) -> str:
+def format_event(
+    folder: str, day: Optional[str], source_root: SourceRoots = None
+) -> str:
     """行事（フォルダ×日）を、画面に出す形にする。
 
     ``day`` が ``None`` なのは**撮影日時が読めない顔の集まり**（実データで
@@ -444,7 +460,7 @@ def _assign_label(
 
 def format_media_info(
     media: dict,
-    source_root: Optional[str] = None,
+    source_root: SourceRoots = None,
     person: Optional[dict] = None,
     persons: Optional[List[dict]] = None,
 ) -> str:
@@ -1139,7 +1155,7 @@ def event_filters(folder: str, day: Optional[str]) -> dict:
     return {"folder": folder, "day": day if day is not None else db.UNDATED}
 
 
-def format_event_row(counts: dict, source_root: Optional[str] = None) -> str:
+def format_event_row(counts: dict, source_root: SourceRoots = None) -> str:
     """行事を選ぶ一覧の1行。**件数を先に、行事を後ろに置く。**
 
     フォルダ名は長さがまちまちなので、後ろに置かないと件数の桁が揃わず、
@@ -1163,7 +1179,7 @@ class EventPickerDialog(QDialog):
     0.4 秒）。目的の行事を探すにはページ送りより絞り込み欄が要る。
     """
 
-    def __init__(self, parent, connection, source_root: Optional[str] = None):
+    def __init__(self, parent, connection, source_root: SourceRoots = None):
         super().__init__(parent)
         self.setWindowTitle("行事を選ぶ（フォルダ×日）")
         self.source_root = source_root
@@ -1262,7 +1278,7 @@ class EventClusterDialog(QDialog):
         connection,
         folder: str,
         day: Optional[str],
-        source_root: Optional[str] = None,
+        source_root: SourceRoots = None,
         threshold: Optional[float] = None,
     ):
         super().__init__(parent)
@@ -1649,13 +1665,16 @@ class MainWindow(QWidget):
     すべて「1件あたりの手数を減らす」ためにある。
     """
 
-    def __init__(self, database_path: str, source_root: Optional[str] = None):
+    def __init__(
+        self, database_path: str, source_root: SourceRoots = None
+    ):
         super().__init__()
         self.db_path = database_path
-        #: プレビューのフォルダ表示を相対パスにするためだけに使う。
-        #: 無ければ絶対パスで出すので、渡さなくても動く。
-        self.source_root = source_root
         self.connection = db.ensure_database(database_path)
+        #: プレビューのフォルダ表示を相対パスにするためだけに使う（根1つか並び）。
+        #: **渡されなければ DB に記録された根を使う**（#24。設定を失っても読める表示に
+        #: なる）。それも無ければ絶対パスで出すので、渡さなくても動く。
+        self.source_root = source_root or db.list_scan_roots(self.connection) or None
         self.setWindowTitle("PhotoArchiveAI 人物登録と顔の割り当て")
         self.page = 0
         #: 絞り込んでいる行事（フォルダ×日）。`None` はすべて。
@@ -3361,15 +3380,16 @@ def main() -> None:
     from .config import (
         find_legacy_settings_path,
         get_database_path,
-        get_source_root,
+        get_source_roots,
         legacy_settings_stop_message,
         load_settings,
     )
 
     settings = load_settings()
     db_path = args.db or get_database_path(settings)
-    # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く。
-    source_root = resolve_source_root(get_source_root(settings))
+    # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く
+    # （無ければ MainWindow が DB に記録された根を使う）。
+    source_root = [resolve_source_root(root) for root in get_source_roots(settings)]
     if not db_path:
         legacy = find_legacy_settings_path()
         if legacy is not None:

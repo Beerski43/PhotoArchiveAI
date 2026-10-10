@@ -2,10 +2,11 @@
 
 ``scan`` の責務:
 
-1. 対象ディレクトリを再帰的に走査してファイルを ``Media`` に登録する
+1. 対象ディレクトリ（根。複数可・#24）を再帰的に走査してファイルを ``Media`` に登録する
 2. 同じ読み込みのついでに顔を検出し、顔画像・特徴量・スコアを ``Face`` に保存する
 3. 既に顔検出済みのメディアは再検出しない (差分スキャン)
-4. DBにあるのに実体が無くなったメディアの行を削除する
+4. DBにあるのに実体が無くなったメディアの行を削除する（根ごと）
+5. 走査し終えた根を ``ScanRoot`` に記録する（設定を失っても DB から戻せるように）
 
 人物への紐づけはここでは一切行わない。それは GUI での手動割り当てと
 ``match`` の仕事。
@@ -17,7 +18,7 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
 
 from PIL import ExifTags, Image
 
@@ -466,9 +467,68 @@ def scan_directory(
             db_connection, root, present_paths, force=force_prune
         )
 
+    # **走査し終えた根を記録する**（#24）。途中で中断したら書かない（上で例外になる）。
+    db.record_scan_root(db_connection, str(root))
+
     # **読み方を変えたときに古い区間を残さない。** 差分スキャンは変わっていない
     # ファイルを書き直さないので、ここで全件をパスから起こし直す（NFS は読まない）。
     db.refresh_folder_dates(db_connection)
     db_connection.commit()
 
     return summary
+
+
+def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
+    """根を絶対パスにそろえ、重複を落とす。**入れ子は止める。**
+
+    入れ子を許すと、親の走査が子の写真まで覆ったうえで、子をもう一度走査する。
+    それより**親を根にしてしまうこと自体が事故**（2026-10-02、共通の親で走査すると
+    他家の写真まで入った。#24 のコメント）なので、気づけるように止める。
+    """
+    normalized: List[Path] = []
+    for value in roots:
+        path = Path(value).expanduser().resolve()
+        if path not in normalized:
+            normalized.append(path)
+    for outer in normalized:
+        for inner in normalized:
+            if outer != inner and outer in inner.parents:
+                raise ValueError(
+                    f"検出元のディレクトリが入れ子になっています: {inner} は {outer} の内側です。"
+                    " 根はどちらか一方にしてください。"
+                )
+    return normalized
+
+
+def scan_directories(
+    source_dirs: Sequence[str],
+    db_connection,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    **options: Any,
+) -> Dict[str, Any]:
+    """複数の根を順に走査する（#24）。集計は足し合わせ、根ごとの内訳も返す。
+
+    **消えた行の削除と2割の安全弁は根ごと**（``scan_directory`` が自分の根の配下
+    だけを見る）。片方の根が未マウントでも、もう片方のメディアは削除候補にならない。
+    **1つの根で中断したら、残りの根は走査しない**（``ScanAborted`` をそのまま投げる）。
+    """
+    roots = normalize_source_roots(source_dirs)
+    if not roots:
+        raise ValueError("検出元のディレクトリが指定されていません。")
+    total: Dict[str, Any] = {
+        "total_files": 0,
+        "processed": 0,
+        "skipped": 0,
+        "faces": 0,
+        "errors": 0,
+        "pruned": 0,
+        "media_ids": [],
+        "roots": [],
+    }
+    for root in roots:
+        summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
+        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned"):
+            total[key] += summary[key]
+        total["media_ids"].extend(summary["media_ids"])
+        total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})
+    return total
