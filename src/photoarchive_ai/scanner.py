@@ -96,11 +96,26 @@ def extract_exif_datetime(path: Path) -> Optional[str]:
     return None
 
 
-def iter_media_files(root: Path) -> List[Path]:
-    """走査するメディア。**HEIC/HEIF はファイル名も見ない**（#26。利用者の決定）。"""
-    return sorted(
-        path for path in root.rglob("*") if path.is_file() and is_media_file(path)
-    )
+#: 一覧づくりの進み具合を知らせる間隔（見つけたメディアの件数）。
+LISTING_REPORT_INTERVAL = 200
+
+
+def iter_media_files(
+    root: Path, progress_callback: Optional[Callable[[int, Optional[int], str], None]] = None
+) -> List[Path]:
+    """走査するメディア。**HEIC/HEIF はファイル名も見ない**（#26。利用者の決定）。
+
+    ``progress_callback`` には ``(見つけた件数, None, いま見ているフォルダ)`` を知らせる。
+    NFS 上の数万件を数えるのに数分かかり、その間なにも出ないと止まって見える（#78）。
+    総数はまだ分からないので ``total`` は None。
+    """
+    found: List[Path] = []
+    for path in root.rglob("*"):
+        if is_media_file(path) and path.is_file():
+            found.append(path)
+            if progress_callback is not None and len(found) % LISTING_REPORT_INTERVAL == 0:
+                progress_callback(len(found), None, str(path.parent))
+    return sorted(found)
 
 
 def _mtime_matches(stored_created_time: Optional[str], mtime: float) -> bool:
@@ -374,6 +389,8 @@ def scan_directory(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     workers: int = 1,
     prune: bool = True,
+    listing_callback: Optional[Callable[[int, Optional[int], str], None]] = None,
+    error_callback: Optional[Callable[[str], None]] = None,
     force_prune: bool = False,
     force_rescan: bool = False,
     allow_missing_embeddings: bool = False,
@@ -394,12 +411,16 @@ def scan_directory(
 
     **どちらも ``workers`` が2以上のときだけ効く。** ``workers=1`` は同じ
     プロセスで処理するので、ワーカーの入口そのものが無い。
+
+    ``listing_callback`` はファイルの一覧づくりと、前回から変わったかを見る段の
+    進み具合（``(件数, 総数または None, 詳細)``）。``error_callback`` はファイルごとの
+    エラー（``"ファイル名: 理由"``）。どちらも進捗表示のため（#78）。
     """
     root = Path(source_dir).resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
 
-    media_files = iter_media_files(root)
+    media_files = iter_media_files(root, listing_callback)
     if not media_files:
         raise ScanAborted(
             f"対象ディレクトリにメディアファイルが1件もありません: {root}"
@@ -412,7 +433,12 @@ def scan_directory(
     tasks: List[Tuple[str, bool, Optional[str], bool]] = []
     records: Dict[str, Optional[Dict[str, Any]]] = {}
     skipped = 0
-    for path in media_files:
+    for checked, path in enumerate(media_files, start=1):
+        # 前回から変わったかを stat で見る段。NFS では数万件で数分かかる（#78）
+        if listing_callback is not None and (
+            checked % LISTING_REPORT_INTERVAL == 0 or checked == len(media_files)
+        ):
+            listing_callback(checked, len(media_files), path.name)
         key = str(path)
         record = index.get(key)
         records[key] = record
@@ -465,6 +491,8 @@ def scan_directory(
         summary["faces"] += len(result["faces"])
         if result.get("error"):
             summary["errors"] += 1
+            if error_callback is not None:
+                error_callback(f"{Path(result['path']).name}: {result['error']}")
         if position % COMMIT_INTERVAL == 0:
             db_connection.commit()
         if progress_callback is not None:

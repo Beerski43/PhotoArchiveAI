@@ -121,12 +121,12 @@ def isolate_app_settings(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def reset_cli_progress_state():
-    """cli._progress_started をテストごとに戻す。
+    """cli の進捗表示（`cli._display`）をテストごとに作り直す。
 
-    進捗表示は ANSI のカーソル移動で2行を書き換えるため、
-    「1行目を出したか」をモジュール変数で持っている。テストが途中で
-    終わると True のまま残り、次のテストの標準出力に \033[2A が
-    混ざる。テストの実行順に依存した差が出るので、毎回戻す。
+    進捗表示は ANSI のカーソル移動で2行を書き換えるため、「いま何行描いているか」と
+    直前のエラーを持っている。テストが途中で終わると残り、次のテストの出力に
+    カーソル移動が混ざったり、同じエラーが「直前と同じ」として出なくなったりする。
+    テストの実行順に依存した差が出るので、毎回戻す。
     """
     from photoarchive_ai import cli
 
