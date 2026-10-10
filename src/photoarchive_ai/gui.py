@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Union
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QPainter, QPixmap
@@ -46,7 +46,7 @@ from .config import find_settings_path
 # `gui.parse_date` を参照している呼び出しとテストを壊さないため。
 # **この module に写しを作らないこと**（`db.SHOOTING_DATE_SORT_KEY` が
 # SQL 側の写しで、そちらと食い違うと表示と並び順がずれる）。
-from .dates import calculate_age, parse_date  # noqa: F401
+from .dates import Taken, age_at, as_taken, calculate_age, format_taken, parse_date, taken_at  # noqa: F401
 
 PAGE_SIZE = 200
 THUMBNAIL_SIZE = 120
@@ -232,11 +232,21 @@ def _format_timestamp(value: Optional[str]) -> Optional[str]:
     return str(value).replace("T", " ")[:19]
 
 
-def format_age(age: Optional[int]) -> Optional[str]:
-    """年齢を画面に出す形にする。計算できていなければ ``None``。"""
+def format_age(age: Optional[int], inferred: bool = False) -> Optional[str]:
+    """年齢を画面に出す形にする。計算できていなければ ``None``。
+
+    ``inferred`` は**フォルダ名から起こした撮影時期で計算した**年齢（#65）。
+    末尾に `?` を付けて、EXIF の撮影日時から計算したものと見分ける。
+    """
     if age is None:
         return None
-    return "誕生前" if age < 0 else f"{age}歳"
+    text = "誕生前" if age < 0 else f"{age}歳"
+    return f"{text}?" if inferred else text
+
+
+def _taken_age(birth_date: Optional[str], taken: Optional[Taken]) -> Optional[str]:
+    """``taken`` の時点の年齢を、推測かどうかを添えて出す形にする。"""
+    return format_age(age_at(birth_date, taken), bool(taken and taken.inferred))
 
 
 #: 年・月・日の入力欄で「未入力」を表す値。`QSpinBox` の最小値に置く。
@@ -282,12 +292,13 @@ def split_birth_date(value: Optional[str]) -> tuple:
 
 
 def suggested_age(
-    birth_date: Optional[str], shooting_dates: List[Optional[str]]
+    birth_date: Optional[str], shooting_dates: Sequence[Union[Taken, str, None]]
 ) -> Optional[int]:
     """年齢ダイアログの初期値。出せないなら ``None``（＝「未設定」で開く）。
 
-    ``shooting_dates`` は**顔1件につき1件**（`db.shooting_dates_for_faces`）。
-    撮影日時の無い顔・読めない顔は ``None`` で入ってくる。
+    ``shooting_dates`` は**顔1件につき1件**（`db.taken_for_faces`）。
+    撮影時期の分からない顔は ``None`` で入ってくる。EXIF の無い顔は
+    フォルダ名から起こした区間で、**区間の途中に誕生日があれば分からない**扱い。
 
     **選択中の顔すべてが同じ年齢に落ちるときだけ**出す。1回の入力が選択中の
     全件に入る（`summarize_selection`）ので、年をまたいで選んでいるときに
@@ -301,7 +312,7 @@ def suggested_age(
     誕生前（負の値）も出さない。初期値として意味を持たないうえ、
     `FaceAgeDialog` では負の値が「未設定」の席になっている。
     """
-    ages = {calculate_age(birth_date, shooting_date) for shooting_date in shooting_dates}
+    ages = {age_at(birth_date, as_taken(value)) for value in shooting_dates}
     if len(ages) != 1 or None in ages:
         return None
     age = ages.pop()
@@ -364,7 +375,7 @@ def format_event(folder: str, day: Optional[str], source_root: Optional[str] = N
     return f"{day} {label}" if day else f"（撮影日時不明） {label}"
 
 
-def persons_alive_on(persons: List[dict], day: Optional[str]) -> List[dict]:
+def persons_alive_on(persons: List[dict], day: Union[Taken, str, None]) -> List[dict]:
     """その日にまだ生まれていない人物を外す。
 
     **束をまとめて割り当てるときに、選べてはいけない人物を消すため。**
@@ -372,22 +383,23 @@ def persons_alive_on(persons: List[dict], day: Optional[str]) -> List[dict]:
     画面に出るのが人物名だけなので、**選べると気づけない。**
 
     誕生日が未設定の人物は**残す**（分からないことを理由に消さない）。
-    ``day`` が読めないときも全員残す。
+    ``day`` が読めないときも全員残す。フォルダ名から起こした区間（`Taken`）なら、
+    **区間の終わりまでに生まれていない**人物だけを外す。
     """
-    taken = parse_date(day)
+    taken = as_taken(day)
     if taken is None:
         return list(persons)
     alive = []
     for person in persons:
         born = parse_date(person.get("birth_date"))
-        if born is not None and born > taken:
+        if born is not None and born > taken.latest:
             continue
         alive.append(person)
     return alive
 
 
 def has_pre_birth_photo(
-    birth_date: Optional[str], shooting_dates: List[Optional[str]]
+    birth_date: Optional[str], shooting_dates: Sequence[Union[Taken, str, None]]
 ) -> bool:
     """選んだ顔に、**その人物が生まれる前の写真**が混ざっているか。
 
@@ -397,17 +409,20 @@ def has_pre_birth_photo(
     なっていた（2026-10-06 の測定）。
 
     **読めない日付は数えない**（判断は `dates.parse_date` に1つだけ）。
+    フォルダ名から起こした区間は、**区間の終わりが誕生日より前**のときだけ数える。
     """
     born = parse_date(birth_date)
     if born is None:
         return False
     return any(
-        taken is not None and taken < born
-        for taken in (parse_date(value) for value in shooting_dates)
+        taken is not None and taken.latest < born
+        for taken in (as_taken(value) for value in shooting_dates)
     )
 
 
-def _assign_label(index: int, person: dict, shooting_dates: List[Optional[str]]) -> str:
+def _assign_label(
+    index: int, person: dict, shooting_dates: Sequence[Union[Taken, str, None]]
+) -> str:
     """「人物に割り当て」の1行。**撮影時の年齢と、誕生前の警告を添える。**
 
     誰の顔かを決めるとき、いちばん効く手がかりが**撮影時の年齢**
@@ -451,11 +466,18 @@ def format_media_info(
     いるほうが効く。** まだ生まれていない人は出さない（`persons_alive_on`）。
     """
     lines = []
+    taken = taken_at(
+        media.get("shooting_date"), media.get("folder_date_from"), media.get("folder_date_to")
+    )
     shooting_date = _format_timestamp(media.get("shooting_date"))
     if shooting_date:
         lines.append(f"撮影日時: {shooting_date}")
     else:
         lines.append("撮影日時: 不明（EXIFなし）")
+        guessed = format_taken(taken)
+        if guessed:
+            # **推測だと分かる名前で出す。** EXIF の撮影日時と同じ行に入れない。
+            lines.append(f"撮影時期: {guessed}（フォルダ名から推測）")
         file_time = _format_timestamp(media.get("created_time"))
         if file_time:
             lines.append(f"ファイル日時: {file_time}")
@@ -467,14 +489,13 @@ def format_media_info(
     lines.append(f"ファイル: {path.name}")
 
     if person:
-        age = format_age(calculate_age(person.get("birth_date"), media.get("shooting_date")))
+        age = _taken_age(person.get("birth_date"), taken)
         if age:
             lines.append(f"{person.get('name') or '?'}: {age}")
     elif persons:
-        shot = media.get("shooting_date")
         ages = []
-        for candidate in persons_alive_on(persons, shot):
-            age = format_age(calculate_age(candidate.get("birth_date"), shot))
+        for candidate in persons_alive_on(persons, taken):
+            age = _taken_age(candidate.get("birth_date"), taken)
             if age:
                 ages.append(f"{candidate.get('name') or '?'} {age}")
         if ages:
@@ -867,7 +888,9 @@ class PersonDialog(QDialog):
         )
 
 
-def summarize_selection(face_count: int, shooting_dates: List[Optional[str]]) -> str:
+def summarize_selection(
+    face_count: int, shooting_dates: Sequence[Union[Taken, str, None]]
+) -> str:
     """年齢ダイアログに出す「何に入れるのか」の1〜2行。
 
     **1回の入力が選択中の全件に入る**のに、プレビューに出ているのは最後に
@@ -886,13 +909,14 @@ def summarize_selection(face_count: int, shooting_dates: List[Optional[str]]) ->
     """
     if face_count <= 1:
         return ""
-    readable = sorted(value for value in shooting_dates if parse_date(value))
-    unknown = face_count - len(readable)
+    takens = [taken for taken in (as_taken(value) for value in shooting_dates) if taken]
+    unknown = face_count - len(takens)
 
-    if not readable:
+    if not takens:
         return f"{face_count} 件すべてに同じ年齢を入れます（撮影日時は不明）。"
 
-    first, last = readable[0][:10], readable[-1][:10]
+    first = min(taken.earliest for taken in takens).isoformat()
+    last = max(taken.latest for taken in takens).isoformat()
     if first == last:
         lines = [f"{face_count} 件すべてに同じ年齢を入れます（撮影日時 {first}）。"]
     else:
@@ -901,6 +925,9 @@ def summarize_selection(face_count: int, shooting_dates: List[Optional[str]]) ->
             f"{face_count} 件すべてに同じ年齢を入れます。",
             f"撮影日時が {first} 〜 {last} にまたがっています。",
         ]
+    guessed = sum(1 for taken in takens if taken.inferred)
+    if guessed:
+        lines.append(f"うち {guessed} 件はフォルダ名から推測した撮影時期です。")
     if unknown:
         lines.append(f"うち {unknown} 件は撮影日時が分かりません。")
     return "\n".join(lines)
@@ -997,7 +1024,7 @@ CONFIRM_TOOLTIP_BLOCKED = (
 
 
 def face_age_label(
-    record: dict, birth_date: Optional[str], shooting_date: Optional[str]
+    record: dict, birth_date: Optional[str], shooting_date: Union[Taken, str, None]
 ) -> Optional[str]:
     """一覧の1件に出す年齢。**確定した年齢と、計算しただけの年齢を見分ける。**
 
@@ -1012,10 +1039,12 @@ def face_age_label(
 
     撮影日より前に生まれていなければ「誕生前」。**これは誤割り当ての強い
     手がかり**なので、負の数でも落とさずに出す。
+
+    EXIF が無くフォルダ名から起こした撮影時期で計算したものは `(7歳?)` と出す（#65）。
     """
     if record.get("age") is not None:
         return format_age(record["age"])
-    computed = format_age(calculate_age(birth_date, shooting_date))
+    computed = _taken_age(birth_date, as_taken(shooting_date))
     return None if computed is None else f"({computed})"
 
 
@@ -1558,7 +1587,7 @@ class EventClusterDialog(QDialog):
         person = self.person_box.currentData()
         if not face_ids or person is None:
             return
-        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
+        shooting_dates = db.taken_for_faces(self.connection, face_ids)
         dialog = FaceAgeDialog(
             self,
             summary=summarize_selection(len(face_ids), shooting_dates),
@@ -2489,7 +2518,7 @@ class MainWindow(QWidget):
 
         # 割り当て先の人物に、**選んだ顔の撮影時の年齢**を添える。
         shooting_dates = (
-            db.shooting_dates_for_faces(
+            db.taken_for_faces(
                 self.connection, [record["id"] for record in records]
             )
             if records
@@ -2965,7 +2994,7 @@ class MainWindow(QWidget):
         """
         if not records:
             return {}
-        shooting_dates = db.shooting_dates_by_face(
+        shooting_dates = db.taken_by_face(
             self.connection, [record["id"] for record in records]
         )
         person = self._current_person()
@@ -3151,7 +3180,7 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "選択なし", "割り当てる顔を選択してください。")
             return
         # **まとめて選ぶのは、この割り当てのときがいちばん多い。**
-        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
+        shooting_dates = db.taken_for_faces(self.connection, face_ids)
         dialog = FaceAgeDialog(
             self,
             summary=summarize_selection(len(face_ids), shooting_dates),
@@ -3281,7 +3310,7 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if person is None or not face_ids:
             return
-        shooting_dates = db.shooting_dates_for_faces(self.connection, face_ids)
+        shooting_dates = db.taken_for_faces(self.connection, face_ids)
         dialog = FaceAgeDialog(
             self,
             summary=summarize_selection(len(face_ids), shooting_dates),

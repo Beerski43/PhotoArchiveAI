@@ -223,6 +223,17 @@ def _apply_addable_columns(connection: sqlite3.Connection, emit: Callable[[str],
             emit(f"{table} に {column} を追加しました（既存の行は未設定）。")
 
 
+def _fill_folder_dates(connection: sqlite3.Connection, emit: Callable[[str], None]) -> None:
+    """フォルダ名から撮影時期を起こして埋める（v6・#65）。**パスだけを読む。NFS に触れない。**
+
+    列を足しただけでは全行が NULL のままで、`scan` を流すまで推測した日付が
+    どこにも効かない。移行の中で埋めておく。
+    """
+    filled = db.refresh_folder_dates(connection)
+    if filled:
+        emit(f"フォルダ名から撮影時期を起こしました: Media {filled}件。")
+
+
 def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dict[str, Any]:
     """v2 以降のDBへ、足りない列を足すだけの移行。**何も破棄しない。**
 
@@ -253,6 +264,7 @@ def _add_missing_columns(database_path: str, emit: Callable[[str], None]) -> Dic
                 "（`db.ADDABLE_COLUMNS` に型を書けば足せます）"
             )
 
+        _fill_folder_dates(connection, emit)
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
         after = {
@@ -392,6 +404,7 @@ def migrate_database(
                 f"{db.describe_missing_columns(remaining)}"
             )
 
+        _fill_folder_dates(connection, emit)
         connection.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
         connection.commit()
     except Exception:

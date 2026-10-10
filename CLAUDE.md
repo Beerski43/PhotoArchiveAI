@@ -331,7 +331,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `scanner.py` | 走査・差分判定・顔検出の呼び出し・消えた行の削除 |
 | `face.py` | 顔検出(MediaPipe)と顔特徴量(ArcFace)。**矩形の正規化は `face_rect`、整列は `align_for_arcface` に集約** |
 | `reembed.py` | 保存済みサムネイルから特徴量だけを作り直す（`photoarchive reembed`） |
-| `dates.py` | **日付の読み取りと年齢の計算。** 「読める撮影日時か」の判断の正本 |
+| `dates.py` | **日付の読み取りと年齢の計算。** 「読める撮影日時か」の判断の正本。**フォルダ名から撮影時期を起こす読み方**（`folder_date_range`）もここだけ |
 | `scoring.py` | 笑顔・画質のスコア（FaceMesh）と、**家族写真としての良さ**（`select` の並び） |
 | `appearance.py` | **顔の見え方**（整列できるか・向き・鮮明さ）を保存済みサムネイルから測る |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
@@ -364,6 +364,10 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   しない（対抗馬としては使う）。
 - `Face.assign_rule`: 自動割り当てを付けた規則の版（`matcher.MATCH_RULE`）。
   **判定の規則を変えたら版を上げる。** `select` が古い判定の残りを知らせる。
+- `Media.folder_date_from` / `folder_date_to`: **フォルダ名から起こした撮影時期**
+  （月か年の区間・両端を含む。v6・#65）。**`shooting_date` に書き戻さない。**
+  両方を見るときは `dates.taken_at` で `Taken` にする。`scan` と `migrate` が
+  パスから書く（NFS は読まない）。
 
 ### 用語
 
@@ -451,6 +455,12 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   `TTTT-TT-TTTTT:TT:TT` が素通りした）。**`"TTTT-TT-TTTTT:TT:TT"[:10]` は
   10文字あるので、長さでは弾けない。** 並び順だけは SQL 側に写しが1つある
   （`db.SHOOTING_DATE_SORT_KEY`）。**片方だけ直さないこと。**
+- **フォルダ名から起こした撮影時期で、日まで主張しない。** 日付入りのフォルダ名は
+  **行事の初日**で撮影日ではない（日まで主張すると EXIF と 2,394 件食い違う。月までで
+  277 件）。年齢は区間の両端で同じときだけ決まる（`dates.age_at`）。**手本の年齢
+  （閾値の上限）には使わない** — 使うと正しい自動割り当てが 125 件外れた（利用者が
+  誕生前の除外だけに使うと決めた）。読み方を変えたら `scripts/measure_folder_dates.py`
+  で EXIF と突き合わせ直す
 - **`db.assign_faces` の `age` は `KEEP_AGE` が既定。** `None` は
   「未設定に戻す」という指示であって「触らない」ではない。
   **`db.update_person` の `birth_date`（`KEEP_BIRTH_DATE`）も同じ。**
