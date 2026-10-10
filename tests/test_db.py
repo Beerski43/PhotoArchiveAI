@@ -1,8 +1,10 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from photoarchive_ai import db
+from photoarchive_ai.dates import Taken
 
 
 def _media_record(path="2025/01/test.jpg", file_hash="dummyhash"):
@@ -254,16 +256,16 @@ def test_shooting_dates_come_back_one_per_face(tmp_path: Path):
             )
         connection.commit()
 
-        dates = db.shooting_dates_for_faces(connection, face_ids)
+        dates = db.taken_for_faces(connection, face_ids)
 
         assert len(dates) == len(face_ids)
-        # 撮影日時の無い顔は None として残る
-        assert None in dates
         # 同じ日時の顔が2件あれば2件とも残る（DISTINCT で潰さない）
-        assert dates.count("2017-12-16T18:46:32") == 2
-        # 壊れた値もそのまま返す（読めるかの判断は gui.parse_date の1か所）
-        assert "0000-00-00T00:00:00" in dates
-        assert db.shooting_dates_for_faces(connection, []) == []
+        shot = Taken(date(2017, 12, 16), date(2017, 12, 16), inferred=False)
+        assert dates.count(shot) == 2
+        # 撮影日時の無い顔と壊れた値の顔は None として残る（`/photos/` は
+        # 年のフォルダが無いので、フォルダ名からも起こせない）。並びは最後
+        assert dates[2:] == [None, None]
+        assert db.taken_for_faces(connection, []) == []
     finally:
         connection.close()
 
@@ -662,7 +664,7 @@ def test_face_paths_reads_more_faces_than_the_sqlite_variable_limit(tmp_path: Pa
 def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
     """一覧の1件ずつに年齢を出すには、**どの顔の撮影日時かが引ける**必要がある。
 
-    `shooting_dates_for_faces` は昇順に並べた値だけを返すので、まとめて年齢を
+    `taken_for_faces` は並べた値だけを返すので、まとめて年齢を
     入れるときの範囲表示には足りるが、1件ずつの表示には使えない。
     """
     connection = db.ensure_database(str(tmp_path / "test.db"))
@@ -672,6 +674,10 @@ def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
             connection,
             {**_media_record("2025/01/b.jpg", "hash-b"), "shooting_date": None},
         )
+        unknown = db.save_media(
+            connection,
+            {**_media_record("misc/c.jpg", "hash-c"), "shooting_date": None},
+        )
         face_ids = [
             db.add_face(
                 connection,
@@ -680,18 +686,20 @@ def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
                 embedding=None,
                 embed_version=db.embedding_model.ACTIVE.version,
             )
-            for media_id in (dated, undated)
+            for media_id in (dated, undated, unknown)
         ]
         connection.commit()
 
-        found = db.shooting_dates_by_face(connection, face_ids)
+        found = db.taken_by_face(connection, face_ids)
 
-        assert found[face_ids[0]] == "2025-01-01"
-        # **撮影日時の無い顔を落とさない。** 落とすと、呼び出し側から
+        assert found[face_ids[0]] == Taken(date(2025, 1, 1), date(2025, 1, 1), inferred=False)
+        # EXIF が無ければフォルダ名（`2025/01/`）から起こした区間（#65）
+        assert found[face_ids[1]] == Taken(date(2025, 1, 1), date(2025, 1, 31), inferred=True)
+        # **撮影時期の分からない顔を落とさない。** 落とすと、呼び出し側から
         # 「分からない」が消えて、別の写真の年齢が黙って入る。
-        assert face_ids[1] in found
-        assert found[face_ids[1]] is None
-        assert db.shooting_dates_by_face(connection, []) == {}
+        assert face_ids[2] in found
+        assert found[face_ids[2]] is None
+        assert db.taken_by_face(connection, []) == {}
     finally:
         connection.close()
 

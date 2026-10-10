@@ -11,12 +11,12 @@
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 
 from . import db, embedding
-from .dates import calculate_age
+from .dates import Taken, age_at, as_taken
 from .scoring import distance_to_similarity
 
 logger = logging.getLogger("photoarchive.matcher")
@@ -51,7 +51,10 @@ DEFAULT_MARGIN = embedding.ACTIVE.margin
 #: - ``aligned-age/2``（2026-10-10・PR #70 のレビュー指摘2）: 年齢の上限を
 #:   「勝った人物の使える手本のうち、どれか1件が自分の上限以内なら受け入れる」に
 #:   変えた（以前は最も近い1件の上限だけで判定していた）
-MATCH_RULE = "aligned-age/2"
+#: - ``aligned-age/3``（2026-10-10・#65）: EXIF の無い写真でも、フォルダ名から
+#:   起こした撮影時期の**終わりまでに生まれていない**人物を候補から外す
+#:   （手本の年齢には使わない。実データの複製で自動割り当て +2 件）
+MATCH_RULE = "aligned-age/3"
 
 #: 読み出しの塊の大きさは db 側に持つ。二重定義にすると片方だけずれる。
 CHUNK_SIZE = db.MATCH_CHUNK_SIZE
@@ -74,7 +77,7 @@ def _distances(
 def _persons_alive_at(
     person_ids: np.ndarray,
     birth_dates: Dict[int, Optional[str]],
-    shooting_date: Optional[str],
+    taken: Union[Taken, str, None],
 ) -> np.ndarray:
     """その写真の時点で**生まれている**人物だけを残す真偽マスク。
 
@@ -89,19 +92,24 @@ def _persons_alive_at(
 
     判定しないのは次の2つ。**分からないものを弾かない。**
 
-    - **撮影日時が読めない**（実データの約16%。壊れた値も含む）
+    - **撮影時期が分からない**（EXIF もフォルダ名も読めない。壊れた値も含む）
     - **誕生日が未登録**（任意の項目）
 
-    読めるかどうかの判断は `dates.calculate_age` 越しに
+    EXIF が無ければ**フォルダ名から起こした区間**で見る（#65）。外すのは
+    **区間の終わりまでに生まれていない**ときだけ（`dates.age_at`）。区間の途中で
+    生まれたなら分からないので外さない。
+
+    読めるかどうかの判断は `dates.age_at` 越しに
     `dates.parse_date` へ預ける。**ここに日付の判定を書かない**
     （`0000-00-00` と `TTTT-TT-TTTTT:TT:TT` でこのリポジトリは2度壊れている。
     CLAUDE.md §8）。
     """
     alive = np.ones(person_ids.shape[0], dtype=bool)
-    if shooting_date is None:
+    taken = as_taken(taken)
+    if taken is None:
         return alive
     for person_id in set(person_ids.tolist()):
-        age = calculate_age(birth_dates.get(int(person_id)), shooting_date)
+        age = age_at(birth_dates.get(int(person_id)), taken)
         if age is not None and age < 0:
             alive[person_ids == person_id] = False
     return alive
@@ -305,15 +313,13 @@ def match_faces(
     for ids, candidates in db.iter_unassigned_embeddings(
         connection, CHUNK_SIZE, include_auto=include_auto
     ):
-        shooting_dates = db.shooting_dates_by_face(connection, ids.tolist())
+        takens = db.taken_by_face(connection, ids.tolist())
         distances = _distances(candidates, teachers, metric)
         for row_index in range(distances.shape[0]):
-            shooting_date = shooting_dates.get(int(ids[row_index]))
-            if shooting_date not in alive_cache:
-                alive_cache[shooting_date] = _persons_alive_at(
-                    person_ids, birth_dates, shooting_date
-                )
-            alive = alive_cache[shooting_date]
+            taken = takens.get(int(ids[row_index]))
+            if taken not in alive_cache:
+                alive_cache[taken] = _persons_alive_at(person_ids, birth_dates, taken)
+            alive = alive_cache[taken]
             denied = _persons_not_rejected(
                 person_ids, rejections.get(int(ids[row_index]))
             )

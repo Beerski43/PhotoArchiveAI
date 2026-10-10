@@ -33,9 +33,9 @@ import numpy as np
 # いくつもあり（`encode_embedding` / `add_face`）、同名だと関数の中で
 # module が見えなくなる。将来そこでモデルの記述を使おうとして踏む。
 from . import embedding as embedding_model
-from .dates import calculate_age, parse_date
+from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -143,7 +143,14 @@ SCHEMA = [
     "shooting_date TEXT,"
     "face_count INTEGER,"
     "face_scanned_at TEXT,"
-    "detector_version TEXT"
+    "detector_version TEXT,"
+    # **フォルダ名から起こした撮影時期**（v6・#65）。`YYYY-MM-DD` の区間で、
+    # 両端を含む。起こせなければ NULL。**`shooting_date` には書き戻さない**
+    # （EXIF 由来と推測を混ぜると、どちらなのか二度と分からなくなる）。
+    # 読み方は `dates.folder_date_range` に1つだけある。ここはその出力の保存先で、
+    # `save_media` と `refresh_folder_dates` が書く。
+    "folder_date_from TEXT,"
+    "folder_date_to TEXT"
     ")",
     "CREATE TABLE IF NOT EXISTS Person ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -365,6 +372,8 @@ ADDABLE_COLUMNS = {
     ("Face", "yaw"): "REAL",
     ("Face", "sharpness"): "REAL",
     ("Face", "assign_rule"): "TEXT",
+    ("Media", "folder_date_from"): "TEXT",
+    ("Media", "folder_date_to"): "TEXT",
 }
 
 
@@ -472,7 +481,50 @@ _MEDIA_SCAN_COLUMNS = (
     "face_scanned_at",
     "detector_version",
 )
-_MEDIA_WRITE_COLUMNS = ("path",) + _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS
+# パスから決まる列。**呼び出し側からは受け取らず、ここで起こす**（`_folder_dates`）。
+_MEDIA_PATH_COLUMNS = (
+    "folder_date_from",
+    "folder_date_to",
+)
+_MEDIA_WRITE_COLUMNS = (
+    ("path",) + _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS + _MEDIA_PATH_COLUMNS
+)
+
+
+def _folder_dates(path: str) -> Tuple[Optional[str], Optional[str]]:
+    """パスのフォルダ名から起こした撮影時期を、列に入れる形で返す。"""
+    found = folder_date_range(path)
+    if found is None:
+        return None, None
+    return found[0].isoformat(), found[1].isoformat()
+
+
+def refresh_folder_dates(connection: sqlite3.Connection) -> int:
+    """全メディアの `folder_date_from` / `folder_date_to` をパスから起こし直す。**変えた行数を返す。**
+
+    パスしか読まないので **NFS には触れない**（実データ 70,297 件で約1秒・2026-10-10）。
+    `migrate` が列を足したあとと、`scan` の終わりに呼ぶ。**読み方
+    （`dates.folder_date_range`）を変えたとき、古い区間が残らないようにするため。**
+    差分スキャンは変わっていないファイルを書き直さないので、`save_media` だけでは
+    入れ替わらない。
+
+    **確定（commit）は呼び出し側に任せる。** 移行は版を刻むまでを1つの取引にして
+    いるので、途中で確定するとその順序が崩れる（PR #72 のレビュー指摘5）。
+    """
+    rows = connection.execute(
+        "SELECT id, path, folder_date_from, folder_date_to FROM Media"
+    ).fetchall()
+    updates = []
+    for row in rows:
+        fresh = _folder_dates(row[1])
+        if fresh != (row[2], row[3]):
+            updates.append(fresh + (row[0],))
+    if updates:
+        connection.executemany(
+            "UPDATE Media SET folder_date_from = ?, folder_date_to = ? WHERE id = ?",
+            updates,
+        )
+    return len(updates)
 
 
 def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
@@ -488,7 +540,12 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
     ハッシュが同じなら再び書き戻されないので、これが恒久的に続く。
     このときは ``face_count`` などの検出状態を触らない。触ると検出済みの
     メディアが未スキャンに戻ってしまう。
+
+    ``folder_date_from`` / ``folder_date_to`` は受け取らず、**パスから起こして書く**
+    （`dates.folder_date_range`）。
     """
+    media = dict(media)
+    media["folder_date_from"], media["folder_date_to"] = _folder_dates(media["path"])
     cursor = connection.cursor()
     row = cursor.execute(
         "SELECT id, file_hash FROM Media WHERE path = ?",
@@ -505,9 +562,9 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
         return cursor.lastrowid
 
     if row["file_hash"] != media["file_hash"]:
-        columns = _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS
+        columns = _MEDIA_FILE_COLUMNS + _MEDIA_SCAN_COLUMNS + _MEDIA_PATH_COLUMNS
     else:
-        columns = _MEDIA_FILE_COLUMNS
+        columns = _MEDIA_FILE_COLUMNS + _MEDIA_PATH_COLUMNS
     assignments = ",".join(f"{column}=?" for column in columns)
     cursor.execute(
         f"UPDATE Media SET {assignments} WHERE path = ?",
@@ -1021,33 +1078,35 @@ def face_paths(
     return found
 
 
-def shooting_dates_by_face(
+def taken_by_face(
     connection: sqlite3.Connection, face_ids: Sequence[int]
-) -> Dict[int, Optional[str]]:
-    """顔 id ごとの撮影日時を、**id で引ける形**で返す。
+) -> Dict[int, Optional[Taken]]:
+    """顔 id ごとの撮影時期（`dates.Taken`）を、**id で引ける形**で返す。
 
-    `shooting_dates_for_faces` との違いは引けること。あちらは昇順に並べた値だけを
-    返すので「まとめて年齢を入れる範囲」を見せるのには足りるが、**一覧の1件ずつに
+    `taken_for_faces` との違いは引けること。あちらは並べた値だけを返すので
+    「まとめて年齢を入れる範囲」を見せるのには足りるが、**一覧の1件ずつに
     年齢を出すにはどの顔のものか分からないと使えない。**
 
-    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
-    そのまま返す）。**判断は `dates.parse_date` の1か所に持たせてある**
-    （CLAUDE.md §8）。撮影日時が無い顔は ``None`` が入る。
+    EXIF の撮影日時が読めればその日、読めなければ**フォルダ名から起こした区間**
+    （`Media.folder_date_from` / `folder_date_to`・#65）。どちらも無い顔は ``None``。
+    **読めるかどうかの判断は `dates.taken_at` に預ける**（CLAUDE.md §8）。
     """
     if not face_ids:
         return {}
-    found: Dict[int, Optional[str]] = {}
+    found: Dict[int, Optional[Taken]] = {}
     chunk = 500
     for start in range(0, len(face_ids), chunk):
         part = list(face_ids[start : start + chunk])
         placeholders = ",".join("?" for _ in part)
         rows = connection.execute(
-            "SELECT f.id AS face_id, m.shooting_date AS shooting_date FROM Face f"
-            f" JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
+            "SELECT f.id AS face_id, m.shooting_date, m.folder_date_from, m.folder_date_to"
+            f" FROM Face f JOIN Media m ON m.id = f.media_id WHERE f.id IN ({placeholders})",
             tuple(part),
         ).fetchall()
         for row in rows:
-            found[int(row["face_id"])] = row["shooting_date"]
+            found[int(row["face_id"])] = taken_at(
+                row["shooting_date"], row["folder_date_from"], row["folder_date_to"]
+            )
     return found
 
 
@@ -1137,7 +1196,10 @@ def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
     **SQL 側に年齢の計算を持ち込まずに済む**（日付の判断は `dates.parse_date` の
     1か所にある。CLAUDE.md §8）。
 
-    2月29日生まれで、ずらした先に29日が無い年は28日に寄せる。
+    2月29日生まれで、ずらした先に29日が無い年は**3月1日**にする。`dates.age_at` は
+    閏年でない年の2月28日をまだ上がる前と数えるので、**窓の端もそこに合わせる**
+    （28日に寄せていたため、2月28日に撮った写真が画面では0歳、絞り込みでは1歳に
+    なっていた。PR #72 のレビュー指摘4）。
     """
     base = parse_date(birth_date)
     if base is None:
@@ -1145,7 +1207,34 @@ def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
     try:
         return base.replace(year=base.year + years).isoformat()
     except ValueError:
-        return base.replace(year=base.year + years, day=28).isoformat()
+        return base.replace(year=base.year + years, month=3, day=1).isoformat()
+
+
+def _folder_age_known(birth_date: str, params: List[Any]) -> Optional[str]:
+    """フォルダ名から起こした区間で、**年齢が1つに決まる**写真の条件（`Media` の列に対して）。
+
+    年齢が決まるのは、区間の途中に誕生日が来ないとき（`dates.age_at` と同じ規則。
+    **画面に出る年齢と、絞り込みが見る年齢を一致させる**）。もう1つ、区間の終わりまでに
+    生まれていないなら「誕生前」で決まる。
+
+    区間は必ず1つの暦年の中にある（`dates.folder_date_range` の作り）ので、
+    その年の誕生日（``YYYY`` ＋ 誕生日の ``-MM-DD``）が区間に入るかを見ればよい。
+    **SQL で年齢を計算しない**（日付の判断は `dates` に1つだけ）。文字列で比べるので、
+    2月29日生まれは閏年でない年の3月1日に1つ上がる（`dates.age_at` と同じ）。
+
+    誕生日が読めなければ ``None``。
+    """
+    born = parse_date(birth_date)
+    if born is None:
+        return None
+    anniversary = "(substr(folder_date_from, 1, 4) || ?)"
+    month_day = born.isoformat()[4:]
+    params.extend([month_day, month_day, born.isoformat()])
+    return (
+        "(folder_date_from IS NOT NULL AND"
+        f" (NOT (folder_date_from < {anniversary} AND {anniversary} <= folder_date_to)"
+        " OR folder_date_to < ?))"
+    )
 
 
 def _age_clause(
@@ -1173,6 +1262,10 @@ def _age_clause(
 
     計算のほうは**撮影日の範囲**に読み替える（`_birth_year_shift`）。
     年齢 ``a`` は「誕生日 + a年 以上、誕生日 + (a+1)年 未満」。
+
+    EXIF が無ければ**フォルダ名から起こした区間**で見る（#65）。区間が年齢の範囲に
+    まるごと入り、かつ年齢が1つに決まるときだけ当たる（`_folder_age_known`）。
+    区間の途中に誕生日がある写真は年齢を出せないので、「年齢不明」の側に入る。
     """
     if min_age is None and max_age is None:
         return None
@@ -1202,13 +1295,32 @@ def _age_clause(
             f"({prefix}age IS NULL AND {prefix}media_id IN"
             f" (SELECT id FROM Media WHERE {' AND '.join(window)}))"
         )
+        # EXIF が無く、フォルダ名から起こした区間で年齢が決まる顔（#65）。
+        known = _folder_age_known(birth_date, params)
+        if known is not None:
+            guessed = [f"{day} IS NULL", known]
+            if lower is not None:
+                guessed.append("folder_date_from >= ?")
+                params.append(lower)
+            if upper is not None:
+                guessed.append("folder_date_to < ?")
+                params.append(upper)
+            branches.append(
+                f"({prefix}age IS NULL AND {prefix}media_id IN"
+                f" (SELECT id FROM Media WHERE {' AND '.join(guessed)}))"
+            )
 
     if include_unknown_age:
         if birth_date:
-            # 誕生日はあるが、撮影日時が読めない顔。
+            # 誕生日はあるが、撮影時期から年齢が出せない顔（EXIF が読めず、
+            # フォルダ名の区間も無いか、区間の途中に誕生日がある）。
+            unknown = [f"{day} IS NULL"]
+            known = _folder_age_known(birth_date, params)
+            if known is not None:
+                unknown.append(f"NOT {known}")
             branches.append(
                 f"({prefix}age IS NULL AND {prefix}media_id IN"
-                f" (SELECT id FROM Media WHERE {day} IS NULL))"
+                f" (SELECT id FROM Media WHERE {' AND '.join(unknown)}))"
             )
         else:
             # 誕生日が無いので、`Face.age` の無い顔は1件も年齢を出せない。
@@ -1238,8 +1350,9 @@ def _face_filter(
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
     ``month_from`` / ``month_to`` は撮影年月の範囲（``"2015-08"`` 形式・**両端を含む**）。
-    片方だけでもよい。``undated_only`` は「**撮影日時が読めない顔だけ**」で、
-    範囲とは**排他**（読めない顔はどの範囲にも入らないため）。
+    片方だけでもよい。``undated_only`` は「**EXIF の撮影日時が読めない顔だけ**」を見る
+    指示（フォルダ名から推測した区間がある顔も入る）。**範囲とは別の問いなので
+    併用しない。** 推測した区間がまるごと入る顔は、範囲の側にも入る（#65）。
 
     年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
     実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、
@@ -1318,22 +1431,41 @@ def _face_filter(
     if undated_only:
         media_conditions.append(f"{month_expression()} IS NULL")
     else:
-        # **読めない撮影日時は、どの範囲にも入らない。** `month_expression` が
-        # NULL を返し、比較の結果も NULL になって行が落ちる。
-        # 見たいときは `undated_only` で明示する。
-        if month_from is not None:
-            media_conditions.append(f"{month_expression()} >= ?")
-            params.append(month_from)
-        if month_to is not None:
-            media_conditions.append(f"{month_expression()} <= ?")
-            params.append(month_to)
+        # **読めない撮影日時は、EXIF の比較では範囲に入らない。** `month_expression`
+        # が NULL を返し、比較の結果も NULL になって落ちる。代わりに
+        # **フォルダ名から起こした区間がまるごと範囲に入る**ときだけ当てる
+        # （#65。「2012年」までしか分からない写真は、10月だけを見たいときには
+        # 出さない）。区間も無い写真を見たいときは `undated_only` で明示する。
+        if month_from is not None or month_to is not None:
+            exif, guessed = [], [f"{month_expression()} IS NULL", "folder_date_from IS NOT NULL"]
+            exif_params: List[Any] = []
+            guessed_params: List[Any] = []
+            if month_from is not None:
+                exif.append(f"{month_expression()} >= ?")
+                exif_params.append(month_from)
+                guessed.append("substr(folder_date_from, 1, 7) >= ?")
+                guessed_params.append(month_from)
+            if month_to is not None:
+                exif.append(f"{month_expression()} <= ?")
+                exif_params.append(month_to)
+                guessed.append("substr(folder_date_to, 1, 7) <= ?")
+                guessed_params.append(month_to)
+            media_conditions.append(
+                f"(({' AND '.join(exif)}) OR ({' AND '.join(guessed)}))"
+            )
+            params.extend(exif_params + guessed_params)
     # **日付の判断は `dates.parse_date` に預ける**（`_birth_year_shift` と同じ。
     # CLAUDE.md §8）。0年ずらすと、読めた誕生日を `YYYY-MM-DD` にそろえるだけになる。
+    # EXIF が無ければフォルダ名の区間で見て、**区間の終わりまでに生まれていない**
+    # ときだけ外す（#65。区間の途中で生まれたなら分からないので残す）。
     birth = None if not born_by else _birth_year_shift(born_by, 0)
     if birth is not None:
         day = day_expression()
-        media_conditions.append(f"({day} IS NULL OR {day} >= ?)")
-        params.append(birth)
+        media_conditions.append(
+            f"({day} >= ? OR ({day} IS NULL AND"
+            " (folder_date_to IS NULL OR folder_date_to >= ?)))"
+        )
+        params.extend([birth, birth])
     if media_conditions:
         clauses.append(
             f"{prefix}media_id IN"
@@ -1344,33 +1476,27 @@ def _face_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
-def shooting_dates_for_faces(
+def taken_for_faces(
     connection: sqlite3.Connection, face_ids: Sequence[int]
-) -> List[Optional[str]]:
-    """選んだ顔**ごと**の撮影日時を、昇順で返す。**顔1件につき1件返す。**
+) -> List[Optional[Taken]]:
+    """選んだ顔**ごと**の撮影時期（`dates.Taken`）を返す。**顔1件につき1件返す。**
 
-    **年齢をまとめて入れるときに、撮影日時がまたがっていないかを見るため。**
+    **年齢をまとめて入れるときに、撮影時期がまたがっていないかを見るため。**
 
-    **`DISTINCT` で潰さない。撮影日時の無い顔を落とさない。** 潰すと
-    「撮影日時の分からない顔が混ざっている」ことが呼び出し側から消え、
-    **その顔にも別の写真から計算した年齢が黙って入る**（実データでは
-    `Media.shooting_date` が 15.8% 欠けている）。分からないことは
+    **潰さない。撮影時期の分からない顔を落とさない。** 潰すと
+    「撮影時期の分からない顔が混ざっている」ことが呼び出し側から消え、
+    **その顔にも別の写真から計算した年齢が黙って入る**。分からないことは
     ``None`` として伝え、捨てるかどうかは呼び出し側が決める。
 
-    読める日付かどうかはここでは判定しない（`0000-00-00` のような壊れた値も
-    そのまま返す）。**判断を SQL と Python に割らない**ためで、
-    `gui.parse_date` の1か所に持たせてある。
+    並びは早い順で、分からない顔（``None``）は最後。EXIF が読めなければ
+    フォルダ名から起こした区間を使う（`taken_by_face` と同じ）。
     """
-    if not face_ids:
-        return []
-    placeholders = ",".join("?" for _ in face_ids)
-    rows = connection.execute(
-        "SELECT m.shooting_date FROM Face f JOIN Media m ON m.id = f.media_id"
-        f" WHERE f.id IN ({placeholders})"
-        " ORDER BY m.shooting_date",
-        tuple(face_ids),
-    ).fetchall()
-    return [row[0] for row in rows]
+    found = taken_by_face(connection, face_ids)
+    values = [found.get(int(face_id)) for face_id in face_ids]
+    return sorted(
+        values,
+        key=lambda taken: (taken is None, taken.earliest if taken else None, taken.latest if taken else None),
+    )
 
 
 def list_faces(
@@ -1497,7 +1623,7 @@ def _ids_in_age_order(
     | その顔 | 並べる年齢 |
     |---|---|
     | `Face.age` が入っている | その値 |
-    | 入っていない | 誕生日と撮影日時から計算（`dates.calculate_age`） |
+    | 入っていない | 誕生日と撮影時期から計算（`dates.age_at`。EXIF が無ければフォルダ名の区間） |
     | どちらも出せない | **最後** |
 
     誕生日は ``birth_date`` が来ていればそれ（**人物を選んでいる画面**。
@@ -1519,23 +1645,23 @@ def _ids_in_age_order(
             for row in connection.execute("SELECT id, birth_date FROM Person")
         }
     rows = connection.execute(
-        "SELECT f.id, f.age, f.person_id, m.shooting_date"
+        "SELECT f.id, f.age, f.person_id, m.shooting_date, m.folder_date_from, m.folder_date_to"
         f" FROM Face f JOIN Media m ON m.id = f.media_id{where}",
         params,
     ).fetchall()
 
     def key(row) -> tuple:
         age = row[1]
+        taken = taken_at(row[3], row[4], row[5])
         if age is None:
             owner_birth = birth_date or births.get(row[2])
-            age = calculate_age(owner_birth, row[3])
-        taken = parse_date(row[3])
+            age = age_at(owner_birth, taken)
         sign = -1 if descending else 1
         return (
             age is None,
             sign * age if age is not None else 0,
             taken is None,
-            sign * taken.toordinal() if taken is not None else 0,
+            sign * taken.earliest.toordinal() if taken is not None else 0,
             int(row[0]),
         )
 
@@ -2018,6 +2144,12 @@ def _teacher_age(row) -> float:
     """手本の撮影時の年齢。**確定値を優先**し、無ければ計算する。分からなければ NaN。
 
     日付の判断は `dates` に預ける（CLAUDE.md §8。ここで日付を読まない）。
+
+    **フォルダ名から起こした撮影時期は使わない**（#65・利用者が決定）。使うと
+    日付の無かった手本 661 件に年齢が付き、8歳以下と分かった手本の上限が締まって、
+    **正しい自動割り当てが 125 件外れた**（付いたのは 54 件。2026-10-10・実データの
+    複製）。推測した日付を `match` で使うのは、誕生前の人物を外すところだけ
+    （`matcher._persons_alive_at`）。
     """
     if row["age"] is not None:
         return float(row["age"])

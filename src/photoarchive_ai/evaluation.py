@@ -139,7 +139,7 @@ def evaluate_match(
     birth_dates = {
         int(person["id"]): person["birth_date"] for person in db.list_persons(connection)
     }
-    shooting_dates = db.shooting_dates_by_face(connection, faces.face_ids.tolist())
+    takens = db.taken_by_face(connection, faces.face_ids.tolist())
     alive_cache: Dict[Any, np.ndarray] = {}
     # 「この人物ではない」の記録も `match` と同じく効かせる。
     rejections = db.load_person_rejections(connection)
@@ -169,12 +169,10 @@ def evaluate_match(
             # 誤りを読むときの要で、これが閾値よりずっと大きければ
             # 「その顔に似た手本が無い」＝閾値ではなく手本の問題だと分かる。
             own_distance = float(row[person_ids == truth].min())
-            shooting_date = shooting_dates.get(int(faces.face_ids[index]))
-            if shooting_date not in alive_cache:
-                alive_cache[shooting_date] = _persons_alive_at(
-                    person_ids, birth_dates, shooting_date
-                )
-            alive = alive_cache[shooting_date]
+            taken = takens.get(int(faces.face_ids[index]))
+            if taken not in alive_cache:
+                alive_cache[taken] = _persons_alive_at(person_ids, birth_dates, taken)
+            alive = alive_cache[taken]
             denied = _persons_not_rejected(
                 person_ids, rejections.get(int(faces.face_ids[index]))
             )
