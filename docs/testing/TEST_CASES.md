@@ -659,7 +659,7 @@
 | `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
 | `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
-### `test_converter.py` — HEIC → JPEG（10件）
+### `test_converter.py` — HEIC → JPEG（14件）
 
 | テスト | 内容 |
 |---|---|
@@ -670,9 +670,29 @@
 | `test_convert_reports_progress_for_every_source` | 進捗 |
 | `test_convert_raises_for_a_missing_directory` | 無いディレクトリ |
 | `test_convert_asks_before_continuing_when_the_output_cannot_be_written` | 書き込み失敗時の確認 |
-| `test_fingerprint_matches_the_same_picture_and_differs_for_another` | 同一画像の判定 |
+| `test_difference_is_small_for_the_same_picture_and_large_for_another` | 同一画像の判定 |
+| `test_same_image_requires_the_same_dimensions` | 寸法が違えば別の写真（#79） |
+| `test_convert_skips_a_textured_photo_on_the_second_run` | 模様のある写真で2回目以降に `_1.jpg` を作らない。単色では JPEG の画素ずれが起きず見逃していた（#79） |
+| `test_convert_numbers_the_output_when_a_similar_but_different_photo_exists` | 模様の違う写真なら連番（#79） |
+| `test_the_measurement_separates_the_same_photo_from_the_next_one` | 閾値を測るスクリプト（`scripts/measure_heic_duplicates.py`）の集計 |
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
+
+### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（11件）
+
+| テスト | 内容 |
+|---|---|
+| `test_convert_keeps_the_shooting_date` | 変換が撮影日時を引き継ぐ（PR #80 のレビュー指摘1） |
+| `test_convert_does_not_rotate_twice` | 回転を求める HEIC でも二重に回らない |
+| `test_insert_exif_leaves_every_other_byte_alone` | EXIF の差し込みは APP1 を足すだけで、画素は同じ |
+| `test_insert_exif_refuses_a_second_exif_and_a_bad_payload` | 二重の差し込みと壊れた EXIF を拒む |
+| `test_restore_counts_without_writing_by_default` | 修復は既定では数えるだけ |
+| `test_restore_keeps_the_assignment_through_the_next_scan` | **修復のあと scan しても顔が検出し直されず、手動の割り当てが残る** |
+| `test_without_updating_the_database_the_scan_would_discard_the_assignment` | 対照: DB を合わせないと scan が割り当てを消す（修復が DB を書く理由） |
+| `test_restore_leaves_a_file_changed_since_the_scan` | scan の後に変わったファイルは触らない |
+| `test_restore_leaves_a_jpeg_that_is_not_the_same_photo` | 同名でも別の写真なら撮影日時を付けない |
+| `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
+| `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
 ### `test_cli_commands.py` — サブコマンドの配線（28件）
 

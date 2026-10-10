@@ -58,19 +58,43 @@ def write_video(path: Path, colors=((255, 0, 0), (0, 255, 0)), size=(160, 120)) 
     return path
 
 
-def write_heic(path: Path, color=(200, 120, 90), size=(120, 120)) -> Path:
+def textured_array(size=(320, 240), seed=0) -> np.ndarray:
+    """写真に近い、模様のある画像。
+
+    単色の画像は JPEG にしても画素が変わらないので、非可逆圧縮で
+    画素がずれることを前提にした処理を試せない（#79）。
+    """
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[0 : size[1], 0 : size[0]]
+    array = np.stack(
+        [
+            128 + 100 * np.sin(x / (9 + 7 * rng.random()) + rng.random() * 6),
+            128 + 100 * np.cos(y / (11 + 7 * rng.random()) + rng.random() * 6),
+            128 + 60 * np.sin((x + y) / (5 + 5 * rng.random())),
+        ],
+        axis=-1,
+    )
+    array += rng.normal(0, 12, array.shape)
+    return np.clip(array, 0, 255).astype(np.uint8)
+
+
+def write_heic(path: Path, color=(200, 120, 90), size=(120, 120), texture_seed=None) -> Path:
     """HEIC(HEIF) 画像を書き出す。
 
     encoder が無い環境ではテストをスキップする。pillow-heif は
     requirements に入っているが、ビルドによっては読み込み専用のため。
+    `texture_seed` を渡すと単色ではなく模様のある画像になる。
     """
     import pytest
     from pillow_heif import register_heif_opener
 
     register_heif_opener()
     path.parent.mkdir(parents=True, exist_ok=True)
-    array = np.zeros((size[1], size[0], 3), dtype=np.uint8)
-    array[:, :] = color
+    if texture_seed is None:
+        array = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+        array[:, :] = color
+    else:
+        array = textured_array(size, texture_seed)
     try:
         Image.fromarray(array).save(path, format="HEIF", quality=90)
     except Exception as error:  # pragma: no cover - 環境依存
