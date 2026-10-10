@@ -70,6 +70,7 @@
 | `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
 | `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて除外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
 | `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
+| `test_source_roots.py::test_select_copies_a_photo_outside_every_root_by_its_name` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
 ---
@@ -550,16 +551,16 @@
 | `test_the_preview_uses_the_last_selected_face` | 複数選択では最後の1件 |
 | `test_the_shooting_date_is_shown_when_the_photo_has_one` | 撮影日時を出す（**年齢はこれを見て入れる**） |
 | `test_a_photo_without_exif_says_so_and_falls_back_to_the_file_time` | **ファイルの日時を撮影日時として出さない**（コピーで変わる） |
-| `test_the_folder_is_shown_relative_to_the_source_root` | フォルダは `source_root` からの相対。日付の手がかりになる |
-| `test_a_photo_outside_the_source_root_keeps_its_full_path` | `source_root` の外は絶対パスのまま |
-| `test_the_folder_is_shown_without_a_source_root` | `source_root` が無くても動く |
+| `test_the_folder_is_shown_relative_to_the_root` | フォルダは root からの相対。日付の手がかりになる |
+| `test_a_photo_outside_every_root_keeps_its_full_path` | root の外は絶対パスのまま |
+| `test_the_folder_is_shown_without_a_root` | root が無くても動く |
 | `test_selecting_a_face_fills_the_information_under_the_preview` | 顔を選ぶと情報欄が埋まる |
 | `test_the_information_is_still_shown_when_the_original_is_gone` | **元写真が開けないときこそ出す**（出どころはDB） |
 | `test_a_broken_exif_date_is_treated_as_missing` | `0000:00:00` を書くカメラがある（実データ55件）。持っていない扱いにしてファイル日時へ落とす |
 | `test_another_shape_of_broken_exif_is_also_treated_as_missing` | **先頭の文字だけを見て弾かない。** `TTTT-TT-TTTTT:TT:TT` が素通りして画面に出ていた（実データ67件） |
-| `test_a_photo_directly_under_the_source_root_says_so` | `フォルダ: .` では読めない |
-| `test_a_relative_source_root_is_anchored_to_the_settings_file` | **起動した場所で表示が変わらない**（相対の起点は設定ファイル） |
-| `test_an_absolute_source_root_is_left_alone` | 絶対パスと未設定は触らない |
+| `test_a_photo_directly_under_a_root_says_so` | `フォルダ: .` では読めない |
+| `test_a_relative_root_is_anchored_to_the_settings_file` | **起動した場所で表示が変わらない**（相対の起点は設定ファイル） |
+| `test_an_absolute_root_is_left_alone` | 絶対パスと未設定は触らない |
 | `test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded` | デコード失敗で上下が別の写真にならない |
 | `test_the_age_dialog_says_how_many_faces_get_the_same_age` | **1回の入力が全件に入る**ことと、撮影日時のまたがりを知らせる |
 | `test_the_summary_reaches_the_age_dialog` | 要約がダイアログに載る |
@@ -628,8 +629,8 @@
 | `test_duplicate_groups_fall_back_to_the_path_when_there_is_no_hash` | ハッシュが無いときはパスで分ける |
 | `test_media_year_prefers_the_shooting_date_and_falls_back_to_created_time` | 年の決め方 |
 | `test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates` | 読めない日付は範囲外 |
-| `test_copy_keeps_the_layout_below_the_source_root` | 相対パスを再現する |
-| `test_copy_flattens_media_that_lives_outside_the_source_root` | 基準の外はファイル名だけにする |
+| `test_copy_keeps_the_layout_below_the_root` | 相対パスを再現する |
+| `test_copy_flattens_media_that_lives_outside_the_root` | 基準の外はファイル名だけにする |
 | `test_copy_skips_entries_without_a_path_and_reports_progress` | パスが無い行を飛ばす |
 | `test_copy_makes_room_when_the_name_is_taken` | 名前の衝突で連番を付ける |
 
@@ -673,7 +674,7 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
-### `test_cli_commands.py` — サブコマンドの配線（15件）
+### `test_cli_commands.py` — サブコマンドの配線（28件）
 
 | テスト | 内容 |
 |---|---|
@@ -682,13 +683,18 @@
 | `test_init_db_creates_a_usable_database` | `init-db` |
 | `test_migrate_reports_that_a_fresh_database_is_current` | `migrate` は移行済みDBに何もしない |
 | `test_scan_arguments_reach_the_scanner` | `scan` の全オプションが下へ届く |
+| `test_scan_takes_several_sources_in_the_given_order` | **`--source` は何度でも書け、書いた順に root ごとに走査する**（#24） |
+| `test_scan_reads_the_source_roots_from_the_settings` | 設定の `source_roots`（配列） |
+| `test_scan_refuses_nested_sources_before_touching_anything` | 入れ子の root は何も走査せずに止める |
+| `test_scan_falls_back_to_the_roots_recorded_in_the_database` | **設定を失っても DB に記録された root で走査する**（#24 の動機） |
+| `test_scan_without_any_source_names_the_setting_to_write` | root がどこにも無ければ `source_roots` を書くよう言う |
 | `test_match_arguments_reach_the_matcher` | `match` の全オプションが下へ届く |
 | `test_the_database_path_falls_back_to_the_settings_file` | 設定ファイルへのフォールバック |
 | `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 
-### `test_config.py` — 設定の探索（22件）
+### `test_config.py` — 設定の探索（25件）
 
 **設定は YAML だけを読む**（#27）。古い `app_settings.json` は読まずに WARNING で変換を
 促し、CLI は「DB のパスが要る」ではなくそのことを言う。環境変数が JSON を指していても
@@ -700,6 +706,28 @@ GUI も古い JSON のことを言い、止める文は WARNING の案内を繰�
 editable install のときだけ出すこと（通常のインストールでは `REPO_ROOT` が
 `lib/python3.x` を指すので、**`REPO_ROOT` 自身を見ても判別できない。
 モジュールの位置で判断する**）。同じ場所を2度並べないこと。
+検出元は `source_roots`（配列。1つなら文字列でもよい。**古い `source_root` は読まずに WARNING**（PR #75 で利用者が決めた）。#24）。
+
+### `test_source_roots.py` — 検出元の root を複数持つ（19件。#24）
+
+| テスト | 内容 |
+|---|---|
+| `test_two_roots_are_both_scanned_and_recorded` | 2つの root を走査し、両方を `ScanRoot` に記録する |
+| `test_a_missing_root_does_not_make_the_other_roots_media_prunable` | **片方の root だけ走査しても、もう片方のメディアは消えない** |
+| `test_the_safety_valve_still_works_per_root` | 2割の安全弁は root ごとに効く |
+| `test_nested_roots_are_refused` / `test_the_same_root_written_twice_is_scanned_once` | 入れ子は止める・重複は1回 |
+| `test_a_root_given_through_a_symlink_is_recorded_by_its_real_path` | 記録は実体のパス（`Media.path` とそろえる） |
+| `test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root` | 年フォルダだけの走査は root にしない |
+| `test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything` | **記録済みの root を含む親は走査する前に止める**（PR #75 のレビュー (a)・利用者の決定。以前は記録が親だけに置き換わって戻らなかった） |
+| `test_a_year_folder_inside_a_recorded_root_is_still_scanned` | 止めるのは親だけ。年フォルダは通す |
+| `test_recording_an_outer_root_never_drops_the_inner_records` / `test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root` | 記録は消さない（両方残れば入れ子の検査で止まる）。`/mnt/Photo2` は `/mnt/Photo` の内側ではない |
+| `test_a_root_that_does_not_exist_stops_before_any_root_is_scanned` | **無い root があれば、どの root も走査せずに止める**（PR #75 のレビュー指摘1） |
+| `test_an_aborted_scan_does_not_record_its_root` | 中断した走査は root を書かない |
+| `test_a_version_6_database_gains_the_root_table_and_keeps_its_faces` | **v6 → v7 で顔が減らない。root は推定しない** |
+| `test_with_several_roots_the_folder_is_prefixed_with_the_root_name` / `test_with_one_root_the_folder_is_shown_as_before` | GUI の表示。root が複数なら root の名前を付ける |
+| `test_the_window_falls_back_to_the_roots_recorded_in_the_database` | 設定に root が無ければ GUI も記録を使う |
+| `test_select_copies_relative_to_the_root_that_holds_each_photo` | `select` は含む root からの相対。同じ名前は連番 |
+| `test_select_copies_a_photo_outside_every_root_by_its_name` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
 
 ### `test_cli_progress.py` — 進捗表示（7件）
 

@@ -2,7 +2,7 @@ import os
 import shutil
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import yaml
 
@@ -236,10 +236,18 @@ def _free_path(destination: Path) -> Path:
 def copy_selected_media(
     selected_media: List[Dict[str, Any]],
     output_dir: str,
-    source_root: str,
+    source_roots: Union[str, Sequence[str]],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> int:
-    source_root_path = Path(source_root).resolve()
+    """選んだメディアをコピーする。コピー先は**それを含む root からの相対**（#24）。
+
+    root が複数でも、出力に root の名前は挟まない（年のフォルダが root をまたいで1つにまとまる）。
+    同じ相対パスがぶつかったら連番で避ける（`_free_path`）。どの root にも入らない
+    メディアはファイル名だけになる。相対パスで登録されたメディアは先頭の root から解く。
+    """
+    if isinstance(source_roots, (str, Path)):
+        source_roots = [source_roots]
+    root_paths = [Path(root).resolve() for root in source_roots]
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     copied = 0
@@ -249,17 +257,12 @@ def copy_selected_media(
         if path_value is None:
             continue
         source_path = Path(path_value)
-        if not source_path.is_absolute():
-            source_path = source_root_path / source_path
+        if not source_path.is_absolute() and root_paths:
+            source_path = root_paths[0] / source_path
         source_path = source_path.resolve()
 
-        if source_root_path in source_path.parents or source_path == source_root_path:
-            try:
-                relative = source_path.relative_to(source_root_path)
-            except ValueError:
-                relative = source_path.name
-        else:
-            relative = source_path.name
+        containing = next((root for root in root_paths if root in source_path.parents), None)
+        relative = source_path.relative_to(containing) if containing else Path(source_path.name)
         destination = output_root.joinpath(relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination = _free_path(destination)

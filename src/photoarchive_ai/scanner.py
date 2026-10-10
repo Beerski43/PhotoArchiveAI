@@ -2,10 +2,11 @@
 
 ``scan`` の責務:
 
-1. 対象ディレクトリを再帰的に走査してファイルを ``Media`` に登録する
+1. 対象ディレクトリ（root。複数可・#24）を再帰的に走査してファイルを ``Media`` に登録する
 2. 同じ読み込みのついでに顔を検出し、顔画像・特徴量・スコアを ``Face`` に保存する
 3. 既に顔検出済みのメディアは再検出しない (差分スキャン)
-4. DBにあるのに実体が無くなったメディアの行を削除する
+4. DBにあるのに実体が無くなったメディアの行を削除する（root ごと）
+5. 走査し終えた root を ``ScanRoot`` に記録する（設定を失っても DB から戻せるように）
 
 人物への紐づけはここでは一切行わない。それは GUI での手動割り当てと
 ``match`` の仕事。
@@ -17,7 +18,7 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
 
 from PIL import ExifTags, Image
 
@@ -466,9 +467,94 @@ def scan_directory(
             db_connection, root, present_paths, force=force_prune
         )
 
+    # **走査し終えた root を記録する**（#24）。途中で中断したら書かない（上で例外になる）。
+    db.record_scan_root(db_connection, str(root))
+
     # **読み方を変えたときに古い区間を残さない。** 差分スキャンは変わっていない
     # ファイルを書き直さないので、ここで全件をパスから起こし直す（NFS は読まない）。
     db.refresh_folder_dates(db_connection)
     db_connection.commit()
 
     return summary
+
+
+def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
+    """root を絶対パスにそろえ、重複を落とす。**入れ子は止める。**
+
+    入れ子を許すと、親の走査が子の写真まで覆ったうえで、子をもう一度走査する。
+    それより**親を root にしてしまうこと自体が事故**（2026-10-02、共通の親で走査すると
+    他家の写真まで入った。#24 のコメント）なので、気づけるように止める。
+    """
+    normalized: List[Path] = []
+    for value in roots:
+        path = Path(value).expanduser().resolve()
+        # **どの root も走査する前に確かめる**（PR #75 のレビュー指摘1）。root ごとの走査の中で
+        # 見ると、前の root を（NFS で数十分）走査し終えてから指定ミスに気づくことになる。
+        # 中身の無いマウントポイントは今までどおり `ScanAborted`（ディレクトリはある）。
+        if not path.is_dir():
+            raise ValueError(
+                f"検出元のディレクトリがありません: {value}（指定かマウントを確かめてください）"
+            )
+        if path not in normalized:
+            normalized.append(path)
+    for outer in normalized:
+        for inner in normalized:
+            if outer != inner and outer in inner.parents:
+                raise ValueError(
+                    f"検出元のディレクトリが入れ子になっています: {inner} は {outer} の内側です。"
+                    " root はどちらか一方にしてください。"
+                )
+    return normalized
+
+
+def refuse_parents_of_recorded_roots(roots: Sequence[Path], recorded: Sequence[str]) -> None:
+    """**記録済みの root を内側に含む root は、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
+
+    親を走査するのは、root を思い出せずに共通の親（`${NFS_ROOT}`）を渡したときで、
+    他家の写真まで入る（2026-10-02）。入れ子の検査は親と子を同時に渡したときしか
+    止められないので、**記録と突き合わせて**単独の親も止める。走査させてから記録を
+    直すのではなく、取り込むこと自体を防ぐ。年フォルダ（root の内側）の走査は今までどおり通す。
+    """
+    for root in roots:
+        inside = [path for path in recorded if root in Path(path).parents]
+        if inside:
+            raise ScanAborted(
+                f"{root} は記録済みの root {', '.join(inside)} を内側に含みます。"
+                " 親のフォルダを root にすると、関係の無い写真まで取り込みます。"
+                " root は config/app_settings.yml の source_roots に書いた個々のフォルダにしてください。"
+            )
+
+
+def scan_directories(
+    source_dirs: Sequence[str],
+    db_connection,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    **options: Any,
+) -> Dict[str, Any]:
+    """複数の root を順に走査する（#24）。集計は足し合わせ、root ごとの内訳も返す。
+
+    **消えた行の削除と2割の安全弁は root ごと**（``scan_directory`` が自分の root の配下
+    だけを見る）。片方の root が未マウントでも、もう片方のメディアは削除候補にならない。
+    **1つの root で中断したら、残りの root は走査しない**（``ScanAborted`` をそのまま投げる）。
+    """
+    roots = normalize_source_roots(source_dirs)
+    if not roots:
+        raise ValueError("検出元のディレクトリが指定されていません。")
+    refuse_parents_of_recorded_roots(roots, db.list_scan_roots(db_connection))
+    total: Dict[str, Any] = {
+        "total_files": 0,
+        "processed": 0,
+        "skipped": 0,
+        "faces": 0,
+        "errors": 0,
+        "pruned": 0,
+        "media_ids": [],
+        "roots": [],
+    }
+    for root in roots:
+        summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
+        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned"):
+            total[key] += summary[key]
+        total["media_ids"].extend(summary["media_ids"])
+        total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})
+    return total

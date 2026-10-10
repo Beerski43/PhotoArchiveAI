@@ -71,9 +71,9 @@ ${HOME}/photoarchive-recovery/
 
 **最初、共通接頭辞から `${NFS_ROOT}` と推定して書いた。これは危険だった。**
 
-実データは**2つの根を `source_root` で切り替えて2回スキャン**して作られている。
+実データは**2つの root を `source_root` で切り替えて2回スキャン**して作られている。
 
-| 根 | Media | 顔 | 手本 | 除外 |
+| root | Media | 顔 | 手本 | 除外 |
 |---|---|---|---|---|
 | `${NFS_ROOT}/${SURNAME}/Photo` | 64,974 | 55,805 | 122 | 252 |
 | `${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯` | 5,323 | 2,801 | 4 | 16 |
@@ -88,7 +88,7 @@ ${HOME}/photoarchive-recovery/
 
 ### `mediaFiles/` はアプリの動作に関与しない
 
-`scan` は `Path(source_dir).resolve()` で根を解決し、`rglob("*")` で走査する。
+`scan` は `Path(source_dir).resolve()` で root を解決し、`rglob("*")` で走査する。
 **Python 3.12 の `rglob` はシンボリックリンクのディレクトリへ降りない**（実測）。
 だから **DB の 70,297 件は `mediaFiles/` を一度も通っていない。**
 

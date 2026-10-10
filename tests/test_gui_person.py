@@ -274,7 +274,7 @@ def test_the_shooting_date_is_shown_when_the_photo_has_one():
             "shooting_date": "2017-12-16T18:46:32",
             "created_time": "2020-01-01T00:00:00",
         },
-        source_root="/photo",
+        source_roots="/photo",
     )
 
     assert "撮影日時: 2017-12-16 18:46:32" in info
@@ -294,45 +294,45 @@ def test_a_photo_without_exif_says_so_and_falls_back_to_the_file_time():
             "shooting_date": None,
             "created_time": "2013-03-24T13:56:26",
         },
-        source_root="/photo",
+        source_roots="/photo",
     )
 
     assert "撮影日時: 不明（EXIFなし）" in info
     assert "ファイル日時: 2013-03-24 13:56:26" in info
 
 
-def test_the_folder_is_shown_relative_to_the_source_root():
+def test_the_folder_is_shown_relative_to_the_root():
     """フォルダ名は日付を持っていることが多く、EXIF が無いときの手がかり。
 
     絶対パスのままだと NFS のマウント先が長すぎて読めない。
     """
     info = photoarchive_gui.format_media_info(
         {"path": "/photo/2013/130914${EVENT}/b.JPG", "shooting_date": None},
-        source_root="/photo",
+        source_roots="/photo",
     )
 
     assert "フォルダ: 2013/130914${EVENT}" in info
     assert "ファイル: b.JPG" in info
 
 
-def test_a_photo_outside_the_source_root_keeps_its_full_path():
-    """`source_root` の外のメディアでも、欠けた表示にしない。"""
+def test_a_photo_outside_every_root_keeps_its_full_path():
+    """`source_roots` の外のメディアでも、欠けた表示にしない。"""
     info = photoarchive_gui.format_media_info(
-        {"path": "/other/place/c.JPG", "shooting_date": None}, source_root="/photo"
+        {"path": "/other/place/c.JPG", "shooting_date": None}, source_roots="/photo"
     )
 
     assert "フォルダ: /other/place" in info
 
 
-def test_the_folder_is_shown_without_a_source_root():
-    """設定に `source_root` が無くても動く（GUI は DB だけでも起動できる）。"""
+def test_the_folder_is_shown_without_a_root():
+    """設定に `source_roots` が無くても動く（GUI は DB だけでも起動できる）。"""
     info = photoarchive_gui.format_media_info({"path": "/photo/2013/c.JPG"})
 
     assert "フォルダ: /photo/2013" in info
 
 
 def test_selecting_a_face_fills_the_information_under_the_preview(window, tmp_path):
-    window.source_root = str(tmp_path)
+    window.source_roots = str(tmp_path)
     window.face_list.setCurrentRow(0)
 
     window._show_preview()
@@ -348,7 +348,7 @@ def test_the_information_is_still_shown_when_the_original_is_gone(window, tmp_pa
 
     情報の出どころはDBなので、画像が読めなくても出せる。
     """
-    window.source_root = str(tmp_path)
+    window.source_roots = str(tmp_path)
     (tmp_path / "photos" / "family.jpg").unlink()
     window.face_list.setCurrentRow(0)
 
@@ -375,7 +375,7 @@ def test_a_broken_exif_date_is_treated_as_missing():
             "shooting_date": "0000-00-00T00:00:00",
             "created_time": "2019-08-15T12:00:00",
         },
-        source_root="/photo",
+        source_roots="/photo",
     )
 
     assert "撮影日時: 不明（EXIFなし）" in info
@@ -397,7 +397,7 @@ def test_another_shape_of_broken_exif_is_also_treated_as_missing():
                 "shooting_date": broken,
                 "created_time": "2019-08-15T12:00:00",
             },
-            source_root="/photo",
+            source_roots="/photo",
         )
 
         assert "撮影日時: 不明（EXIFなし）" in info, broken
@@ -406,20 +406,20 @@ def test_another_shape_of_broken_exif_is_also_treated_as_missing():
         assert "ファイル日時: 2019-08-15 12:00:00" in info, broken
 
 
-def test_a_photo_directly_under_the_source_root_says_so():
+def test_a_photo_directly_under_a_root_says_so():
     """`フォルダ: .` では何のことか読めない。"""
     info = photoarchive_gui.format_media_info(
-        {"path": "/photo/a.jpg", "shooting_date": None}, source_root="/photo"
+        {"path": "/photo/a.jpg", "shooting_date": None}, source_roots="/photo"
     )
 
-    assert "フォルダ: （source_root 直下）" in info
+    assert "フォルダ: （root 直下）" in info
 
 
-def test_a_relative_source_root_is_anchored_to_the_settings_file(tmp_path, monkeypatch):
-    """相対の `source_root` を、**起動した場所に左右されず**に解くこと。
+def test_a_relative_root_is_anchored_to_the_settings_file(tmp_path, monkeypatch):
+    """相対の `source_roots` を、**起動した場所に左右されず**に解くこと。
 
     cwd 起点だと、リポジトリ直下以外から起動したときに相対化が静かに外れ、
-    `GUI_USAGE.md` が約束している「`source_root` からの相対」ではなく、
+    `GUI_USAGE.md` が約束している「`source_roots` からの相対」ではなく、
     読めない NFS の絶対パスに戻る。
     """
     config_dir = tmp_path / "config"
@@ -430,15 +430,15 @@ def test_a_relative_source_root_is_anchored_to_the_settings_file(tmp_path, monke
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
-    resolved = photoarchive_gui.resolve_source_root("mediaFiles/${SURNAME}Family")
+    resolved = photoarchive_gui.resolve_root("mediaFiles/${SURNAME}Family")
 
     assert resolved == str(tmp_path / "mediaFiles/${SURNAME}Family")
 
 
-def test_an_absolute_source_root_is_left_alone(tmp_path):
-    """絶対パスの `source_root` は触らない。"""
-    assert photoarchive_gui.resolve_source_root("/mnt/photo") == "/mnt/photo"
-    assert photoarchive_gui.resolve_source_root(None) is None
+def test_an_absolute_root_is_left_alone(tmp_path):
+    """絶対パスの `source_roots` は触らない。"""
+    assert photoarchive_gui.resolve_root("/mnt/photo") == "/mnt/photo"
+    assert photoarchive_gui.resolve_root(None) is None
 
 
 def test_the_preview_does_not_keep_the_previous_photo_when_the_image_cannot_be_decoded(
@@ -551,7 +551,7 @@ def test_the_preview_shows_the_age_of_the_selected_person():
     """情報欄の最後に「誰が何歳か」を出す。"""
     info = photoarchive_gui.format_media_info(
         {"path": "/photo/2017/クリスマス/a.JPG", "shooting_date": "2017-12-16T18:46:32"},
-        source_root="/photo",
+        source_roots="/photo",
         person={"name": "${PERSON_2}", "birth_date": "2011-05-03"},
     )
 
