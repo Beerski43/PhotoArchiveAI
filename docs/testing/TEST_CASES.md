@@ -602,7 +602,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（49件）
+### `test_selection.py` — 抽出とコピー（56件）
 
 | テスト | 内容 |
 |---|---|
@@ -614,6 +614,11 @@
 | `test_load_rule_raises_for_a_missing_file` | 無いファイル |
 | `test_family_only_keeps_media_where_a_family_member_is_assigned` | `family_only` は家族の顔が写っているか |
 | `test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | **点 0 の家族の写真も `family_only` で残る**（PR #70 のレビュー指摘1） |
+| `test_family_only_counts_automatic_assignments_unless_the_rule_says_otherwise` | 自動割り当ても家族（省略・true）。`include_auto_assigned: false` なら手本だけ（#89） |
+| `test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo` | false のとき自動割り当ての顔は点にも入らない |
+| `test_without_automatic_assignments_select_does_not_measure_automatic_faces` | false のとき自動割り当ての顔を測らない |
+| `test_load_rule_refuses_include_auto_assigned_that_is_not_true_or_false`（3件） | **引用符付きの `"false"` などは読むときに止める**（文字列は真になり、黙って逆の結果になる） |
+| `test_load_rule_reads_include_auto_assigned_false` | `false` を読める |
 | `test_a_blurred_family_photo_comes_after_a_crisp_one` | **ボケた家族の写真は後ろ**（利用者の要望の核心） |
 | `test_a_profile_comes_after_a_frontal_face` | 横顔・整列できない顔は正面の後ろ |
 | `test_a_smile_ranks_above_a_straight_face` | 笑顔が上 |
@@ -729,7 +734,7 @@
 | `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
 | `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
-### `test_cli_commands.py` — サブコマンドの配線（29件）
+### `test_cli_commands.py` — サブコマンドの配線（31件）
 
 | テスト | 内容 |
 |---|---|
@@ -749,6 +754,7 @@
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 | `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
+| `test_select_warns_about_old_automatic_assignments_only_when_it_uses_them`（2件） | 自動割り当てを使わない `select` は、その規則が古いという知らせを出さない（#89） |
 
 ### `test_config.py` — 設定の探索（25件）
 
