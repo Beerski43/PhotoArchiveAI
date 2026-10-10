@@ -104,7 +104,7 @@ def fake_face_models(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolate_app_settings(tmp_path, monkeypatch):
-    """開発機の config/app_settings.json をテストから見えなくする。
+    """開発機の config/app_settings.yml をテストから見えなくする。
 
     設定の探索は 環境変数 → カレントディレクトリ → リポジトリ直下 の順。
     最後の一段があるせいで、素のテストが実機の設定(NFS 上の source_root

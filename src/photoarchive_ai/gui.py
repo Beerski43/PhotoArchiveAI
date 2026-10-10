@@ -337,7 +337,7 @@ def resolve_source_root(source_root: Optional[str]) -> Optional[str]:
     settings_path = find_settings_path()
     if settings_path is None:
         return source_root
-    # config/app_settings.json → リポジトリ直下
+    # config/app_settings.yml → リポジトリ直下
     return str(settings_path.parent.parent / source_root)
 
 
@@ -3352,22 +3352,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="photoarchive-gui")
     parser.add_argument(
         "--db",
-        help="SQLite database path. 省略すると config/app_settings.json の database_path を使う。",
+        help="SQLite database path. 省略すると config/app_settings.yml の database_path を使う。",
     )
     args = parser.parse_args()
 
     # CLI と同じ解決順にする。GUI だけ設定ファイルを読まないと、
     # 「アプリケーション内にDBパスをハードコードしない」という方針から外れる。
-    from .config import get_database_path, get_source_root, load_settings
+    from .config import (
+        find_legacy_settings_path,
+        get_database_path,
+        get_source_root,
+        legacy_settings_stop_message,
+        load_settings,
+    )
 
     settings = load_settings()
     db_path = args.db or get_database_path(settings)
     # プレビューのフォルダを相対パスで出すためだけに使う。無くても動く。
     source_root = resolve_source_root(get_source_root(settings))
     if not db_path:
+        legacy = find_legacy_settings_path()
+        if legacy is not None:
+            raise SystemExit(legacy_settings_stop_message(legacy))
         raise SystemExit(
             "データベースのパスが必要です。--db で指定するか、"
-            "config/app_settings.json の database_path を設定してください。"
+            "config/app_settings.yml の database_path を設定してください。"
         )
 
     from PySide6.QtCore import QLibraryInfo

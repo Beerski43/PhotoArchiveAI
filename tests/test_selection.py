@@ -126,13 +126,40 @@ def test_select_media_filters_by_rule(tmp_path: Path):
     assert expected_output_file.exists()
 
 
-def test_load_rule_reads_json(tmp_path: Path):
+def test_load_rule_refuses_json_and_names_the_yaml_to_write(tmp_path: Path):
+    """#27: ルールも YAML だけ。古い JSON を指したままの設定に気づけるよう止める。"""
     rule_path = tmp_path / "rule.json"
-    rule_data = {"family_only": True}
-    rule_path.write_text(json.dumps(rule_data), encoding="utf-8")
+    rule_path.write_text(json.dumps({"family_only": True}), encoding="utf-8")
 
-    loaded = load_rule(str(rule_path))
-    assert loaded == rule_data
+    with pytest.raises(ValueError) as raised:
+        load_rule(str(rule_path))
+
+    assert "rule.yml" in str(raised.value)
+
+
+def test_load_rule_reads_an_empty_yaml_as_no_conditions(tmp_path: Path):
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text("# 何も絞らない\n", encoding="utf-8")
+
+    assert load_rule(str(rule_path)) == {}
+
+
+def test_load_rule_refuses_a_yaml_that_is_not_a_mapping(tmp_path: Path):
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text("- family_only\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_rule(str(rule_path))
+
+
+def test_the_sample_rule_is_yaml_and_readable():
+    """管理しているルールのサンプルが YAML で、そのまま読めること。"""
+    sample = Path(__file__).resolve().parents[1] / "config/rule.sample.yml"
+
+    rule = load_rule(str(sample))
+
+    assert rule["count_per_year"] == 30
+    assert rule["family_only"] is True
 
 
 def test_load_rule_reads_yaml(tmp_path: Path):
@@ -144,7 +171,7 @@ def test_load_rule_reads_yaml(tmp_path: Path):
 
 def test_load_rule_raises_for_a_missing_file(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
-        load_rule(str(tmp_path / "absent.json"))
+        load_rule(str(tmp_path / "absent.yml"))
 
 
 def test_family_only_keeps_media_where_a_family_member_is_assigned(connection):

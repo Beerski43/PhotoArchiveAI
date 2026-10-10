@@ -109,7 +109,7 @@ pytest -q --durations=10             # 遅い順に10件
 NFS 上の実データを使う確認は手動で行う。
 
 `mediaFiles/` のシンボリックリンク先が存在することを確認し、
-`config/app_settings.json` を作って `source_root` を設定する。
+`config/app_settings.yml` を作って `source_root` を設定する。
 
 既存のデータベースがあれば先に移行する（バックアップは自動で作られる）。
 
