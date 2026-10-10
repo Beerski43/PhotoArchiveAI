@@ -9,6 +9,63 @@ from pillow_heif import register_heif_opener
 HEIC_EXTENSIONS = {".heic", ".heif"}
 register_heif_opener()
 
+_EXIF_HEADER = b"Exif\x00\x00"
+_SOI = b"\xff\xd8"
+_APP0 = 0xE0
+_APP1 = 0xE1
+_SOS = 0xDA
+
+
+def _jpeg_segments(data: bytes):
+    """SOS の手前までの (マーカー, 開始位置, 終了位置)。壊れていれば ValueError。"""
+    if not data.startswith(_SOI):
+        raise ValueError("JPEG ではない（SOI が無い）")
+    position = 2
+    while position + 4 <= len(data):
+        if data[position] != 0xFF:
+            raise ValueError(f"マーカーが読めない: {position}")
+        marker = data[position + 1]
+        if marker == _SOS:
+            return
+        length = int.from_bytes(data[position + 2 : position + 4], "big")
+        end = position + 2 + length
+        if length < 2 or end > len(data):
+            raise ValueError(f"セグメントの長さが壊れている: {position}")
+        yield marker, position, end
+        position = end
+    raise ValueError("SOS が見つからない")
+
+
+def has_exif(data: bytes) -> bool:
+    """JPEG のバイト列が EXIF（APP1）を持つか。"""
+    return any(
+        marker == _APP1 and data[start + 4 : start + 10] == _EXIF_HEADER
+        for marker, start, _ in _jpeg_segments(data)
+    )
+
+
+def insert_exif(data: bytes, exif: bytes) -> bytes:
+    """JPEG のバイト列に EXIF を差し込む。**画素データのバイト列には触れない。**
+
+    再エンコードすると画素が変わり、`scan` が別の写真として顔を検出し直す。
+    ここでは APP1 を1つ足すだけなので、足した APP1 を取り除けば元のバイト列に戻る
+    （PR #80 のレビュー判断 (a)・案4。`scripts/restore_heic_exif.py` が使う）。
+    APP0（JFIF）があればその直後、無ければ SOI の直後に置く。
+    """
+    if not exif.startswith(_EXIF_HEADER):
+        raise ValueError("EXIF の先頭が Exif\\0\\0 ではない")
+    if len(exif) + 2 > 0xFFFF:
+        raise ValueError("EXIF が大きすぎて1つの APP1 に収まらない")
+    if has_exif(data):
+        raise ValueError("すでに EXIF がある")
+    at = 2
+    for marker, _, end in _jpeg_segments(data):
+        if marker == _APP0:
+            at = end
+        break
+    segment = b"\xff\xe1" + (len(exif) + 2).to_bytes(2, "big") + exif
+    return data[:at] + segment + data[at:]
+
 
 # 同じ写真とみなす、縮小画素の差の平均（0〜255）の上限（#79）。
 # JPEG は非可逆なので、同じ写真から作っても画素は完全には一致しない。
@@ -76,7 +133,12 @@ def convert_heic_files(
         else:
             try:
                 with Image.open(source) as image:
-                    image.convert("RGB").save(output, "JPEG", quality=95)
+                    # 撮影日時を引き継ぐ（PR #80 のレビュー指摘1）。scan は撮影日時を
+                    # EXIF からしか読まない。pillow-heif は回転を済ませて Orientation を
+                    # 1 にした EXIF を返すので、そのまま渡しても二重に回らない。
+                    exif = image.info.get("exif")
+                    extra = {"exif": exif} if exif else {}
+                    image.convert("RGB").save(output, "JPEG", quality=95, **extra)
                 converted += 1
             except (OSError, PermissionError) as error:
                 if confirm_write_error is None or not confirm_write_error(source, error):

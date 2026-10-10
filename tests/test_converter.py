@@ -218,8 +218,12 @@ def test_the_measurement_separates_the_same_photo_from_the_next_one(tmp_path: Pa
 
     assert measure.neighbour_name("IMG_0099") == "IMG_0100.jpg"
     assert measure.neighbour_name("photo") is None
+    # 読めない HEIC が混ざっていても止まらず、数える（PR #80 のレビュー指摘3）
+    (tmp_path / "IMG_0002.HEIC").write_bytes(b"broken")
+    (tmp_path / "IMG_0002.jpg").write_bytes(b"broken")
     assert measure.main([str(tmp_path), "--sample", "10"]) == 0
 
     out = capsys.readouterr().out
     assert "閾値を超えた同じ写真: 0 件" in out
     assert "閾値以下の別の写真: 0 件" in out
+    assert "読めなかった組: 1 件" in out

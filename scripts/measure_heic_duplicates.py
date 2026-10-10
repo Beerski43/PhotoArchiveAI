@@ -71,20 +71,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     same: List[float] = []
     other: List[float] = []
     resized = 0
+    unreadable = 0
     for heic, jpeg in pairs[: args.sample]:
-        difference = image_difference(heic, jpeg)
+        # 読めない1件で、NFS を長く読んだ計測を全部無駄にしない（PR #80 のレビュー指摘3）
+        try:
+            difference = image_difference(heic, jpeg)
+        except Exception:
+            unreadable += 1
+            continue
         if difference is None:
             resized += 1
         else:
             same.append(difference)
         neighbour = neighbour_name(heic.stem)
         if neighbour is not None and (heic.parent / neighbour).exists():
-            difference = image_difference(heic, heic.parent / neighbour)
+            try:
+                difference = image_difference(heic, heic.parent / neighbour)
+            except Exception:
+                unreadable += 1
+                continue
             if difference is not None:
                 other.append(difference)
 
     print(summarize("同じ写真（同名 JPEG）", same))
     print(f"  寸法が違った組: {resized} 件")
+    print(f"  読めなかった組: {unreadable} 件")
     print(summarize("別の写真（連番が1つ先）", other))
     print(f"閾値 SAME_IMAGE_MAX_DIFF = {SAME_IMAGE_MAX_DIFF}")
     print(f"  閾値を超えた同じ写真: {sum(value > SAME_IMAGE_MAX_DIFF for value in same)} 件")
