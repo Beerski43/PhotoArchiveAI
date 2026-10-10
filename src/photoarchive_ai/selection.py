@@ -229,9 +229,10 @@ def _link_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) 
 def _remove_previous_links(output_root: Path) -> None:
     """前回の出力（出力先の**直下にあるシンボリックリンク**）を消す。
 
-    出力は平らなので、残すと前回の結果と区別が付かない。**通常のファイルと
-    サブフォルダには触らない**（利用者が置いたものや、コピーで出力していた
-    頃の写真を消さない）。リンク先が消えた壊れたリンクも消す。
+    出力は平らなので、残すと前回の結果と区別が付かない。**出力先は `select`
+    専用**で、このツールが張ったかどうかは見ない（PR #85 の判断 (a)。利用者が
+    決めた）。**通常のファイルとサブフォルダには触らない**（コピーで出力して
+    いた頃の写真を消さない）。リンク先が消えた壊れたリンクも消す。
     """
     for entry in output_root.iterdir():
         if entry.is_symlink():
@@ -250,18 +251,21 @@ def link_selected_media(
     変えない。** 張る前に前回のリンクを消す（`_remove_previous_links`）。
     順位は渡された並びの 1 からで、``path`` の無い項目は飛ばすが**順位は詰めない**
     （番号が `select` の並びと一致する）。相対パスで登録されたメディアは先頭の
-    root から解く。同じ名前の実体のファイルがあれば、上書きせずに
-    ``FileExistsError`` で止まる。
+    root から解く。
+
+    同じ名前の実体のファイル（かフォルダ）があれば、上書きせずに
+    ``FileExistsError`` で止まる。**名前を先に全部決め、消したり張ったりする前に
+    調べる。** 途中で止まると、前回の結果も今回の結果も揃っていない出力が残る
+    （PR #85 のレビュー指摘1）。
     """
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots]
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
-    _remove_previous_links(output_root)
-    linked = 0
     total = len(selected_media)
     width = max(4, len(str(total)))
+    entries: List[Tuple[int, Path, Path]] = []
     for rank, media in enumerate(selected_media, start=1):
         path_value = media.get("path")
         if path_value is None:
@@ -270,10 +274,19 @@ def link_selected_media(
         if not source_path.is_absolute() and root_paths:
             source_path = root_paths[0] / source_path
         source_path = source_path.resolve()
+        entries.append((rank, output_root / _link_name(rank, width, media, source_path), source_path))
 
-        name = _link_name(rank, width, media, source_path)
-        (output_root / name).symlink_to(source_path)
-        linked += 1
+    clashes = [link.name for _, link, _ in entries if link.exists() and not link.is_symlink()]
+    if clashes:
+        more = f" ほか {len(clashes) - 1} 件" if len(clashes) > 1 else ""
+        raise FileExistsError(
+            f"出力先に同じ名前のファイルがあります（何も消さず、リンクも張っていません）: "
+            f"{clashes[0]}{more}"
+        )
+
+    _remove_previous_links(output_root)
+    for rank, link, source_path in entries:
+        link.symlink_to(source_path)
         if progress_callback is not None:
-            progress_callback(rank, total, name)
-    return linked
+            progress_callback(rank, total, link.name)
+    return len(entries)

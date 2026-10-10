@@ -478,15 +478,29 @@ def test_rerun_removes_previous_links_but_keeps_real_files(tmp_path: Path):
 
 
 def test_a_real_file_with_the_same_name_is_not_overwritten(tmp_path: Path):
+    """ぶつかったら、**何も消さず・何も張らずに**止まる。
+
+    以前は前回のリンクを消してから1件ずつ張っていたので、止まった時点で
+    前回の結果も今回の結果も揃っていない出力が残った（PR #85 のレビュー指摘1）。
+    """
     root = tmp_path / "src"
     _photo(root / "a.jpg")
+    _photo(root / "b.jpg")
     output = tmp_path / "out"
-    existing = _photo(output / "0001_unknown_m1.jpg", "mine")
+    selected = [
+        {"id": 1, "path": "a.jpg", "created_time": None},
+        {"id": 2, "path": "b.jpg", "created_time": None},
+    ]
+    link_selected_media(selected, str(output), str(root))
+    (output / "0002_unknown_m2.jpg").unlink()
+    existing = _photo(output / "0002_unknown_m2.jpg", "mine")
+    before = sorted((path.name, path.is_symlink()) for path in output.iterdir())
 
-    with pytest.raises(FileExistsError):
-        link_selected_media([{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root))
+    with pytest.raises(FileExistsError, match="0002_unknown_m2.jpg"):
+        link_selected_media(selected, str(output), str(root))
 
     assert existing.read_text(encoding="utf-8") == "mine"
+    assert sorted((path.name, path.is_symlink()) for path in output.iterdir()) == before
 
 
 def test_link_skips_entries_without_a_path_but_keeps_their_rank(tmp_path: Path):

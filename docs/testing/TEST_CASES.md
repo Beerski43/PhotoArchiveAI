@@ -633,8 +633,8 @@
 | `test_links_sit_directly_under_the_output_and_point_at_the_original` | 出力先の直下に、元ファイルの絶対パスへのリンク。元ファイルは変えない（#83） |
 | `test_link_names_follow_the_selected_order_and_mark_unknown_years` | 名前は `<順位>_<年>_m<ID><拡張子>`。年が無ければ `unknown` |
 | `test_rank_is_padded_to_the_number_of_links` | 順位の桁は件数に合わせる（4桁以上）。名前順が並び順になる |
-| `test_rerun_removes_previous_links_but_keeps_real_files` | **再実行で前回のリンク（壊れたものも）を消す。通常のファイルとサブフォルダは残す** |
-| `test_a_real_file_with_the_same_name_is_not_overwritten` | 同じ名前の実体のファイルは上書きせずに止まる |
+| `test_rerun_removes_previous_links_but_keeps_real_files` | **再実行で直下のリンクを全部消す**（壊れたもの・利用者が置いたものも。出力先は `select` 専用）。**通常のファイルとサブフォルダは残す** |
+| `test_a_real_file_with_the_same_name_is_not_overwritten` | 同じ名前の実体のファイルは上書きせずに止まる。**止まったとき、前回のリンクを消していない**（PR #85 のレビュー指摘1） |
 | `test_link_skips_entries_without_a_path_but_keeps_their_rank` | パスが無い行を飛ばすが、順位は詰めない |
 
 ### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）
@@ -699,7 +699,7 @@
 | `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
 | `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
-### `test_cli_commands.py` — サブコマンドの配線（28件）
+### `test_cli_commands.py` — サブコマンドの配線（29件）
 
 | テスト | 内容 |
 |---|---|
@@ -718,6 +718,7 @@
 | `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
+| `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先で名前がぶつかったら、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
 
 ### `test_config.py` — 設定の探索（25件）
 
@@ -961,6 +962,12 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 番号を振り直したりすると指し先が黙ってずれ、読み手は**そんな節が無いことにも
 気づけない**。フェーズ文書のリンクを見張っているのと同じ理由
 （`test_plan_stays_true.py`）。
+
+### `test_gitignore.py` — 実データの置き場を git に入れない（4件）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_data_folders_are_ignored_even_as_symlinks` | `output`・`data`・`models`・`mediaFiles` が**シンボリックリンクでも**無視される。`output/` の規則はディレクトリにしか当たらず、NFS へのリンクに替えた `output` を `git add -A` が拾った（PR #85 のレビュー対応中に見つけた） |
 
 ### `test_system.py` — 通し（2件、`system` マーカー）
 

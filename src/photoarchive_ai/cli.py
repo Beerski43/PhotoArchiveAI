@@ -248,7 +248,7 @@ def _build_parser() -> argparse.ArgumentParser:
     select_parser = subparsers.add_parser("select", help="Select media by rule and symlink them into output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
-    select_parser.add_argument("--output", help="Output directory. Symlinks are placed directly under it; previous symlinks there are removed.")
+    select_parser.add_argument("--output", help="Output directory, used only by select. Symlinks are placed directly under it; every symlink already there is removed first.")
     select_parser.add_argument(
         "--source",
         action="append",
@@ -657,14 +657,17 @@ def main() -> None:
                     ),
                 )
                 _reset_progress_state()
-                linked = link_selected_media(
-                    selected,
-                    output_root,
-                    source_roots,
-                    progress_callback=lambda current, total, detail: _emit_progress(
-                        current, total, detail, prefix="Linking"
-                    ),
-                )
+                try:
+                    linked = link_selected_media(
+                        selected,
+                        output_root,
+                        source_roots,
+                        progress_callback=lambda current, total, detail: _emit_progress(
+                            current, total, detail, prefix="Linking"
+                        ),
+                    )
+                except OSError as error:
+                    raise SystemExit(f"Linking stopped: {error}") from error
             print(f"Linked {linked} files in {output_root}.")
             return
     except SchemaVersionError as error:
