@@ -678,6 +678,20 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
+### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（9件）
+
+| テスト | 内容 |
+|---|---|
+| `test_convert_keeps_the_shooting_date` | 変換が撮影日時を引き継ぐ（PR #80 のレビュー指摘1） |
+| `test_convert_does_not_rotate_twice` | 回転を求める HEIC でも二重に回らない |
+| `test_insert_exif_leaves_every_other_byte_alone` | EXIF の差し込みは APP1 を足すだけで、画素は同じ |
+| `test_insert_exif_refuses_a_second_exif_and_a_bad_payload` | 二重の差し込みと壊れた EXIF を拒む |
+| `test_restore_counts_without_writing_by_default` | 修復は既定では数えるだけ |
+| `test_restore_keeps_the_assignment_through_the_next_scan` | **修復のあと scan しても顔が検出し直されず、手動の割り当てが残る** |
+| `test_without_updating_the_database_the_scan_would_discard_the_assignment` | 対照: DB を合わせないと scan が割り当てを消す（修復が DB を書く理由） |
+| `test_restore_leaves_a_file_changed_since_the_scan` | scan の後に変わったファイルは触らない |
+| `test_restore_leaves_a_jpeg_that_is_not_the_same_photo` | 同名でも別の写真なら撮影日時を付けない |
+
 ### `test_cli_commands.py` — サブコマンドの配線（28件）
 
 | テスト | 内容 |

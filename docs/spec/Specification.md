@@ -603,6 +603,13 @@ WAL で動いているので、確定した書き込みがまだ ``-wal`` にだ
 **HEIC/HEIF は `scan` 以降の処理で扱わない。** `convert-heic` で JPEG にしてから `scan` する。
 
 - `convert-heic` は同じフォルダに同じ名前の `.jpg` を書く（品質 95、元ファイルは変更しない）
+- **EXIF（撮影日時を含む）を引き継ぐ**（PR #80）。`scan` は撮影日時を EXIF からしか読まない。
+  pillow-heif は回転を済ませて Orientation を 1 にした EXIF を返すので、二重に回らない。
+  **PR #80 より前の変換は EXIF を落としていた**（実データ 1,758 件が撮影日時なしで
+  `scan` 済み・2026-10-10）。**書き直すと `scan` が顔を検出し直して割り当てが消える**ので、
+  `scripts/restore_heic_exif.py` が画素データのバイト列に触れずに EXIF だけを差し込み、
+  DB の `file_hash` / `file_size` / `created_time` / `shooting_date` をファイルに合わせる
+  （利用者の決定）。`scan` は大きさと更新時刻が一致すれば読まないので、顔は残る
 - **同名の `.jpg` が同じ写真ならスキップ、違う写真なら `_1.jpg` から空いている連番に書く。**
   「同じ写真」は**寸法が同じで、64×64 に縮めた RGB の画素差の平均が
   `converter.SAME_IMAGE_MAX_DIFF`（1.0）以下**のもの（#79）。JPEG は非可逆なので
