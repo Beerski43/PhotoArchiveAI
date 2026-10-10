@@ -400,6 +400,8 @@ clone したら、コミットの前の検査を有効にしてください。
 ```bash
 cp config/private_terms.sample.yml config/private_terms.yml   # 実際の語を書く
 git config core.hooksPath .githooks
+git config user.name "<GitHub のアカウント名>"      # このリポジトリのコミットの作者
+git config user.email "<GitHub の noreply アドレス>" # 実名や個人のメールを履歴に残さない
 ```
 
 これで、公開しない語を含むコミット（中身・ファイル名・メッセージ）は止まります。一覧が見つからないときも、hook はコミットを止めます（検査できないまま通さないため）。git のワークツリーからコミットしても、本体の checkout の一覧で検査します。回帰テストの 6/6 でも検査します。手で検査するときは `python scripts/check_private_terms.py`、置き換えるときは `--fix` を付けます。

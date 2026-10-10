@@ -483,13 +483,16 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - テストの `mediapipe` フェイクは `relative_bounding_box` を返す。実装が先に
   見るのがこの属性だから。`bounding_box` だけを返すフェイクに戻さない。
 - **テストはリポジトリの中にファイルを書かない。** `tmp_path` を使う。
+- **git のワークツリーで `pytest` を流すと、本体のコードをテストしてしまう。** `pip install -e .`
+  の参照先が本体の `src/` だから。ワークツリーでは `PYTHONPATH=<ワークツリー>/src` を付ける
 - **家族の名前・NFS のパス・誕生日・ホームディレクトリ・行事や地名の入ったフォルダ名・
   GitHub のアカウント名を、リポジトリに書かない**（#77。リポジトリは public）。文書では
   `${PERSON_1}`〜`${PERSON_5}`・`${NFS_ROOT}`・`${EVENT}` などの変数で書き、テストでは
   架空の値を使う。**どの変数が誰かは、git に入らない `config/private_terms.yml` にだけある**
   （形は `config/private_terms.sample.yml`）。`scripts/check_private_terms.py` が検査し、
   `.githooks/` の pre-commit / commit-msg と回帰テストの 6/6 が止める。**clone したら
-  `git config core.hooksPath .githooks` を流す。** 一覧は**本体の checkout** から引くので、
+  `git config core.hooksPath .githooks` を流し、`user.name` / `user.email` を GitHub の
+  アカウント名と noreply アドレスにする**（コミットの作者欄に実名や個人のメールを残さない）。 一覧は**本体の checkout** から引くので、
   ワークツリーからのコミットも検査される。hook が有効なのに一覧が見つからなければコミットを止める コミットメッセージ・PR・Issue の本文にも書かない
   （履歴の書き換えでは GitHub 上の本文は消えない）。シェルのコマンド例に `${...}` を書かない
   （シェルが空に展開する）
