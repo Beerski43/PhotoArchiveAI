@@ -194,3 +194,36 @@ def test_scan_reports_listing_progress_and_file_errors(tmp_path, monkeypatch):
     assert listing[-1] == (2, 2, "broken.jpg")
     assert [args[:2] for args in scanned] == [(1, 2), (2, 2)]
     assert len(errors) == 1 and errors[0].startswith("broken.jpg: ")
+
+
+def test_clearing_before_a_question_leaves_no_old_bar():
+    """問いを出す前に2行を消す。消さないと、答えたあとの書き直しで古いバーが残る。"""
+    stream, display = _terminal()
+    display.update(1, 3, "a.heic", prefix="Converting")
+    display.clear()
+    stream.write("Cannot read a.heic\nContinue with the next file? [y/N]: y\n")
+    display.update(2, 3, "b.heic", prefix="Converting")
+
+    assert render_terminal(stream.getvalue()) == [
+        "Cannot read a.heic",
+        "Continue with the next file? [y/N]: y",
+        "Converting: [#############-------]  66% (2/3)",
+        "b.heic",
+    ]
+
+
+def test_convert_heic_says_which_files_could_not_be_read(tmp_path, monkeypatch, capsys):
+    """convert-heic は壊れた HEIC を「読めない」と聞き、最後に一覧で知らせる。"""
+    import sys
+
+    (tmp_path / "IMG_6463.HEIC").write_bytes(b"\x00\x00\x00\x15infe" + b"\x00" * 16)
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "y")
+    monkeypatch.setattr(sys, "argv", ["photoarchive", "convert-heic", "--source", str(tmp_path)])
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert len(asked) == 1 and asked[0].startswith(f"Cannot read {tmp_path / 'IMG_6463.HEIC'}")
+    assert "Write failed" not in asked[0]
+    assert f"Could not read 1 files (left as they are):\n  {tmp_path / 'IMG_6463.HEIC'}" in out
