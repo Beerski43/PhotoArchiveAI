@@ -488,6 +488,13 @@ def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
     normalized: List[Path] = []
     for value in roots:
         path = Path(value).expanduser().resolve()
+        # **どの根も走査する前に確かめる**（PR #75 のレビュー指摘1）。根ごとの走査の中で
+        # 見ると、前の根を（NFS で数十分）走査し終えてから指定ミスに気づくことになる。
+        # 中身の無いマウントポイントは今までどおり `ScanAborted`（ディレクトリはある）。
+        if not path.is_dir():
+            raise ValueError(
+                f"検出元のディレクトリがありません: {value}（指定かマウントを確かめてください）"
+            )
         if path not in normalized:
             normalized.append(path)
     for outer in normalized:
@@ -498,6 +505,24 @@ def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
                     " 根はどちらか一方にしてください。"
                 )
     return normalized
+
+
+def refuse_parents_of_recorded_roots(roots: Sequence[Path], recorded: Sequence[str]) -> None:
+    """**記録済みの根を内側に含む根は、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
+
+    親を走査するのは、根を思い出せずに共通の親（`${NFS_ROOT}`）を渡したときで、
+    他家の写真まで入る（2026-10-02）。入れ子の検査は親と子を同時に渡したときしか
+    止められないので、**記録と突き合わせて**単独の親も止める。走査させてから記録を
+    直すのではなく、取り込むこと自体を防ぐ。年フォルダ（根の内側）の走査は今までどおり通す。
+    """
+    for root in roots:
+        inside = [path for path in recorded if root in Path(path).parents]
+        if inside:
+            raise ScanAborted(
+                f"{root} は記録済みの根 {', '.join(inside)} を内側に含みます。"
+                " 親のフォルダを根にすると、関係の無い写真まで取り込みます。"
+                " 根は config/app_settings.yml の source_roots に書いた個々のフォルダにしてください。"
+            )
 
 
 def scan_directories(
@@ -515,6 +540,7 @@ def scan_directories(
     roots = normalize_source_roots(source_dirs)
     if not roots:
         raise ValueError("検出元のディレクトリが指定されていません。")
+    refuse_parents_of_recorded_roots(roots, db.list_scan_roots(db_connection))
     total: Dict[str, Any] = {
         "total_files": 0,
         "processed": 0,
