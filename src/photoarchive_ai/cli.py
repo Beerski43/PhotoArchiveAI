@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import db
-from .config import get_database_path, get_output_root, get_rule_path, get_source_root, load_settings
+from .config import (
+    find_legacy_settings_path,
+    get_database_path,
+    get_output_root,
+    get_rule_path,
+    get_source_root,
+    legacy_settings_stop_message,
+    load_settings,
+)
 from .converter import convert_heic_files
 from .db import SchemaVersionError, ensure_database
 from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
@@ -248,7 +256,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
     select_parser.add_argument("--db", help="SQLite database path.")
-    select_parser.add_argument("--rule", help="JSON or YAML rule file path.")
+    select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
     select_parser.add_argument("--output", help="Output directory for selected media.")
     select_parser.add_argument("--source", help="Source root directory for relative output paths.")
 
@@ -496,6 +504,9 @@ def main() -> None:
     settings = load_settings()
     db_path = getattr(args, "db", None) or get_database_path(settings)
     if not db_path and args.command not in _COMMANDS_WITHOUT_DATABASE:
+        legacy = find_legacy_settings_path()
+        if legacy is not None:
+            raise SystemExit(legacy_settings_stop_message(legacy))
         raise SystemExit("Database path is required via application settings or --db.")
 
     try:
@@ -564,8 +575,11 @@ def main() -> None:
                 raise SystemExit("Output path is required via application settings or --output.")
             if not rule_path:
                 raise SystemExit("Rule file path is required via application settings or --rule.")
-            with ensure_database(db_path) as connection:
+            try:
                 rule = load_rule(rule_path)
+            except (OSError, ValueError) as error:
+                raise SystemExit(str(error)) from error
+            with ensure_database(db_path) as connection:
                 notice = stale_assignment_notice(connection)
                 if notice:
                     print(f"注意: {notice}")

@@ -600,12 +600,15 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（26件）
+### `test_selection.py` — 抽出とコピー（29件）
 
 | テスト | 内容 |
 |---|---|
 | `test_select_media_filters_by_rule` | 日付と `include_video` |
-| `test_load_rule_reads_json` / `test_load_rule_reads_yaml` | ルールの読み込み（拡張子で分岐） |
+| `test_load_rule_reads_yaml` / `test_load_rule_reads_an_empty_yaml_as_no_conditions` | ルールは YAML。空なら条件なし |
+| `test_load_rule_refuses_json_and_names_the_yaml_to_write` | **JSON のルールは止める**（#27。古いファイルを指したままの設定に気づけるように） |
+| `test_load_rule_refuses_a_yaml_that_is_not_a_mapping` | 辞書でない YAML は止める |
+| `test_the_sample_rule_is_yaml_and_readable` | 管理しているサンプルがそのまま読める |
 | `test_load_rule_raises_for_a_missing_file` | 無いファイル |
 | `test_family_only_keeps_media_where_a_family_member_is_assigned` | `family_only` は家族の顔が写っているか |
 | `test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | **点 0 の家族の写真も `family_only` で残る**（PR #70 のレビュー指摘1） |
@@ -685,8 +688,13 @@
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 
-### `test_config.py` — 設定の探索（11件）
+### `test_config.py` — 設定の探索（22件）
 
+**設定は YAML だけを読む**（#27）。古い `app_settings.json` は読まずに WARNING で変換を
+促し、CLI は「DB のパスが要る」ではなくそのことを言う。環境変数が JSON を指していても
+読まない。YAML と JSON が両方あれば YAML を読んで黙る。注釈と日本語のパスが読めること。
+GUI も古い JSON のことを言い、止める文は WARNING の案内を繰り返さない。タブ字下げの JSON を
+改名しただけならタブを名指しする。`select --help` が JSON を受け付けると言わない（PR #74 のレビュー）。
 環境変数 → カレントディレクトリ → リポジトリ直下 の順に探すこと、優先順位、
 壊れたファイルでもコマンドが止まらないこと。リポジトリ直下の候補を
 editable install のときだけ出すこと（通常のインストールでは `REPO_ROOT` が
@@ -875,7 +883,7 @@ import できない。子へは `worker_initializer=install_fake_backends` で�
 | `mediapipe` | 顔検出のフェイク。真っ黒な画像は「顔なし」、それ以外は「顔が1つ」。**実装が先に見る `relative_bounding_box` を返す**ので、実際の検出経路をそのまま通る |
 | FaceMesh | 既定は全ランドマークが (0.5, 0.5)。`fake_face_mesh` フィクスチャで座標を上書きすると、笑顔スコアの式を検証できる。**既定のままでは式が 0.0 の枝しか通らない** |
 | `dlib` | 顔領域の平均色から決まる128次元ベクトル。同じ色の顔は近く、違う色の顔は遠くなるので、`match` の判定を検証できる |
-| `config.REPO_ROOT` | 空のディレクトリ。開発機の `config/app_settings.json` をテストから見えなくする |
+| `config.REPO_ROOT` | 空のディレクトリ。開発機の `config/app_settings.yml` をテストから見えなくする |
 | `cli._progress_started` | 各テストの前後でリセット。進捗表示の大域状態がテストの順序に依存した差を作らないようにする |
 | `QMessageBox` | 何もしない。モーダルで止まらないようにする |
 

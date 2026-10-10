@@ -1,0 +1,9 @@
+# 抽出ルールのサンプル。config/rule.yml に写して使う。
+# 日付は引用符の有無どちらでも読める。end はその日の終わりまで含む。
+date:
+  start: 2000-01-01
+  end: 2025-12-31
+family_only: true
+count_per_year: 30
+include_video: true
+remove_duplicate: true

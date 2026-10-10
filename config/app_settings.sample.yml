@@ -1,0 +1,9 @@
+# アプリ設定のサンプル。config/app_settings.yml に写して使う。
+# 相対パスはカレントディレクトリから解く（source_root だけは、GUI の表示では
+# この設定ファイルの置き場所から解く）。
+database_path: data/photoarchive.db
+source_root: /path/to/media
+output_root: /path/to/output
+rule_path: config/rule.yml
+# dlib の学習済みモデルを手置きしたディレクトリ（任意）
+dlib_model_dir: null

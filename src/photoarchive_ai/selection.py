@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 from datetime import date, datetime, time
@@ -13,13 +12,25 @@ from .db import get_media_with_analysis
 
 
 def load_rule(rule_path: str) -> Dict[str, Any]:
+    """抽出ルールを読む。**YAML だけ**（#27）。
+
+    ``.json`` は中身が YAML として読めても受け付けない。設定と同じく形式を1つに
+    揃えるためで、古いファイルを指したままの設定に気づけるよう止める。
+    """
     path = Path(rule_path)
+    if path.suffix.lower() == ".json":
+        raise ValueError(
+            f"ルールファイル {rule_path} は JSON です。#27 で YAML だけを読むようになりました。"
+            f" 同じ中身を {path.with_suffix('.yml')} に YAML で書き、rule_path をそちらへ向けてください。"
+        )
     if not path.exists():
         raise FileNotFoundError(f"Rule file not found: {rule_path}")
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() in {".yaml", ".yml"}:
-        return yaml.safe_load(text)
-    return json.loads(text)
+    rule = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if rule is None:
+        return {}
+    if not isinstance(rule, dict):
+        raise ValueError(f"ルールファイル {rule_path} の中身が辞書ではありません。")
+    return rule
 
 
 def _parse_date(value: Any) -> Optional[datetime]:

@@ -284,7 +284,7 @@ WORKLOG からリンクする。
 | `src/photoarchive_ai/` | アプリ本体 | 管理 |
 | `tests/` | テスト。**`tmp_path` を使い、リポジトリ内に書かない** | 管理 |
 | `scripts/` | 開発用スクリプト（回帰テスト、履歴の切り出し） | 管理 |
-| `config/` | `*.sample.json` のみ管理。実際の設定は管理外 | 一部 |
+| `config/` | `*.sample.yml` のみ管理（設定もルールも YAML・#27）。実際の設定は管理外 | 一部 |
 | `docs/spec/` | 要件・仕様・DB設計 | 管理 |
 | `docs/plan/` | 実装プラン（`ROADMAP.md` とフェーズ別） | 管理 |
 | `docs/history/` | 作業履歴（`WORKLOG.md`、`archive/`、`details/`） | 管理 |
