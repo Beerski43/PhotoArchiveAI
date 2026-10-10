@@ -227,3 +227,32 @@ def test_the_measurement_separates_the_same_photo_from_the_next_one(tmp_path: Pa
     assert "閾値を超えた同じ写真: 0 件" in out
     assert "閾値以下の別の写真: 0 件" in out
     assert "読めなかった組: 1 件" in out
+
+
+def test_a_damaged_heic_is_asked_about_as_a_read_failure(tmp_path: Path):
+    """壊れた HEIC は「読めない」として聞き、「書けない」とは言わない（PR #81 で利用者の依頼）。
+
+    以前は両方を「Write failed」と聞いており、実データの壊れた HEIC 3件
+    （ftyp の無いファイル）を書き込み先の問題と読ませていた。
+    """
+    (tmp_path / "IMG_6463.HEIC").write_bytes(b"\x00\x00\x00\x15infe" + b"\x00" * 16)
+    write_heic(tmp_path / "good.heic", size=(320, 240), texture_seed=3)
+    read_failures, write_failures = [], []
+
+    converted, skipped = convert_heic_files(
+        str(tmp_path),
+        confirm_read_error=lambda path, error: read_failures.append(path.name) or True,
+        confirm_write_error=lambda path, error: write_failures.append(path.name) or True,
+    )
+
+    assert read_failures == ["IMG_6463.HEIC"]
+    assert write_failures == []
+    assert (converted, skipped) == (1, 0)
+    assert not (tmp_path / "IMG_6463.jpg").exists()
+
+
+def test_a_damaged_heic_stops_the_run_without_a_read_confirmation(tmp_path: Path):
+    (tmp_path / "broken.heic").write_bytes(b"not a heic")
+
+    with pytest.raises(OSError):
+        convert_heic_files(str(tmp_path), confirm_write_error=lambda path, error: True)
