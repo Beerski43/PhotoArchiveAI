@@ -3362,7 +3362,7 @@ def main() -> None:
         find_legacy_settings_path,
         get_database_path,
         get_source_root,
-        legacy_settings_message,
+        legacy_settings_stop_message,
         load_settings,
     )
 
@@ -3373,7 +3373,7 @@ def main() -> None:
     if not db_path:
         legacy = find_legacy_settings_path()
         if legacy is not None:
-            raise SystemExit(legacy_settings_message(legacy))
+            raise SystemExit(legacy_settings_stop_message(legacy))
         raise SystemExit(
             "データベースのパスが必要です。--db で指定するか、"
             "config/app_settings.yml の database_path を設定してください。"

@@ -14,7 +14,7 @@ from .config import (
     get_output_root,
     get_rule_path,
     get_source_root,
-    legacy_settings_message,
+    legacy_settings_stop_message,
     load_settings,
 )
 from .converter import convert_heic_files
@@ -256,7 +256,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy to output.")
     select_parser.add_argument("--db", help="SQLite database path.")
-    select_parser.add_argument("--rule", help="JSON or YAML rule file path.")
+    select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
     select_parser.add_argument("--output", help="Output directory for selected media.")
     select_parser.add_argument("--source", help="Source root directory for relative output paths.")
 
@@ -506,7 +506,7 @@ def main() -> None:
     if not db_path and args.command not in _COMMANDS_WITHOUT_DATABASE:
         legacy = find_legacy_settings_path()
         if legacy is not None:
-            raise SystemExit(legacy_settings_message(legacy))
+            raise SystemExit(legacy_settings_stop_message(legacy))
         raise SystemExit("Database path is required via application settings or --db.")
 
     try:

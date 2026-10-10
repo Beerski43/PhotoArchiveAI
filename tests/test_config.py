@@ -1,6 +1,6 @@
 """設定ファイルの探索。
 
-以前は「カレントディレクトリの config/app_settings.yml」1か所だけを見て
+以前は「カレントディレクトリの config/app_settings.json」1か所だけを見て
 いたため、リポジトリルート以外から起動すると**例外にもならず空の設定が
 返っていた**。
 """
@@ -239,3 +239,91 @@ def test_the_cli_names_the_leftover_json_instead_of_asking_for_a_database(tmp_pa
     assert "app_settings.json" in str(raised.value)
     assert "YAML" in str(raised.value)
     assert not (tmp_path / "old.db").exists()
+
+
+def test_select_help_does_not_offer_json_rules(capsys):
+    """`--rule` のヘルプが JSON を受け付けると言わないこと（PR #74 のレビュー指摘1）。"""
+    import sys
+
+    import pytest
+
+    from photoarchive_ai import cli
+
+    original = sys.argv
+    sys.argv = ["photoarchive", "select", "--help"]
+    try:
+        with pytest.raises(SystemExit):
+            cli.main()
+    finally:
+        sys.argv = original
+
+    out = capsys.readouterr().out
+    assert "JSON or YAML" not in out
+    assert "YAML" in out
+
+
+def test_the_legacy_message_says_when_renaming_alone_is_enough(tmp_path):
+    """「拡張子を変えるだけ」はタブ字下げの JSON では成り立たない（PR #74 のレビュー指摘2）。"""
+    message = config.legacy_settings_message(tmp_path / "config/app_settings.json")
+
+    assert "空白で字下げしていれば" in message
+    assert "タブ" in message
+
+
+def test_a_renamed_json_indented_with_tabs_is_named_as_the_cause(tmp_path, monkeypatch, caplog):
+    """タブ字下げの JSON の拡張子だけを変えたとき、WARNING がタブを名指しすること。"""
+    path = tmp_path / "config/app_settings.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text('{\n\t"database_path": "a.db"\n}\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="photoarchive_ai.config"):
+        assert config.load_settings() == {}
+
+    assert "タブで字下げしています" in caplog.text
+
+
+def test_the_gui_names_the_leftover_json_instead_of_asking_for_a_database(tmp_path, monkeypatch):
+    """GUI も「DB のパスが要る」ではなく古い設定ファイルのことを言う（PR #74 のレビュー指摘3）。
+
+    PySide6 を立ち上げる前に `SystemExit` で抜けるので、画面は要らない。
+    """
+    import sys
+
+    import pytest
+
+    from photoarchive_ai import gui
+
+    legacy = tmp_path / "config/app_settings.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"database_path": "old.db"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["photoarchive-gui"])
+
+    with pytest.raises(SystemExit) as raised:
+        gui.main()
+
+    assert str(legacy) in str(raised.value)
+    assert not (tmp_path / "old.db").exists()
+
+
+def test_the_stop_message_does_not_repeat_the_warning(tmp_path, monkeypatch, caplog, capsys):
+    """WARNING と止める文が、同じ長い案内を2回出さないこと（PR #74 のレビュー指摘3）。"""
+    import sys
+
+    import pytest
+
+    from photoarchive_ai import cli
+
+    legacy = tmp_path / "config/app_settings.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"database_path": "old.db"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["photoarchive", "init-db"])
+
+    with caplog.at_level(logging.WARNING, logger="photoarchive_ai.config"):
+        with pytest.raises(SystemExit) as raised:
+            cli.main()
+
+    assert config.legacy_settings_message(legacy) in caplog.text
+    assert config.legacy_settings_message(legacy) not in str(raised.value)

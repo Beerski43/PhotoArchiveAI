@@ -126,7 +126,7 @@ cp config/app_settings.sample.yml config/app_settings.yml
 
 必要に応じて `database_path` / `source_root` / `output_root` / `rule_path` を編集します。
 
-**設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身はそのまま YAML として読めるので、`mv config/app_settings.json config/app_settings.yml` でも移れます（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
+**設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身は YAML として読めるので、**空白で字下げしていれば** `mv config/app_settings.json config/app_settings.yml` でも移れます（タブで字下げしていると読めません）（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
 
 設定ファイルは次の順に探し、最初に見つかったものを使います。**リポジトリ以外のディレクトリから実行しても設定が効きます。**
 
