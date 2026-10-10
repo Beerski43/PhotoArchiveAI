@@ -507,6 +507,9 @@ def refresh_folder_dates(connection: sqlite3.Connection) -> int:
     （`dates.folder_date_range`）を変えたとき、古い区間が残らないようにするため。**
     差分スキャンは変わっていないファイルを書き直さないので、`save_media` だけでは
     入れ替わらない。
+
+    **確定（commit）は呼び出し側に任せる。** 移行は版を刻むまでを1つの取引にして
+    いるので、途中で確定するとその順序が崩れる（PR #72 のレビュー指摘5）。
     """
     rows = connection.execute(
         "SELECT id, path, folder_date_from, folder_date_to FROM Media"
@@ -521,7 +524,6 @@ def refresh_folder_dates(connection: sqlite3.Connection) -> int:
             "UPDATE Media SET folder_date_from = ?, folder_date_to = ? WHERE id = ?",
             updates,
         )
-        connection.commit()
     return len(updates)
 
 
@@ -1194,7 +1196,10 @@ def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
     **SQL 側に年齢の計算を持ち込まずに済む**（日付の判断は `dates.parse_date` の
     1か所にある。CLAUDE.md §8）。
 
-    2月29日生まれで、ずらした先に29日が無い年は28日に寄せる。
+    2月29日生まれで、ずらした先に29日が無い年は**3月1日**にする。`dates.age_at` は
+    閏年でない年の2月28日をまだ上がる前と数えるので、**窓の端もそこに合わせる**
+    （28日に寄せていたため、2月28日に撮った写真が画面では0歳、絞り込みでは1歳に
+    なっていた。PR #72 のレビュー指摘4）。
     """
     base = parse_date(birth_date)
     if base is None:
@@ -1202,7 +1207,7 @@ def _birth_year_shift(birth_date: str, years: int) -> Optional[str]:
     try:
         return base.replace(year=base.year + years).isoformat()
     except ValueError:
-        return base.replace(year=base.year + years, day=28).isoformat()
+        return base.replace(year=base.year + years, month=3, day=1).isoformat()
 
 
 def _folder_age_known(birth_date: str, params: List[Any]) -> Optional[str]:
@@ -1345,8 +1350,9 @@ def _face_filter(
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
     ``month_from`` / ``month_to`` は撮影年月の範囲（``"2015-08"`` 形式・**両端を含む**）。
-    片方だけでもよい。``undated_only`` は「**撮影日時が読めない顔だけ**」で、
-    範囲とは**排他**（読めない顔はどの範囲にも入らないため）。
+    片方だけでもよい。``undated_only`` は「**EXIF の撮影日時が読めない顔だけ**」を見る
+    指示（フォルダ名から推測した区間がある顔も入る）。**範囲とは別の問いなので
+    併用しない。** 推測した区間がまるごと入る顔は、範囲の側にも入る（#65）。
 
     年齢は `_age_clause` が組み立てる。**`Face.age` だけを見ない** —
     実データでは割り当て済み 22,511 件のうち入っているのは 126 件だけで、

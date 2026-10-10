@@ -1,7 +1,7 @@
 import json
 import os
 import shutil
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -22,9 +22,18 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
     return json.loads(text)
 
 
-def _parse_date(value: Optional[str]) -> Optional[datetime]:
+def _parse_date(value: Any) -> Optional[datetime]:
+    """規則やメディアの日時を ``datetime`` にする。
+
+    **YAML は引用符の無い `2023-12-31` を `datetime.date` で返す**ので、文字列以外も
+    受ける（`datetime` は `date` の子なので先に見る。PR #72 のレビュー指摘3）。
+    """
     if value is None:
         return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
     try:
         return datetime.fromisoformat(value)
     except ValueError:
@@ -71,13 +80,26 @@ def _get_media_year(media: Dict[str, Any]) -> Optional[int]:
     return None if period is None else period[0].year
 
 
+def _rule_end(value: Any) -> Optional[datetime]:
+    """規則の ``date.end``。**日付だけなら、その日の終わりまでを含める。**
+
+    0時として読むと、`end: "2023-12-31"` で 12月31日に終わるフォルダ名の区間
+    （`2023/` 直下・`2023/2312/`）も、12月31日の昼に撮った写真も外れる
+    （PR #72 のレビュー指摘1）。
+    """
+    parsed = _parse_date(value)
+    if parsed is not None and len(str(value)) == 10:
+        parsed = datetime.combine(parsed.date(), time.max)
+    return parsed
+
+
 def _passes_date_filter(media: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     """撮影時期が指定の範囲に入るか。**フォルダ名から起こした区間は、まるごと入るときだけ通す。**"""
     date_rule = rule.get("date") or {}
     if not date_rule:
         return True
     start = _parse_date(date_rule.get("start"))
-    end = _parse_date(date_rule.get("end"))
+    end = _rule_end(date_rule.get("end"))
     period = _media_period(media)
     if period is None:
         return False
