@@ -19,6 +19,7 @@
 （#89 → #90 → 似た写真を1枚に → 目閉じ・笑顔 → 白飛び・見切れ・美しさ）。#35 の手順7は「UNIQUE 制約＋移行」に決まり #90 を起票、#90 で #35 を閉じる。[phase-6-selection.md](../plan/phase-6-selection.md) を作った。
 GPU（GTX 670）は CUDA 11 以降で切られていて、OpenCL でも ArcFace が CPU の 2〜3 倍遅い（実測。#88 に記録）。推論は CPU の ONNX Runtime に揃える。
 本筋の外: #35 のチェックリストが古かった（手順6・8・9 は済んでいた）ので直した。
+レビュー対応（PR #91）: 指摘1 **真偽値のキー5つすべて**（`include_video`・`family_only`・`remove_duplicate`・`remove_similar`・`include_auto_assigned`）を `load_rule` で確かめるように（既存の4つは `"false"` を真として読んでいた。既定値は `selection.RULE_FLAGS` の1か所に）。指摘2 仕様書の「手本か自動割り当て」3か所に条件を足した。指摘3 phase-6 の表の番号を ROADMAP に揃えた。
 次は 4.2（#90）。
 
 ## 2026-10-10 — 引き継ぎを書いた（#86 のあと）

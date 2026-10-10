@@ -602,7 +602,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（56件）
+### `test_selection.py` — 抽出とコピー（69件）
 
 | テスト | 内容 |
 |---|---|
@@ -617,7 +617,8 @@
 | `test_family_only_counts_automatic_assignments_unless_the_rule_says_otherwise` | 自動割り当ても家族（省略・true）。`include_auto_assigned: false` なら手本だけ（#89） |
 | `test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo` | false のとき自動割り当ての顔は点にも入らない |
 | `test_without_automatic_assignments_select_does_not_measure_automatic_faces` | false のとき自動割り当ての顔を測らない |
-| `test_load_rule_refuses_include_auto_assigned_that_is_not_true_or_false`（3件） | **引用符付きの `"false"` などは読むときに止める**（文字列は真になり、黙って逆の結果になる） |
+| `test_load_rule_refuses_a_flag_that_is_not_true_or_false`（15件） | **真偽値のキー5つとも、引用符付きの `"false"` などは読むときに止める**（文字列は真になり、黙って逆の結果になる。PR #91 のレビュー指摘1: `family_only: "false"` で家族だけに絞っていた） |
+| `test_select_media_refuses_a_quoted_false_instead_of_reading_it_as_true` | `load_rule` を通らないルールでも、文字列を真として読まない |
 | `test_load_rule_reads_include_auto_assigned_false` | `false` を読める |
 | `test_a_blurred_family_photo_comes_after_a_crisp_one` | **ボケた家族の写真は後ろ**（利用者の要望の核心） |
 | `test_a_profile_comes_after_a_frontal_face` | 横顔・整列できない顔は正面の後ろ |

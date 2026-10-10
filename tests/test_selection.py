@@ -11,6 +11,7 @@ from photoarchive_ai.selection import (
     _build_duplicate_groups,
     _get_media_year,
     copy_selected_media,
+    RULE_FLAGS,
     load_rule,
     select_media,
     stale_assignment_notice,
@@ -246,14 +247,28 @@ def test_without_automatic_assignments_select_does_not_measure_automatic_faces(c
     assert db.get_face(connection, face_ids[db.ASSIGN_AUTO])["sharpness"] is None
 
 
+@pytest.mark.parametrize("key", list(RULE_FLAGS))
 @pytest.mark.parametrize("value", ['"false"', "0", "off-ish"])
-def test_load_rule_refuses_include_auto_assigned_that_is_not_true_or_false(tmp_path: Path, value):
-    """引用符付きの "false" は文字列で、そのまま使うと真になる。読むときに止める。"""
-    rule_path = tmp_path / "rule.yml"
-    rule_path.write_text(f"include_auto_assigned: {value}\n", encoding="utf-8")
+def test_load_rule_refuses_a_flag_that_is_not_true_or_false(tmp_path: Path, key, value):
+    """引用符付きの "false" は文字列で、そのまま使うと真になる。読むときに止める。
 
-    with pytest.raises(ValueError, match="include_auto_assigned"):
+    PR #91 のレビュー指摘1: 検査が `include_auto_assigned` だけで、
+    ``family_only: "false"`` は黙って家族だけに絞っていた。
+    """
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text(f"{key}: {value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=key):
         load_rule(str(rule_path))
+
+
+def test_select_media_refuses_a_quoted_false_instead_of_reading_it_as_true(connection):
+    """`load_rule` を通らずに渡されたルールでも、文字列を真として読まない。"""
+    _add(connection, "family.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "nobody.jpg")
+
+    with pytest.raises(ValueError, match="family_only"):
+        select_media(connection, {"family_only": "false"})
 
 
 def test_load_rule_reads_include_auto_assigned_false(tmp_path: Path):

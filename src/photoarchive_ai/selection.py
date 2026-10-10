@@ -35,22 +35,39 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
         ("similar_distance", similar.DEFAULT_DISTANCE),
     ):
         _rule_number(rule, key, default)
-    include_auto_assigned(rule)
+    for key in RULE_FLAGS:
+        _rule_flag(rule, key)
     return rule
 
 
-def include_auto_assigned(rule: Dict[str, Any]) -> bool:
-    """自動割り当ての顔も家族として数えるか（#89・既定 true）。
+#: ルールの真偽値のキーと既定値。**既定はここにだけ書く**（`select_media` も引く）。
+RULE_FLAGS = {
+    "include_video": True,
+    "family_only": False,
+    "remove_duplicate": False,
+    "remove_similar": True,
+    "include_auto_assigned": True,
+}
+
+
+def _rule_flag(rule: Dict[str, Any], key: str) -> bool:
+    """ルールの真偽値。**読むとき（`load_rule`）に確かめる。**
 
     **真偽値だけを受け付ける。** 引用符付きの ``"false"`` は文字列で、そのまま
-    使うと真として扱われ、黙って逆の結果になる。
+    使うと真として扱われ、黙って逆の結果になる（PR #91 のレビュー指摘1。
+    ``family_only: "false"`` で家族だけに絞られていた）。
     """
-    value = rule.get("include_auto_assigned", True)
+    value = rule.get(key, RULE_FLAGS[key])
     if not isinstance(value, bool):
         raise ValueError(
-            f"ルールの include_auto_assigned は true か false で書いてください（いまの値: {value!r}）。"
+            f"ルールの {key} は true か false で書いてください（いまの値: {value!r}）。"
         )
     return value
+
+
+def include_auto_assigned(rule: Dict[str, Any]) -> bool:
+    """自動割り当ての顔も家族として数えるか（#89・既定 true）。"""
+    return _rule_flag(rule, "include_auto_assigned")
 
 
 def family_sources(rule: Dict[str, Any]) -> Tuple[str, ...]:
@@ -291,9 +308,9 @@ def select_media(
     for media in media_list:
         media["family_score"] = scores.get(media["id"], 0.0)
     filtered = [m for m in media_list if _passes_date_filter(m, rule)]
-    if not rule.get("include_video", True):
+    if not _rule_flag(rule, "include_video"):
         filtered = [m for m in filtered if m.get("type") != "video"]
-    if rule.get("family_only"):
+    if _rule_flag(rule, "family_only"):
         filtered = [m for m in filtered if m["id"] in family_of]
 
     filtered.sort(key=lambda m: (
@@ -303,14 +320,14 @@ def select_media(
         -(m.get("face_count") or 0),
     ))
 
-    if rule.get("remove_duplicate"):
+    if _rule_flag(rule, "remove_duplicate"):
         groups = _build_duplicate_groups(filtered)
         filtered = [sorted(group, key=lambda m: (
             -(m.get("family_score") or 0.0),
             -(m.get("quality_score") or 0.0),
         ))[0] for group in groups.values()]
 
-    if rule.get("remove_similar", True):
+    if _rule_flag(rule, "remove_similar"):
         filtered = _remove_similar(
             connection, filtered, family_of, rule, root_paths, progress_callback
         )
