@@ -307,7 +307,8 @@ def test_media_type_is_image_or_video(tmp_path):
     作り物が実装と違う値を使っていると、後から読む人が誤解する。
     """
     assert scanner.get_media_type(tmp_path / "a.JPG") == "image"
-    assert scanner.get_media_type(tmp_path / "a.heic") == "image"
+    # HEIC は走査しない（#26。`convert-heic` で JPEG にしてから）
+    assert scanner.get_media_type(tmp_path / "a.heic") is None
     assert scanner.get_media_type(tmp_path / "a.mp4") == "video"
     assert scanner.get_media_type(tmp_path / "a.txt") is None
 

@@ -18,7 +18,7 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from PIL import ExifTags, Image
 
@@ -27,7 +27,10 @@ from .logging_setup import setup_logging
 
 logger = logging.getLogger("photoarchive.scanner")
 
-IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "heic", "heif"}
+#: **HEIC/HEIF は入れない**（#26）。`convert-heic` で JPEG にしてから走査する。
+#: 両方を入れると、変換後に同じ写真が二重に登録され、同じ顔が二度検出される
+#: （ハッシュが違うので重複排除も効かない）。
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
 VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 COMMIT_INTERVAL = 50
@@ -93,10 +96,11 @@ def extract_exif_datetime(path: Path) -> Optional[str]:
     return None
 
 
-def iter_media_files(root: Path) -> Generator[Path, None, None]:
-    for path in root.rglob("*"):
-        if path.is_file() and is_media_file(path):
-            yield path
+def iter_media_files(root: Path) -> List[Path]:
+    """走査するメディア。**HEIC/HEIF はファイル名も見ない**（#26。利用者の決定）。"""
+    return sorted(
+        path for path in root.rglob("*") if path.is_file() and is_media_file(path)
+    )
 
 
 def _mtime_matches(stored_created_time: Optional[str], mtime: float) -> bool:
@@ -307,6 +311,29 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
 # ---------------------------------------------------------------------------
 
 
+def _in_scope(rows, root: Path):
+    prefix = str(root) + "/"
+    return [row for row in rows if row["path"] == str(root) or row["path"].startswith(prefix)]
+
+
+def prune_excluded_types(connection, root: Path) -> int:
+    """**走査の対象外になった拡張子**の行を削除する（#26 の HEIC）。
+
+    「実体が消えた」とは別に扱い、**2割の安全弁に数えない。** 数えると、HEIC が
+    root の 33% を占める実データ（`な携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
+    `--force-prune` を付けるしかなくなる。対象外の拡張子は未マウントの兆候ではない。
+    """
+    rows = connection.execute("SELECT id, path FROM Media").fetchall()
+    excluded = [row["id"] for row in _in_scope(rows, root) if not is_media_file(Path(row["path"]))]
+    if not excluded:
+        return 0
+    logger.warning(
+        "走査の対象外になった拡張子の行を %d 件削除します（HEIC は convert-heic で JPEG にしてから scan）。",
+        len(excluded),
+    )
+    return db.delete_media(connection, excluded)
+
+
 def prune_missing_media(
     connection,
     root: Path,
@@ -318,9 +345,9 @@ def prune_missing_media(
     ソースが未マウントだった場合に全消しにならないよう、削除が2割を超えたら
     中断する。
     """
-    prefix = str(root) + "/"
     rows = connection.execute("SELECT id, path FROM Media").fetchall()
-    in_scope = [row for row in rows if row["path"] == str(root) or row["path"].startswith(prefix)]
+    # 対象外の拡張子は `prune_excluded_types` の受け持ち。ここの母数にも分子にも入れない。
+    in_scope = [row for row in _in_scope(rows, root) if is_media_file(Path(row["path"]))]
     if not in_scope:
         return 0
     missing = [row["id"] for row in in_scope if row["path"] not in present_paths]
@@ -372,7 +399,7 @@ def scan_directory(
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
 
-    media_files = sorted(iter_media_files(root))
+    media_files = iter_media_files(root)
     if not media_files:
         raise ScanAborted(
             f"対象ディレクトリにメディアファイルが1件もありません: {root}"
@@ -427,9 +454,9 @@ def scan_directory(
         "faces": 0,
         "errors": 0,
         "pruned": 0,
+        "excluded": 0,
         "media_ids": [],
     }
-
     def handle(result: Dict[str, Any], position: int) -> None:
         record = records.get(result["path"])
         media_id = _store_result(db_connection, result, record)
@@ -463,6 +490,7 @@ def scan_directory(
         progress_callback(0, 0, "no media to scan")
 
     if prune:
+        summary["excluded"] = prune_excluded_types(db_connection, root)
         summary["pruned"] = prune_missing_media(
             db_connection, root, present_paths, force=force_prune
         )
@@ -548,12 +576,13 @@ def scan_directories(
         "faces": 0,
         "errors": 0,
         "pruned": 0,
+        "excluded": 0,
         "media_ids": [],
         "roots": [],
     }
     for root in roots:
         summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
-        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned"):
+        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned", "excluded"):
             total[key] += summary[key]
         total["media_ids"].extend(summary["media_ids"])
         total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})

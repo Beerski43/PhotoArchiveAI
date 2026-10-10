@@ -12,9 +12,9 @@
 
 | 順 | Issue | やること | 利用者が決めたこと | 状態 |
 |---|---|---|---|---|
-| 1 | #27 | 設定ファイルとルールを YAML にする | **YAML だけを読む**。手元の JSON は YAML に変換する | PR 起票 |
-| 2 | #24 | 検出元ディレクトリを配列で指定する | **走査した root を DB に記録する（スキーマ版7）** | PR 起票 |
-| 3 | #26 | scan 以降の処理から HEIC を外す | **既存の HEIC の行は引き継がずに消す** | 未着手 |
+| 1 | #27 | 設定ファイルとルールを YAML にする | **YAML だけを読む**。手元の JSON は YAML に変換する | **済**（PR #74 マージ） |
+| 2 | #24 | 検出元ディレクトリを配列で指定する | **走査した root を DB に記録する（スキーマ版7）** | **済**（PR #75 マージ） |
+| 3 | #26 | scan 以降の処理から HEIC を外す | **既存の HEIC の行は引き継がずに消す**。scan は HEIC を一切見ない | PR #76 マージ待ち |
 
 ## #27 — YAML 化
 
@@ -41,7 +41,15 @@
 `/mnt/nfs/nanoPi-NEO2/suzuki/Photo` と `/mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯`。
 **共通の親（`/mnt/nfs/nanoPi-NEO2`）で走査すると他家の写真まで入る。** root は推定しない。
 
-## #26 — HEIC を外す（設計は Issue のコメント）
+## #26 — HEIC を外す
+
+- `scanner.IMAGE_EXTENSIONS` から `heic` / `heif` を外し、`face.py` の HEIF デコーダ登録もやめた
+- 既存の HEIC の行は**対象外の拡張子として**消す（`scanner.prune_excluded_types`）。
+  安全弁の母数にも分子にも入れない
+- **`scan` は HEIC をファイル名も含めて一切見ない**（PR #76 のレビューで利用者が決めた）。同名の JPEG が無い
+  HEIC は 2026-10-10 時点で 3 件（`IMG_6463〜6465.HEIC`）。知らせないので、先に `convert-heic` を流す
+- **マージ後に利用者がすること**: 先に `photoarchive convert-heic`（JPEG の無い3件）→ `scan`
+  （2026-10-10 時点で HEIC の行 1,761 件と顔 941 件が消える）
 
 実データの HEIC はすべて `な携帯` 側で、その root の 33%（2026-10-10。`sqlite3` で
 `SELECT COUNT(*) FROM Media WHERE lower(path) LIKE '%.heic'`）。**2割の安全弁に掛けない
