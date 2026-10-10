@@ -424,8 +424,8 @@ def test_a_relative_source_root_is_anchored_to_the_settings_file(tmp_path, monke
     """
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "app_settings.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("PHOTOARCHIVE_CONFIG", str(config_dir / "app_settings.json"))
+    (config_dir / "app_settings.yml").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("PHOTOARCHIVE_CONFIG", str(config_dir / "app_settings.yml"))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)

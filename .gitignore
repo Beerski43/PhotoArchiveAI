@@ -24,9 +24,9 @@ output/
 models/
 
 # 利用者ごとの設定。sample だけ管理する
-# (Issue #27 でルールを YAML にしても漏れないよう、名指しにしない)
+# (ファイル名を名指しにしない。形式を変えても漏れないように)
 config/*
-!config/*.sample.json
+!config/*.sample.yml
 
 # Claude Code のワークツリー（セッションごとの作業場。リポジトリの中身ではない）
 .claude/worktrees/

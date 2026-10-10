@@ -67,7 +67,7 @@ Last Update: 2026-10-10
 
 ## 2.2 設定ファイル（実装済み）
 
-アプリ設定は JSON。`config/app_settings.sample.json` を写して使う。
+アプリ設定は **YAML**（#27）。`config/app_settings.sample.yml` を写して使う。
 
 | キー | 意味 |
 |---|---|
@@ -82,8 +82,8 @@ Last Update: 2026-10-10
 **次の順で探し、最初に見つかったものを使う。**
 
 1. 環境変数 `PHOTOARCHIVE_CONFIG` が指すファイル
-2. カレントディレクトリの `config/app_settings.json`
-3. リポジトリ直下の `config/app_settings.json`
+2. カレントディレクトリの `config/app_settings.yml`
+3. リポジトリ直下の `config/app_settings.yml`
 
 3 があるのは、リポジトリルート以外から `photoarchive` を起動しても設定が効く
 ようにするため。**設定ファイルのパスを変えるためにソースを編集する必要はない。**
@@ -93,8 +93,15 @@ Last Update: 2026-10-10
 見つからない場合・壊れている場合は空の設定として扱い、コマンドは CLI 引数だけで
 動く。どこを探したかはログ（`--log-level INFO`）に残る。
 
-抽出ルールは `config/rule.json`。**拡張子が `.yml` / `.yaml` なら YAML として
-読む**（`config/rule.sample.json` がサンプル）。
+抽出ルールも YAML で、既定は `config/rule.yml`（`config/rule.sample.yml` がサンプル）。
+
+**JSON は読まない**（#27・利用者の決定）。形式を1つに揃えるため。
+
+- 古い `config/app_settings.json` だけが残っている場合は、**空の設定として扱いつつ
+  WARNING で YAML への変換を促す**。DB のパスが無くて止まるときも、そのことを言う
+  （「DB のパスが要る」とだけ言うと、形式が変わったことに辿り着けない）
+- `.json` のルールファイルを渡されたら、変換を促して止める
+- JSON の中身はそのまま YAML として読めるので、拡張子を変えるだけでも移れる
 
 dlib のモデルの探索順は §7.7 を参照。
 
@@ -106,7 +113,7 @@ dlib のモデルの探索順は §7.7 を参照。
 - `data/`（SQLite データベース、ログ、バックアップ）
 - `output/`、`models/`
 - `mediaFiles/`（実データへの symlink 置き場）
-- `config/app_settings.json`、`config/rule.json`（`*.sample.json` だけ管理する）
+- `config/app_settings.yml`、`config/rule.yml`（`*.sample.yml` だけ管理する）
 - `.pytest_cache/`
 
 ファイルの置き場所の決まりは [../../CLAUDE.md](../../CLAUDE.md) にある。
@@ -355,7 +362,7 @@ GUI は別の実行ファイル `photoarchive-gui`。
 
 | 引数 | 既定 | 意味 |
 |---|---|---|
-| `--rule` | 設定ファイルの `rule_path` | ルールファイル（JSON / YAML） |
+| `--rule` | 設定ファイルの `rule_path` | ルールファイル（YAML） |
 | `--output` | 設定ファイルの `output_root` | コピー先 |
 | `--source` | 設定ファイルの `source_root` | 出力の相対パスの基準 |
 
@@ -1938,16 +1945,16 @@ IMG001  IMG002  IMG003   →   IMG002 を選ぶ     ← これはまだできな
 
 ## 12.1 ルール
 
-抽出は JSON（または YAML）のルールで制御する。
+抽出は YAML のルールで制御する（JSON は読まない・§2.2）。
 
-```json
-{
-  "date": { "start": "2014-01-01", "end": "2023-12-31" },
-  "family_only": true,
-  "count_per_year": 40,
-  "include_video": true,
-  "remove_duplicate": true
-}
+```yaml
+date:
+  start: 2014-01-01
+  end: 2023-12-31
+family_only: true
+count_per_year: 40
+include_video: true
+remove_duplicate: true
 ```
 
 | キー | 既定 | 意味 | 状態 |
@@ -2000,7 +2007,7 @@ IMG001  IMG002  IMG003   →   IMG002 を選ぶ     ← これはまだできな
 **抽出エンジン自体は自然言語に依存させない。** ROADMAP の Phase 8。
 
 ```
-自然言語 → ルール生成 → JSON ルール → 抽出エンジン
+自然言語 → ルール生成 → YAML ルール → 抽出エンジン
 ```
 
 ---

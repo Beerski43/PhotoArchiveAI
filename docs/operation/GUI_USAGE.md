@@ -57,7 +57,7 @@ source .venv/bin/activate
 photoarchive-gui --db data/photoarchive.db
 ```
 
-`--db` を省くと `config/app_settings.json` の `database_path` を使います。
+`--db` を省くと `config/app_settings.yml` の `database_path` を使います。
 
 ## データベースの移行を求められたら
 

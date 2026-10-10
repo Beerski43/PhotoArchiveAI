@@ -135,12 +135,10 @@ def test_match_arguments_reach_the_matcher(tmp_path, monkeypatch):
 
 
 def test_the_database_path_falls_back_to_the_settings_file(tmp_path, monkeypatch):
-    import json
-
     database = tmp_path / "from-settings.db"
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/app_settings.json").write_text(
-        json.dumps({"database_path": str(database)}), encoding="utf-8"
+    (tmp_path / "config/app_settings.yml").write_text(
+        f"database_path: {database}\n", encoding="utf-8"
     )
 
     run_cli(["init-db"], tmp_path)

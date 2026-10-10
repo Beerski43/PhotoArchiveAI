@@ -1,9 +1,9 @@
-import json
 import os
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from PySide6.QtWidgets import QApplication, QDialog
 
 # mediapipe と dlib は conftest.py がフェイクに差し替える。
@@ -31,7 +31,9 @@ def _write_app_settings(
         "output_root": output_root,
         "rule_path": rule_path,
     }
-    (config_dir / "app_settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    (config_dir / "app_settings.yml").write_text(
+        yaml.safe_dump(settings, allow_unicode=True), encoding="utf-8"
+    )
 
 
 def _run_cli(args, cwd: Path):
@@ -57,7 +59,7 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
     output_root.mkdir(parents=True)
 
     database_path = str(tmp_path / "photoarchive.db")
-    rule_path = str(tmp_path / "rule.json")
+    rule_path = str(tmp_path / "rule.yml")
     _write_app_settings(config_dir, database_path, str(source_root), str(output_root), rule_path)
 
     # 同じ人物に見える2枚(同じ色)。1枚目を手で割り当て、2枚目を match に任せる。
@@ -134,7 +136,7 @@ def test_end_to_end_flow(tmp_path: Path, monkeypatch):
         "include_video": False,
         "remove_duplicate": True,
     }
-    Path(rule_path).write_text(json.dumps(rule), encoding="utf-8")
+    Path(rule_path).write_text(yaml.safe_dump(rule), encoding="utf-8")
     _run_cli(["select"], tmp_path)
 
     copied_files = [path for path in output_root.rglob("*") if path.is_file()]
@@ -152,7 +154,7 @@ def test_scan_is_incremental_on_second_run(tmp_path: Path, monkeypatch, capsys):
     source_root.mkdir(parents=True)
     database_path = str(tmp_path / "photoarchive.db")
     _write_app_settings(
-        config_dir, database_path, str(source_root), str(tmp_path / "out"), str(tmp_path / "r.json")
+        config_dir, database_path, str(source_root), str(tmp_path / "out"), str(tmp_path / "r.yml")
     )
     write_image(source_root / "a.jpg")
     monkeypatch.chdir(tmp_path)
