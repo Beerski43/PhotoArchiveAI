@@ -199,7 +199,7 @@
 ## 5. 回帰テスト（PR起票前に必ず実行する）
 
 ```bash
-cd /home/suu/github/PhotoArchiveAI && source .venv/bin/activate
+cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate
 ./scripts/run_regression.sh
 ```
 
@@ -241,7 +241,7 @@ git と GitHub の状態を見て、**文書に書いていない作業がブラ
 `Person.birth_date` の実装が push 済み・PR 無し・どこにも記載無し、という
 状態で見つかっている（Issue #49）。
 
-**これは `./scripts/run_regression.sh` の 5/5 でも出る**（繋がらない環境では
+**これは `./scripts/run_regression.sh` の 5/6 でも出る**（繋がらない環境では
 `./scripts/run_regression.sh --offline`）。 切る前に思い出せるか
 に頼ると忘れるので、**PR の前に必ず通る場所**へ置いてある。単体で叩くのは、
 回帰テストを回さずに状態だけ見たいとき。
@@ -422,7 +422,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   5点を取れないことにしているので、見え方は `appearance._five_points` を別に
   差し替えている（`tests/fakes.py`）
 - **手本どうしの1件抜きでは、手本の薄いところの取りこぼしが見えない。** #66 で
-  検証の数字は正解 −0.8% だったが、本番では年上の虎太朗の顔が約 1,900 件外れた
+  検証の数字は正解 −0.8% だったが、本番では年上の${PERSON_3}の顔が約 1,900 件外れた
   （手本の 98.7% が0〜3歳）。**規則を変えたら、外れた顔を目で見る**
 - **顔の一覧を全件読まない。** サムネイルのBLOBを全件読むと数百MBになり、
   GUIが固まる。必ず `LIMIT` / `OFFSET` でページ単位に読む。
@@ -436,7 +436,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - **HEIC/HEIF を `scanner.IMAGE_EXTENSIONS` に戻さない**（#26）。`convert-heic` の後に
   同じ写真が JPEG と二重に入り、同じ顔に二度割り当てることになる。対象外になった
   拡張子の行は `prune_excluded_types` が消し、**2割の安全弁には数えない**（数えると
-  HEIC が 33% を占める `な携帯` の root で必ず中断する）
+  HEIC が 33% を占める `${PERSON_2}携帯` の root で必ず中断する）
 - **`face.get_latest_error()` は大域変数。** 1ファイルの処理を始めるときに
   `clear_latest_error()` で消さないと、前のファイルのエラーが次に付く。
   1つのワーカーが続けて何件も処理するので、並列でも同じことが起きる。
@@ -483,3 +483,12 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - テストの `mediapipe` フェイクは `relative_bounding_box` を返す。実装が先に
   見るのがこの属性だから。`bounding_box` だけを返すフェイクに戻さない。
 - **テストはリポジトリの中にファイルを書かない。** `tmp_path` を使う。
+- **家族の名前・NFS のパス・誕生日・ホームディレクトリ・行事や地名の入ったフォルダ名・
+  GitHub のアカウント名を、リポジトリに書かない**（#77。リポジトリは public）。文書では
+  `${PERSON_1}`〜`${PERSON_5}`・`${NFS_ROOT}`・`${EVENT}` などの変数で書き、テストでは
+  架空の値を使う。**どの変数が誰かは、git に入らない `config/private_terms.yml` にだけある**
+  （形は `config/private_terms.sample.yml`）。`scripts/check_private_terms.py` が検査し、
+  `.githooks/` の pre-commit / commit-msg と回帰テストの 6/6 が止める。**clone したら
+  `git config core.hooksPath .githooks` を流す。** コミットメッセージ・PR・Issue の本文にも書かない
+  （履歴の書き換えでは GitHub 上の本文は消えない）。シェルのコマンド例に `${...}` を書かない
+  （シェルが空に展開する）

@@ -43,7 +43,7 @@
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
 | `test_migration.py::test_the_backup_keeps_writes_that_are_still_in_the_wal` | **控えを `shutil.copy2` で取っていたため、WAL にだけ残っている書き込みが控えから黙って抜けていた**（WAL に全部あるときは表すら無い控えになる） |
-| `test_db.py::test_the_age_order_uses_the_calculated_age_across_every_page` | **「年齢の若い順」が確定値（`Face.age`）だけで並べていた。** 実データではひよりの 9,502 件のうち 199 件しか並ばず、残りは id 順のまま2ページ目以降に散っていた（2026-10-09 に利用者が報告） |
+| `test_db.py::test_the_age_order_uses_the_calculated_age_across_every_page` | **「年齢の若い順」が確定値（`Face.age`）だけで並べていた。** 実データでは${PERSON_4}の 9,502 件のうち 199 件しか並ばず、残りは id 順のまま2ページ目以降に散っていた（2026-10-09 に利用者が報告） |
 | `test_gui_views.py::test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **ページの先頭に小さいサムネイルが来ると、枠がそれに合わせて縮み、残りの顔が切り詰められて下の文字も消えた**（`setUniformItemSizes` は先頭の項目から寸法を決める。2026-10-09 に利用者が報告） |
 | `test_db.py::test_every_list_filter_also_works_for_counting_and_for_bulk` | 上の落ち方を**種類ごと**に防ぐ。一覧・件数・まとめて処理が同じ絞り込みを受け取ることを、`_face_filter` の引数から数えて確かめる |
 | `test_scanner_incremental.py::test_scan_skips_hash_and_faces_on_second_run` | 2回目のスキャンが差分にならなかった（Issue #9） |
@@ -71,7 +71,7 @@
 | `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
 | `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて除外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
 | `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
-| `test_source_roots.py::test_select_copies_a_photo_outside_every_root_by_its_name` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（`str` に `as_posix()`。実データでは `な携帯` の 5,323 件が外側だった。#24 で見つけた） |
+| `test_source_roots.py::test_select_copies_a_photo_outside_every_root_by_its_name` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
 ---
@@ -757,7 +757,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | テスト | 内容 |
 |---|---|
 | `test_a_heic_next_to_its_jpeg_is_not_registered` | HEIC は登録しない（JPEG だけ） |
-| `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、root の大半でも2割の安全弁で止まらない**（実データの `な携帯` は 33%） |
+| `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、root の大半でも2割の安全弁で止まらない**（実データの `${PERSON_2}携帯` は 33%） |
 | `test_the_safety_valve_still_counts_real_files_that_vanished` | 消えた JPEG は今までどおり安全弁で止まる |
 | `test_no_prune_keeps_the_heic_rows` | `--no-prune` なら消さない |
 | `test_a_folder_of_only_heic_is_treated_as_having_no_media` | **scan は HEIC を一切見ない。** HEIC だけのフォルダは「メディアが1件も無い」で止まる（PR #76 のレビューで利用者が決めた） |
@@ -918,9 +918,25 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | `test_a_rounded_number_is_not_treated_as_a_count` | 丸めた表現は引っかからない（逃げ道） |
 
 git と GitHub の状態（PR の無いブランチなど）は `scripts/check_handoff.py`。
-`run_regression.sh` の 5/5 で**実行する**が、**合否には含めない**
+`run_regression.sh` の 5/6 で**実行する**が、**合否には含めない**
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
+
+### `test_check_private_terms.py` — 公開しない語を入れない（9件）
+
+語は架空のもの（実際の一覧は git に入らない）。**見つけても語を出さず変数だけを出す**（出力は PR 本文に貼られる）。
+
+| テスト | 内容 |
+|---|---|
+| `test_longer_terms_are_replaced_first` | 長い語から置き換える（姓が氏名の一部を先に置き換えない）。ローマ字は大文字小文字を区別しない |
+| `test_a_tracked_file_with_a_term_fails_without_printing_the_term` | **中身とファイル名の語で失敗し、語を出さない** |
+| `test_a_clean_repository_passes` | 変数だけなら通る |
+| `test_staged_content_is_checked_before_commit` | pre-commit は作業ツリーではなく、コミットする中身を見る |
+| `test_the_commit_message_is_checked` | commit-msg |
+| `test_fix_replaces_tracked_files` | `--fix` で置き換える。バイナリは触らない |
+| `test_filter_repo_expressions_keep_case_insensitive_terms` | 履歴の書き換えに渡す式（長い語から・大文字小文字の区別） |
+| `test_without_a_term_list_the_check_is_skipped` | 一覧の無い環境では止めない |
+| `test_the_repository_holds_no_private_terms` | **このリポジトリに手元の一覧の語が無い**（一覧がある環境だけ） |
 
 ### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
 

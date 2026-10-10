@@ -57,7 +57,7 @@ def seeded(tmp_path):
     """手本1件と、同じ顔（同じ特徴量）の未割当1件・別人の未割当1件。"""
     database = tmp_path / "match.db"
     connection = db.ensure_database(str(database))
-    person_id = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    person_id = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
     teacher = _face(connection, 0, axis=0)
     same = _face(connection, 1, axis=0)
     other = _face(connection, 2, axis=5)
@@ -114,7 +114,7 @@ def test_match_runs_from_the_window_and_refreshes_the_counts(seeded, monkeypatch
     kind, title, text = shown[-1]
     assert kind == "information"
     assert "自動で割り当てた顔: 1 件" in text
-    assert "ひより: 1 件" in text
+    assert "${PERSON_4}: 1 件" in text
 
 
 def test_the_backup_is_taken_when_chosen(seeded, monkeypatch, shown):
@@ -223,12 +223,12 @@ def test_the_summary_names_each_person_and_the_backup():
             "no_candidate": 12,
             "per_person": {3: 6208, 4: 6245},
         },
-        [{"id": 3, "name": "ひより"}, {"id": 4, "name": "虎太朗"}],
+        [{"id": 3, "name": "${PERSON_4}"}, {"id": 4, "name": "${PERSON_3}"}],
         Path("data/photoarchive.db.bak-20261009"),
     )
 
     assert "自動で割り当てた顔: 15,467 件" in text
     assert "誕生日で候補が1人も残らなかった顔: 12 件" in text
     # 多い順に並ぶ
-    assert text.index("虎太朗: 6,245 件") < text.index("ひより: 6,208 件")
+    assert text.index("${PERSON_3}: 6,245 件") < text.index("${PERSON_4}: 6,208 件")
     assert "控え: data/photoarchive.db.bak-20261009" in text

@@ -67,7 +67,7 @@ FOLDER_SAMPLES = [
     "/photos/a.jpg",
     "a.jpg",
     "relative/dir/a.jpg",
-    "/photos/2011/110416結婚式/式場/data/IMG.JPG",
+    "/photos/2011/110416${EVENT}/式場/data/IMG.JPG",
     "/photos/ドット.混じり/a.b.c.jpg",
 ]
 
@@ -139,7 +139,7 @@ def test_event_face_counts_separates_unassigned_manual_and_rejected(connection):
     **手本の件数が見えないと、まとめて除外を押せない。** 結婚式のフォルダは
     「ほぼ他人」であって「全部他人」ではなく、家族も写っている。
     """
-    person_id = db.add_person(connection, name="なつ")
+    person_id = db.add_person(connection, name="${PERSON_2}")
     wedding = _add_media(connection, "/photos/2007/wedding/a.jpg")
     home = _add_media(connection, "/photos/2007/home/b.jpg")
     for _ in range(3):
@@ -252,7 +252,7 @@ def test_day_none_and_undated_are_different_instructions(connection):
 def test_event_filter_does_not_match_subfolders(connection):
     """**入れ子は別のフォルダとして扱う。** 前方一致にしない。
 
-    実データの `2011/110416雄司明日美結婚式` は `式場/data` と `suzuki` に
+    実データの `2011/110416雄司明日美結婚式` は `式場/data` と `${SURNAME}` に
     分かれていて、片方だけ除外したい場合がある。
     """
     parent = _add_media(connection, "/photos/wedding/a.jpg")
@@ -279,7 +279,7 @@ def test_face_ids_returns_every_match_beyond_one_page(connection):
 
 def test_face_ids_for_unassigned_leaves_manual_faces_alone(connection):
     """**手本を巻き込まない。** これが行事の一括操作でいちばん大事な一線。"""
-    person_id = db.add_person(connection, name="なつ")
+    person_id = db.add_person(connection, name="${PERSON_2}")
     media_id = _add_media(connection, "/photos/wedding/a.jpg")
     manual = _add_face(connection, media_id)
     unassigned = [_add_face(connection, media_id) for _ in range(3)]

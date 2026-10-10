@@ -56,13 +56,13 @@ def _face(connection, name, angle, shooting_date="2020-01-01T00:00:00"):
 
 @pytest.fixture()
 def window_and_faces(tmp_path):
-    """ひより（手本2件・2011年生まれ）と旺志朗（手本なし）、未割当の顔。"""
+    """${PERSON_4}（手本2件・2011年生まれ）と${PERSON_5}（手本なし）、未割当の顔。"""
     database = tmp_path / "recommend.db"
     connection = db.ensure_database(str(database))
-    hiyori = db.add_person(connection, "ひより", "長女", birth_date="2011-05-03")
-    oshiro = db.add_person(connection, "旺志朗", "次男", birth_date="2019-01-01")
+    person4 = db.add_person(connection, "${PERSON_4}", "長女", birth_date="2011-05-03")
+    person5 = db.add_person(connection, "${PERSON_5}", "次男", birth_date="2019-01-01")
     teachers = [_face(connection, "t0", 0), _face(connection, "t5", 5)]
-    db.assign_faces(connection, teachers, hiyori, db.ASSIGN_MANUAL)
+    db.assign_faces(connection, teachers, person4, db.ASSIGN_MANUAL)
     faces = {
         "遠い": _face(connection, "far", 80),
         "近い": _face(connection, "near", 2),
@@ -71,12 +71,12 @@ def window_and_faces(tmp_path):
         "否定済み": _face(connection, "denied", 3),
         "手本": teachers[0],
     }
-    db.reject_faces_for_person(connection, [faces["否定済み"]], hiyori)
+    db.reject_faces_for_person(connection, [faces["否定済み"]], person4)
     connection.commit()
     connection.close()
 
     window = photoarchive_gui.MainWindow(str(database))
-    yield window, faces, {"ひより": hiyori, "旺志朗": oshiro}
+    yield window, faces, {"${PERSON_4}": person4, "${PERSON_5}": person5}
     window.connection.close()
 
 
@@ -111,7 +111,7 @@ def test_unassigned_faces_of_a_person_are_listed_most_similar_first(window_and_f
     """**種別「未割当」を選ぶと、この人物に似た順に並ぶ。** 選び直さなくてよい。"""
     window, faces, persons = window_and_faces
 
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
 
     assert window._current_order() == recommend.ORDER_SIMILAR
     assert _ids(window) == [faces["近い"], faces["中くらい"], faces["遠い"]]
@@ -120,7 +120,7 @@ def test_unassigned_faces_of_a_person_are_listed_most_similar_first(window_and_f
 
 def test_the_reverse_order_lists_the_least_similar_first(window_and_faces):
     window, faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
 
     _choose_order(window, recommend.ORDER_DISSIMILAR)
 
@@ -132,7 +132,7 @@ def test_faces_that_cannot_be_this_person_are_not_offered(window_and_faces):
     どれだけ似ていても（ここではどちらも手本のすぐ隣）。"""
     window, faces, persons = window_and_faces
 
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
 
     assert faces["誕生前"] not in _ids(window)
     assert faces["否定済み"] not in _ids(window)
@@ -140,10 +140,10 @@ def test_faces_that_cannot_be_this_person_are_not_offered(window_and_faces):
 
 def test_a_person_without_teachers_says_the_order_is_not_by_similarity(window_and_faces):
     """**手本が0件なら、そうと分かる表示を出す。** 黙って id 順に並べると、
-    似た順のつもりで見てしまう。旺志朗の誕生前の顔も外れる。"""
+    似た順のつもりで見てしまう。${PERSON_5}の誕生前の顔も外れる。"""
     window, faces, persons = window_and_faces
 
-    _show_unassigned(window, persons["旺志朗"])
+    _show_unassigned(window, persons["${PERSON_5}"])
 
     assert photoarchive_gui.NO_TEACHERS_NOTICE in window.page_label.text()
     assert _ids(window) == sorted(
@@ -154,10 +154,10 @@ def test_a_person_without_teachers_says_the_order_is_not_by_similarity(window_an
 def test_assigning_from_the_list_improves_the_order_right_away(window_and_faces):
     """**割り当てた顔は手本になり、次の並びに効く。** 計算し直しは増えた手本の分だけ。"""
     window, faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     assert _ids(window)[-1] == faces["遠い"]
 
-    window.assign_faces([faces["中くらい"]], persons["ひより"])
+    window.assign_faces([faces["中くらい"]], persons["${PERSON_4}"])
     window.connection.commit()
     window.reload_faces()
 
@@ -171,7 +171,7 @@ def test_assigning_from_the_list_improves_the_order_right_away(window_and_faces)
 def test_the_similarity_is_kept_while_paging(window_and_faces, monkeypatch):
     """**ページを送るたびに計算し直さない。**"""
     window, _faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     calls = []
     original = recommend.nearest_distances
     monkeypatch.setattr(
@@ -201,7 +201,7 @@ def test_similarity_orders_need_a_person(window_and_faces):
         assert model.item(index).isEnabled() is False
         assert "人物を選んでください" in model.item(index).toolTip()
 
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     assert model.item(index).isEnabled() is True
     score = next(
         i for i, (_, value) in enumerate(photoarchive_gui.ORDER_CHOICES)
@@ -214,8 +214,8 @@ def test_a_persons_own_faces_can_be_listed_least_similar_first(window_and_faces)
     """**似ていない順は、割り当ての誤りを探す並びにもなる。** 自分自身は手本から外して測る
     （外さないと、手本が全部 0 で並ばない）。"""
     window, faces, persons = window_and_faces
-    _select_person(window, persons["ひより"])
-    window.assign_faces([faces["遠い"]], persons["ひより"])
+    _select_person(window, persons["${PERSON_4}"])
+    window.assign_faces([faces["遠い"]], persons["${PERSON_4}"])
     window.connection.commit()
 
     _choose_order(window, recommend.ORDER_DISSIMILAR)
@@ -227,7 +227,7 @@ def test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense(window_a
     """**未割当の顔には戻す先が無い。** 出すのは「この人物ではない」と「誰でもない顔」。
     割り当て先は「人物に割り当て」（1〜9）。"""
     window, faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)
 
     assert [action.text() for action in window._menu_actions()] == [
@@ -242,7 +242,7 @@ def test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense(window_a
 def test_not_this_person_removes_the_face_from_the_candidates(window_and_faces):
     """**「この人物ではない」と押したら、その人物の候補から消える。**"""
     window, faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)
 
     window._reject_for_person_selected()
@@ -255,7 +255,7 @@ def test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation(
 ):
     """未割当の除外は毎件通る操作で、**確認を挟むと作業そのものが遅くなる。**"""
     window, faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)
     monkeypatch.setattr(
         photoarchive_gui.QMessageBox,
@@ -270,7 +270,7 @@ def test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation(
 
 def test_switching_back_from_unassigned_restores_the_persons_order(window_and_faces):
     window, _faces, persons = window_and_faces
-    _show_unassigned(window, persons["ひより"])
+    _show_unassigned(window, persons["${PERSON_4}"])
 
     window.source_box.setCurrentIndex(0)
 

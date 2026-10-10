@@ -38,8 +38,8 @@
   （root が記録される。差分スキャンなので読み直しは変わったファイルだけ）
 
 実データの root は2つ（2026-10-02 に数えた。`Media.path` の接頭辞で数え直せる）。
-`/mnt/nfs/nanoPi-NEO2/suzuki/Photo` と `/mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯`。
-**共通の親（`/mnt/nfs/nanoPi-NEO2`）で走査すると他家の写真まで入る。** root は推定しない。
+`${NFS_ROOT}/${SURNAME}/Photo` と `${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯`。
+**共通の親（`${NFS_ROOT}`）で走査すると他家の写真まで入る。** root は推定しない。
 
 ## #26 — HEIC を外す
 
@@ -51,6 +51,6 @@
 - **マージ後に利用者がすること**: 先に `photoarchive convert-heic`（JPEG の無い3件）→ `scan`
   （2026-10-10 時点で HEIC の行 1,761 件と顔 941 件が消える）
 
-実データの HEIC はすべて `な携帯` 側で、その root の 33%（2026-10-10。`sqlite3` で
+実データの HEIC はすべて `${PERSON_2}携帯` 側で、その root の 33%（2026-10-10。`sqlite3` で
 `SELECT COUNT(*) FROM Media WHERE lower(path) LIKE '%.heic'`）。**2割の安全弁に掛けない
 削除の経路が要る。**

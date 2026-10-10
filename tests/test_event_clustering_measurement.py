@@ -39,7 +39,7 @@ def _seed_database(path: Path) -> None:
     """1つの行事に近い顔2件、別の日に1件、日付不明のフォルダに2件。"""
     connection = db.ensure_database(str(path))
     try:
-        person = db.add_person(connection, "なつ")
+        person = db.add_person(connection, "${PERSON_2}")
         rows = [
             ("/photos/undoukai/a.jpg", "2012-10-06T10:00:00", 1.0, db.ASSIGN_MANUAL),
             ("/photos/undoukai/b.jpg", "2012-10-06T11:00:00", 0.99, None),

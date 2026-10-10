@@ -49,25 +49,25 @@ def _year(year):
         # YYYYMMDD の DD=00 は「日なし」。**Issue 本文の誤読2（年しか取れなかった）**
         ("/p/Photo/2026/20260100いろいろ/a.jpg", _month(2026, 1)),
         # YYMMDD の行事は**月まで**（行事の初日であって撮影日ではない）
-        ("/p/Photo/2013/130816-18お盆/a.jpg", _month(2013, 8)),
+        ("/p/Photo/2013/130816-18${EVENT}/a.jpg", _month(2013, 8)),
         ("/p/Photo/2006/061231USJ/a.jpg", _month(2006, 12)),
         # YYYYMM-MM は月の範囲
-        ("/p/Photo/2021/202101-03お正月/a.jpg", (date(2021, 1, 1), date(2021, 3, 31))),
+        ("/p/Photo/2021/202101-03${EVENT}/a.jpg", (date(2021, 1, 1), date(2021, 3, 31))),
         # MM だけ
         ("/p/Photo/2026/02/a.jpg", _month(2026, 2)),
         # **ファイル名は読まない。Issue 本文の誤読1（2010.jpg を YYMM と読んで 2020-10）**
         ("/p/Photo/2010/2010.jpg", _year(2010)),
         # 行事の下の MMDD。**親の区間に収まる読み方だけを残す**（YYMM の 2009年20月は無い）
-        ("/p/Photo/2009/090920-22ツール・ド・のと/0920内灘-輪島/a.jpg", _month(2009, 9)),
+        ("/p/Photo/2009/090920-22${EVENT}/0920${EVENT}/a.jpg", _month(2009, 9)),
         # 日付の無いフォルダの下でも、年が合わなければ MMDD（2008年の下の 0907）
         ("/p/Photo/2008/おなか/0907戌の日/a.jpg", _month(2008, 9)),
         # **日付の無いサブフォルダは年だけ受け継ぐ**（行事より前の写真が入っている）
         ("/p/Photo/2007/071222Wedding/式前/衣装合わせ/a.jpg", _year(2007)),
-        ("/p/Photo/2011/110416結婚式/式場/前撮り/a.jpg", _year(2011)),
+        ("/p/Photo/2011/110416${EVENT}/式場/前撮り/a.jpg", _year(2011)),
         # 形の決まらない名前（7桁）は読まない
-        ("/p/natsu/2021/2021046-07クラス発表/a.jpg", _year(2021)),
+        ("/p/person2/2021/2021046-07クラス発表/a.jpg", _year(2021)),
         # 年と食い違う YYYYMMDD は読まない
-        ("/p/natsu/2023/20230500いろいろ/20240925/a.jpg", _year(2023)),
+        ("/p/person2/2023/20230500いろいろ/20240925/a.jpg", _year(2023)),
         # 年のフォルダが無ければ起こさない
         ("/p/Photo/temp/a.jpg", None),
         ("a.jpg", None),
@@ -185,7 +185,7 @@ def test_a_version_5_database_gains_the_folder_dates_and_keeps_its_faces(tmp_pat
     """
     database = tmp_path / "v5.db"
     connection = db.ensure_database(str(database))
-    person = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    person = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
     media_id = _media(connection, "/p/2012/1210/a.jpg")
     _face(connection, media_id, person, db.ASSIGN_MANUAL)
     _face(connection, media_id)
@@ -298,7 +298,7 @@ def test_the_teacher_age_ignores_the_folder_range(connection):
     使うと8歳以下と分かった手本の上限が締まり、実データの複製で**正しい自動割り当てが
     125 件外れた**（付いたのは 54 件）。`match` で使うのは誕生前の除外だけ。
     """
-    person = db.add_person(connection, "旺志朗", birth_date="2013-10-09")
+    person = db.add_person(connection, "${PERSON_5}", birth_date="2013-10-01")
     folder_only = _face(
         connection, _media(connection, "/p/2016/1605/a.jpg"), person, db.ASSIGN_MANUAL
     )
@@ -322,7 +322,7 @@ def test_the_teacher_age_ignores_the_folder_range(connection):
 
 def test_match_drops_a_person_only_when_the_whole_range_is_before_the_birth():
     person_ids = np.array([1, 2])
-    births = {1: "2008-02-19", 2: "2010-12-08"}
+    births = {1: "2008-02-19", 2: "2010-12-01"}
     year_2009 = taken_at(None, "2009-01-01", "2009-12-31")
     year_2010 = taken_at(None, "2010-01-01", "2010-12-31")
     assert _persons_alive_at(person_ids, births, year_2009).tolist() == [True, False]
@@ -347,10 +347,10 @@ def test_the_preview_says_the_period_is_a_guess():
         "folder_date_from": "2012-10-01",
         "folder_date_to": "2012-10-31",
     }
-    text = gui.format_media_info(media, person={"name": "ひより", "birth_date": "2010-12-08"})
+    text = gui.format_media_info(media, person={"name": "${PERSON_4}", "birth_date": "2010-12-01"})
     assert "撮影日時: 不明（EXIFなし）" in text
     assert "撮影時期: 2012年10月（フォルダ名から推測）" in text
-    assert "ひより: 1歳?" in text
+    assert "${PERSON_4}: 1歳?" in text
 
 
 def test_bulk_age_entry_tells_how_many_dates_are_guesses():

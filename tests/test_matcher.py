@@ -275,10 +275,10 @@ def _births(connection, **people):
 def test_a_person_is_not_assigned_to_a_photo_taken_before_they_were_born(connection):
     """**生まれる前の写真には写れない。** 動かせない事実なので候補から外す。
 
-    実データでは、ひよりの手本（赤ん坊の顔が11件）が 2004〜2007 年の写真の
+    実データでは、${PERSON_4}の手本（赤ん坊の顔が11件）が 2004〜2007 年の写真の
     赤ん坊を 351 件引き寄せていた。**赤ん坊の顔は兄弟間でほとんど区別がつかない。**
     """
-    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     # 妹が生まれる2年前の写真。顔は妹の手本とそっくり。
@@ -300,7 +300,7 @@ def test_removing_an_impossible_person_lets_the_margin_through(connection):
     判断が保留のままになる。**実データではこれが効いて、未割当だった
     457 件が正しく兄へ付いた。**
     """
-    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     # 兄と妹の手本が近い（赤ん坊どうしで区別がつかない状況）。
     _add_face(connection, teacher, _vector(0.00, 0.0), people["兄"], db.ASSIGN_MANUAL)
@@ -318,7 +318,7 @@ def test_removing_an_impossible_person_lets_the_margin_through(connection):
 
 def test_a_face_without_a_shooting_date_is_not_filtered(connection):
     """**分からないものを弾かない。** 実データの約16%に撮影日時が無い。"""
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     undated = _dated_media(connection, 2, None)
@@ -338,7 +338,7 @@ def test_a_broken_shooting_date_does_not_filter_anyone_out(connection, broken):
     （`0000-00-00` だけを見ていて `TTTT-TT-TTTTT:TT:TT` が素通りした）。
     判断は `dates.parse_date` の1か所に預けてあり、**ここには書かない**。
     """
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     broken_media = _dated_media(connection, 2, broken)
@@ -380,7 +380,7 @@ def test_being_born_on_the_day_of_the_photo_still_counts(connection):
 
 def test_the_distance_histogram_leaves_out_faces_with_no_candidate(connection):
     """候補が1人も残らなかった顔には距離が無い。**分布に混ぜない。**"""
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     before = _dated_media(connection, 2, "2005-06-01T10:00:00")
@@ -396,10 +396,10 @@ def test_a_face_marked_as_not_this_person_is_not_assigned_to_them_again(connecti
     """**「割り当てを解除」だけでは、match を流すたびに同じ誤りが戻る。**
 
     `match` は手本と閾値だけで結果が決まるので、未割当に戻した判断はどこにも
-    残らない。実データでは、ひよりの自動割り当てを見直して解除した **1,785 件**が
+    残らない。実データでは、${PERSON_4}の自動割り当てを見直して解除した **1,785 件**が
     これに当たった。**否定を残して初めて、その判断が次の match に効く。**
     """
-    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     target_media = _dated_media(connection, 2, "2012-06-01T10:00:00")
@@ -422,7 +422,7 @@ def test_not_this_person_still_allows_another_person(connection):
     兄弟の赤ん坊は互いによく似ている。妹を否定したら、**兄には付いてよい。**
     `assign_source='rejected'` との違いがここ。
     """
-    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.00, 0.0), people["妹"], db.ASSIGN_MANUAL)
     _add_face(connection, teacher, _vector(1.02, 0.0), people["兄"], db.ASSIGN_MANUAL)
@@ -437,7 +437,7 @@ def test_not_this_person_still_allows_another_person(connection):
 
 def test_rejecting_for_one_person_does_not_touch_another_persons_assignment(connection):
     """別の人物に割り当たっている顔を巻き込まない。"""
-    people = _births(connection, 兄="2009-02-19", 妹="2010-12-08")
+    people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
     media = _dated_media(connection, 1, "2012-06-01T10:00:00")
     brother_face = _add_face(
         connection, media, _vector(0.0, 0.0), people["兄"], db.ASSIGN_MANUAL
@@ -452,7 +452,7 @@ def test_rejecting_for_one_person_does_not_touch_another_persons_assignment(conn
 
 def test_marking_not_this_person_clears_that_persons_assignment(connection):
     """その人物に割り当たっていたなら外す。**記録が矛盾しないように。**"""
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     media = _dated_media(connection, 1, "2012-06-01T10:00:00")
     face_id = _add_face(
         connection, media, _vector(0.0, 0.0), people["妹"], db.ASSIGN_MANUAL
@@ -467,7 +467,7 @@ def test_marking_not_this_person_clears_that_persons_assignment(connection):
 
 def test_the_rejection_can_be_undone(connection):
     """**押し間違いから戻れること。**"""
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     teacher = _dated_media(connection, 1, "2011-06-01T10:00:00")
     _add_face(connection, teacher, _vector(1.0, 0.0), people["妹"], db.ASSIGN_MANUAL)
     target = _dated_media(connection, 2, "2012-06-01T10:00:00")
@@ -482,7 +482,7 @@ def test_the_rejection_can_be_undone(connection):
 
 def test_marking_the_same_face_twice_is_harmless(connection):
     """同じ顔を2回押しても落ちない（主キーの衝突）。"""
-    people = _births(connection, 妹="2010-12-08")
+    people = _births(connection, 妹="2010-12-01")
     media = _dated_media(connection, 1, "2012-06-01T10:00:00")
     face_id = _add_face(connection, media, _vector(0.0, 0.0))
 
@@ -499,7 +499,7 @@ def test_progress_is_reported_before_the_first_chunk(connection):
     何も知らせないと、GUI から流したときに窓が固まって見える（GNOME は5秒で
     「応答なし」と出す）。#67 で GUI から流す口を作って測った。
     """
-    person_id = db.add_person(connection, "ひより")
+    person_id = db.add_person(connection, "${PERSON_4}")
     _add_face(connection, _add_media(connection, 0), _vector(1.0), person_id, db.ASSIGN_MANUAL)
     _add_face(connection, _add_media(connection, 1), _vector(1.0))
     calls = []

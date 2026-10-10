@@ -316,7 +316,7 @@ def test_changing_an_age_later_also_offers_the_calculated_value(window, monkeypa
     connection = window.connection
     # _seed のメディアは撮影日時を持たない。年齢を出すには EXIF が要る。
     connection.execute("UPDATE Media SET shooting_date = '2017-12-16T18:46:32'")
-    person_id = db.add_person(connection, "なつ", birth_date="2011-05-03")
+    person_id = db.add_person(connection, "${PERSON_2}", birth_date="2011-05-03")
     face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
     window.assign_faces(face_ids, person_id)
     _select_person_view(window, person_id)
@@ -399,7 +399,7 @@ def test_the_assigned_list_is_ordered_by_age(window):
     成長の順に並ぶので、年齢の入れ間違いや、別人が混ざっているのに気づきやすい。
     """
     connection = window.connection
-    person_id = db.add_person(connection, "なつ")
+    person_id = db.add_person(connection, "${PERSON_2}")
     face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
     for face_id, age in zip(face_ids, (8, 2, 5, None, 0)):
         window.assign_faces([face_id], person_id, age=age)
@@ -602,7 +602,7 @@ def _assigned_person_with_faces(connection, window, *, birth_date, shooting_date
         connection.execute("UPDATE Media SET shooting_date = NULL")
     else:
         connection.execute("UPDATE Media SET shooting_date = ?", (shooting_date,))
-    person_id = db.add_person(connection, "なつ", birth_date=birth_date)
+    person_id = db.add_person(connection, "${PERSON_2}", birth_date=birth_date)
     face_ids = [row["id"] for row in db.list_faces(connection, unassigned=True)]
     db.assign_faces(connection, face_ids, person_id, source)
     connection.commit()
@@ -977,7 +977,7 @@ def test_clearing_the_age_filter_shows_everything_again(window):
 def test_not_this_person_records_the_rejection_and_clears_the_assignment(window):
     """**除外は2種類ある。** こちらは「その人物ではない」。
 
-    実データでは、ひよりの自動割り当てを見直して解除した 1,785 件が
+    実データでは、${PERSON_4}の自動割り当てを見直して解除した 1,785 件が
     `match` を流すと戻ってくる状態だった。**解除では判断が残らない。**
     """
     connection = window.connection
@@ -1393,7 +1393,7 @@ def test_other_buttons_also_clear_the_face_from_the_not_this_person_list(window)
 def test_a_face_assigned_to_someone_else_stays_in_the_list(window):
     """**別の人物に付いた顔は残る。** 「この人物ではない」はまだ効いているため。
 
-    兄弟の顔はこうなる。ひよりではないと記録したうえで、虎太朗に付く。
+    兄弟の顔はこうなる。${PERSON_4}ではないと記録したうえで、${PERSON_3}に付く。
     """
     connection = window.connection
     person_id, face_ids = _assigned_person_with_faces(
@@ -1405,7 +1405,7 @@ def test_a_face_assigned_to_someone_else_stays_in_the_list(window):
     )
     window.face_list.selectAll()
     window._reject_for_person_selected()
-    other = db.add_person(connection, "きょうだい", birth_date="2009-02-19")
+    other = db.add_person(connection, "きょうだい", birth_date="2009-02-01")
     db.assign_faces(connection, face_ids, other, db.ASSIGN_MANUAL)
     connection.commit()
 

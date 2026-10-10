@@ -45,7 +45,7 @@ git 管理外で、複製が無かったもの。
 durable な場所へ退避した。
 
 ```
-/home/suu/photoarchive-recovery/
+${HOME}/photoarchive-recovery/
   MASTER-do-not-touch.db                    (読み取り専用・控え)
   photoarchive-rescued-20261002-232032.db   (読み取り専用・控え)
   buffalo_l.zip                             (ArcFace の配布物)
@@ -63,20 +63,20 @@ durable な場所へ退避した。
 | キー | 値 | 根拠 |
 |---|---|---|
 | `database_path` | `data/photoarchive.db` | sample と同じ |
-| `source_root` | `/mnt/nfs/nanoPi-NEO2/suzuki/Photo` | **下記のとおり判断が入っている** |
+| `source_root` | `${NFS_ROOT}/${SURNAME}/Photo` | **下記のとおり判断が入っている** |
 | `output_root` | `output` | **未確認**（既定値を入れた） |
 | `rule_path` | `config/rule.json` | **未確認**（ひな形をコピーした） |
 
 ### `source_root` でやりかけた事故
 
-**最初、共通接頭辞から `/mnt/nfs/nanoPi-NEO2` と推定して書いた。これは危険だった。**
+**最初、共通接頭辞から `${NFS_ROOT}` と推定して書いた。これは危険だった。**
 
 実データは**2つの root を `source_root` で切り替えて2回スキャン**して作られている。
 
 | root | Media | 顔 | 手本 | 除外 |
 |---|---|---|---|---|
-| `/mnt/nfs/nanoPi-NEO2/suzuki/Photo` | 64,974 | 55,805 | 122 | 252 |
-| `/mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯` | 5,323 | 2,801 | 4 | 16 |
+| `${NFS_ROOT}/${SURNAME}/Photo` | 64,974 | 55,805 | 122 | 252 |
+| `${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯` | 5,323 | 2,801 | 4 | 16 |
 | 合計 | **70,297** | **58,606** | **126** | **268** |
 
 共通接頭辞の配下には `katayama`（他家の写真）と `temp` があり、
@@ -93,7 +93,7 @@ durable な場所へ退避した。
 だから **DB の 70,297 件は `mediaFiles/` を一度も通っていない。**
 
 symlink の名前は DB に残っていなかったが、**Issue #24 の 2026-09-20 のコメントに
-`mediaFiles/photo_natsu` と書いてあり、それで復元できた。**
+`mediaFiles/photo_person2` と書いてあり、それで復元できた。**
 
 ## 次の一手
 

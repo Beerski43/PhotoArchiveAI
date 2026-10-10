@@ -15,7 +15,7 @@ source .venv/bin/activate
 python scripts/measure_embedding_models.py --db data/photoarchive.db
 ```
 
-測ったのは手本 **126 件**（奈津子46・ひより28・義行18・虎太朗18・旺志朗16）。
+測ったのは手本 **126 件**（${PERSON_2}46・${PERSON_4}28・${PERSON_1}18・${PERSON_3}18・${PERSON_5}16）。
 
 > **Issue #35 と PR #56 に「行事をまたぐ差 +0.037 / 4.2倍」と書いたが、ここでは
 > +0.033 / 4.7倍になっている。** 下見のとき撮影日時が読めない顔のペアを

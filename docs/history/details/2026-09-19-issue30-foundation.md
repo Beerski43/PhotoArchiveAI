@@ -1,7 +1,7 @@
 # #30 作業ルール・実装プラン・回帰テスト環境の整備（2026-09-19）
 
 対象 Issue: #30。ブランチ `feature/#30_rework-project-rules-and-plan`（`develop` から分岐）。
-方針は [Issue #30 のコメント](https://github.com/Beerski43/PhotoArchiveAI/issues/30) に起票済み。
+方針は [Issue #30 のコメント](https://github.com/${GITHUB_OWNER}/PhotoArchiveAI/issues/30) に起票済み。
 
 ---
 

@@ -335,7 +335,7 @@ def prune_excluded_types(connection, root: Path) -> int:
     """**走査の対象外になった拡張子**の行を削除する（#26 の HEIC）。
 
     「実体が消えた」とは別に扱い、**2割の安全弁に数えない。** 数えると、HEIC が
-    root の 33% を占める実データ（`な携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
+    root の 33% を占める実データ（`${PERSON_2}携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
     `--force-prune` を付けるしかなくなる。対象外の拡張子は未マウントの兆候ではない。
     """
     rows = connection.execute("SELECT id, path FROM Media").fetchall()
@@ -566,7 +566,7 @@ def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
 def refuse_parents_of_recorded_roots(roots: Sequence[Path], recorded: Sequence[str]) -> None:
     """**記録済みの root を内側に含む root は、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
 
-    親を走査するのは、root を思い出せずに共通の親（`/mnt/nfs/nanoPi-NEO2`）を渡したときで、
+    親を走査するのは、root を思い出せずに共通の親（`${NFS_ROOT}`）を渡したときで、
     他家の写真まで入る（2026-10-02）。入れ子の検査は親と子を同時に渡したときしか
     止められないので、**記録と突き合わせて**単独の親も止める。走査させてから記録を
     直すのではなく、取り込むこと自体を防ぐ。年フォルダ（root の内側）の走査は今までどおり通す。

@@ -83,19 +83,19 @@ def seeded(tmp_path):
         "自動・強い": _add_face(connection, new_photo, 50.0),
         "除外": _add_face(connection, new_photo, 60.0),
     }
-    hiyori = db.add_person(connection, "ひより", "長女", birth_date="2011-05-03")
-    kotaro = db.add_person(connection, "虎太朗", "長男", birth_date="2007-01-09")
-    db.assign_faces(connection, [faces["手本"]], hiyori, db.ASSIGN_MANUAL)
+    person4 = db.add_person(connection, "${PERSON_4}", "長女", birth_date="2011-05-03")
+    person3 = db.add_person(connection, "${PERSON_3}", "長男", birth_date="2007-01-09")
+    db.assign_faces(connection, [faces["手本"]], person4, db.ASSIGN_MANUAL)
     db.apply_auto_assignments(
         connection,
-        [(faces["自動・弱い"], hiyori, 20.0), (faces["自動・強い"], kotaro, 90.0)],
+        [(faces["自動・弱い"], person4, 20.0), (faces["自動・強い"], person3, 90.0)],
     )
     db.reject_faces(connection, [faces["除外"]])
     connection.commit()
     connection.close()
 
     window = photoarchive_gui.MainWindow(str(database))
-    yield window, faces, {"ひより": hiyori, "虎太朗": kotaro}
+    yield window, faces, {"${PERSON_4}": person4, "${PERSON_3}": person3}
     window.connection.close()
 
 
@@ -172,8 +172,8 @@ def test_the_left_list_shows_how_much_work_is_left(seeded):
     assert rows[photoarchive_gui.SCOPE_UNASSIGNED].endswith("2")
     assert rows[photoarchive_gui.SCOPE_AUTO].endswith("2")
     assert rows[photoarchive_gui.SCOPE_REJECTED].endswith("1")
-    hiyori = window.person_list.item(4).text()
-    assert "手本 1" in hiyori and "自動 1" in hiyori
+    person4 = window.person_list.item(4).text()
+    assert "手本 1" in person4 and "自動 1" in person4
 
     # 操作したら、その場で数え直す。
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
@@ -188,10 +188,10 @@ def test_selecting_a_person_shows_the_faces_assigned_to_them(seeded):
     """**これが旧「割り当て済みを確認」。** 別ウィンドウを開かずに同じことをする。"""
     window, faces, persons = seeded
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
 
     assert sorted(_ids(window)) == sorted([faces["手本"], faces["自動・弱い"]])
-    assert "名前: ひより" in window.details_label.text()
+    assert "名前: ${PERSON_4}" in window.details_label.text()
     assert "手本: 1 件" in window.details_label.text()
 
 
@@ -206,7 +206,7 @@ def test_the_person_filters_only_appear_for_a_person(seeded):
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
     assert window.person_filter_row.isVisibleTo(window) is False
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     assert window.person_filter_row.isVisibleTo(window) is True
 
 
@@ -226,7 +226,7 @@ def test_each_view_starts_with_the_order_that_suits_it(seeded):
     assert window._current_order() == db.ORDER_SCORE_ASC
     assert _ids(window) == [faces["自動・弱い"], faces["自動・強い"]]
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     assert window._current_order() == db.ORDER_AGE
 
     # 同じ表示を見ているあいだは、選んだ並びを勝手に戻さない。
@@ -242,7 +242,7 @@ def test_dragging_a_person_above_the_views_does_not_move_them(seeded):
     """**表示の3行はドラッグで動かない。** 人物の並び順だけを保存する。"""
     window, _faces, persons = seeded
 
-    # 2人目（虎太朗）を一覧の先頭へ落としたのと同じこと。
+    # 2人目（${PERSON_3}）を一覧の先頭へ落としたのと同じこと。
     moved = window.person_list.model().moveRow(QModelIndex(), 5, QModelIndex(), 0)
     assert moved
 
@@ -258,10 +258,10 @@ def test_dragging_a_person_above_the_views_does_not_move_them(seeded):
     assert window.person_list.item(4).flags() & Qt.ItemFlag.ItemIsDragEnabled
     # 区切り線は選べない・掴めない・落とせない
     assert window.person_list.item(3).flags() == Qt.ItemFlag.NoItemFlags
-    # 人物の並びは入れ替わっている（虎太朗が先頭）。
+    # 人物の並びは入れ替わっている（${PERSON_3}が先頭）。
     assert [person["name"] for person in db.list_persons(window.connection)] == [
-        "虎太朗",
-        "ひより",
+        "${PERSON_3}",
+        "${PERSON_4}",
     ]
 
 
@@ -288,7 +288,7 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
         photoarchive_gui.ACTION_REJECT,
     ]
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     assert _menu_texts(window) == [
         photoarchive_gui.ACTION_CONFIRM,
         photoarchive_gui.ACTION_DETACH,
@@ -316,8 +316,8 @@ def test_the_menu_lists_every_person_as_an_assign_target(seeded):
     submenu = next(action.menu() for action in menu.actions() if action.menu())
 
     assert [action.data()["name"] for action in submenu.actions()] == [
-        "ひより",
-        "虎太朗",
+        "${PERSON_4}",
+        "${PERSON_3}",
     ]
     assert menu.actions()[0].text() == photoarchive_gui.ASSIGN_MENU
 
@@ -331,7 +331,7 @@ def test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth(seede
     window, faces, _persons = seeded
 
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
-    # 2018-07-07 の写真を選ぶ → ひより7歳・虎太朗11歳
+    # 2018-07-07 の写真を選ぶ → ${PERSON_4}7歳・${PERSON_3}11歳
     window.face_list.clearSelection()
     for row in range(window.face_list.count()):
         if window.face_list.item(row).data(Qt.UserRole)["id"] == faces["未割当・新しい"]:
@@ -341,14 +341,14 @@ def test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth(seede
     assert "（11歳）" in labels[1], labels
     assert "⚠" not in " ".join(labels)
 
-    # 2009-05-05 の写真は、ひよりが生まれる前。
+    # 2009-05-05 の写真は、${PERSON_4}が生まれる前。
     window.face_list.clearSelection()
     for row in range(window.face_list.count()):
         if window.face_list.item(row).data(Qt.UserRole)["id"] == faces["未割当・古い"]:
             window.face_list.item(row).setSelected(True)
     labels = [action.text() for action in window.assign_actions]
     assert "⚠誕生前の写真あり" in labels[0], labels
-    assert "⚠" not in labels[1], "虎太朗は生まれている"
+    assert "⚠" not in labels[1], "${PERSON_3}は生まれている"
 
 
 def test_a_face_can_be_assigned_from_the_menu_without_selecting_the_person(
@@ -366,13 +366,13 @@ def test_a_face_can_be_assigned_from_the_menu_without_selecting_the_person(
     assert window._current_person() is None
     window.face_list.selectAll()
     target = next(
-        action for action in window.assign_actions if action.data()["name"] == "虎太朗"
+        action for action in window.assign_actions if action.data()["name"] == "${PERSON_3}"
     )
     target.trigger()
 
     rows = {row["id"]: row for row in db.list_faces(window.connection)}
     for face_id in (faces["未割当・古い"], faces["未割当・新しい"]):
-        assert rows[face_id]["person_id"] == persons["虎太朗"]
+        assert rows[face_id]["person_id"] == persons["${PERSON_3}"]
         assert rows[face_id]["assign_source"] == db.ASSIGN_MANUAL
         assert rows[face_id]["age"] == 7
     assert "完了" in window.preview_status.text()
@@ -399,8 +399,8 @@ def test_the_digit_keys_assign_to_the_persons_in_order(seeded, monkeypatch, qt_a
     qt_app.processEvents()
 
     rows = {row["id"]: row for row in db.list_faces(window.connection)}
-    assert rows[faces["未割当・古い"]]["person_id"] == persons["虎太朗"], (
-        "2 は左の一覧の2人目（虎太朗）"
+    assert rows[faces["未割当・古い"]]["person_id"] == persons["${PERSON_3}"], (
+        "2 は左の一覧の2人目（${PERSON_3}）"
     )
     assert [action.shortcut().toString() for action in window.assign_actions] == [
         "1",
@@ -455,8 +455,8 @@ def test_the_auto_view_names_the_person_on_each_face(seeded):
     _select(window, scope=photoarchive_gui.SCOPE_AUTO)
 
     labels = _labels(window)
-    assert any("ひより (7歳)" in label for label in labels), labels
-    assert any("虎太朗 (11歳)" in label for label in labels), labels
+    assert any("${PERSON_4} (7歳)" in label for label in labels), labels
+    assert any("${PERSON_3} (11歳)" in label for label in labels), labels
 
 
 def test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person(seeded):
@@ -472,8 +472,8 @@ def test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person(seeded)
     window._confirm_selected()
 
     rows = {row["id"]: row for row in db.list_faces(window.connection)}
-    assert rows[faces["自動・弱い"]]["person_id"] == persons["ひより"]
-    assert rows[faces["自動・強い"]]["person_id"] == persons["虎太朗"]
+    assert rows[faces["自動・弱い"]]["person_id"] == persons["${PERSON_4}"]
+    assert rows[faces["自動・強い"]]["person_id"] == persons["${PERSON_3}"]
     assert {
         rows[faces["自動・弱い"]]["assign_source"],
         rows[faces["自動・強い"]]["assign_source"],
@@ -488,10 +488,10 @@ def test_not_this_person_in_the_auto_view_records_it_per_person(seeded):
     window.face_list.selectAll()
     window._reject_for_person_selected()
 
-    assert db.count_person_rejections(window.connection, persons["ひより"]) == 1
-    assert db.count_person_rejections(window.connection, persons["虎太朗"]) == 1
+    assert db.count_person_rejections(window.connection, persons["${PERSON_4}"]) == 1
+    assert db.count_person_rejections(window.connection, persons["${PERSON_3}"]) == 1
     assert db.face_ids(
-        window.connection, rejected_for_person=persons["ひより"]
+        window.connection, rejected_for_person=persons["${PERSON_4}"]
     ) == [faces["自動・弱い"]]
 
 
@@ -499,7 +499,7 @@ def test_confirm_is_blocked_unless_an_automatic_face_is_selected(seeded):
     """**確定は自動割り当てにしか効かない。** 押せない理由はツールチップに出す。"""
     window, _faces, persons = seeded
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     window.source_box.setCurrentIndex(
         window.source_box.findText("確定済みのみ")
     )
@@ -544,7 +544,7 @@ def test_rejecting_an_assigned_face_asks_first(seeded, monkeypatch):
 
     monkeypatch.setattr(photoarchive_gui.QMessageBox, "question", fake_question)
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     window.face_list.selectAll()
     window._reject_selected()
 
@@ -561,13 +561,13 @@ def test_rejecting_an_assigned_face_asks_first(seeded, monkeypatch):
 def test_the_month_range_also_narrows_a_person_s_faces(seeded):
     """**人物の表示でも撮影年月で絞れる。** 別ウィンドウには無かった。
 
-    「2018年のひよりだけ見直す」ができる。
+    「2018年の${PERSON_4}だけ見直す」ができる。
     """
     window, faces, persons = seeded
     db.assign_faces(
-        window.connection, [faces["未割当・古い"]], persons["虎太朗"], db.ASSIGN_MANUAL
+        window.connection, [faces["未割当・古い"]], persons["${PERSON_3}"], db.ASSIGN_MANUAL
     )
-    window._reload_person_list(select_person_id=persons["虎太朗"])
+    window._reload_person_list(select_person_id=persons["${PERSON_3}"])
     assert len(_ids(window)) == 2
 
     index = window.month_from_box.findText("2018-07")
@@ -586,11 +586,11 @@ def test_the_rejection_list_can_also_be_narrowed_and_paged(seeded, monkeypatch):
     db.reject_faces_for_person(
         window.connection,
         [faces["未割当・古い"], faces["未割当・新しい"]],
-        persons["ひより"],
+        persons["${PERSON_4}"],
     )
     monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 1)
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     window.source_box.setCurrentIndex(
         window.source_box.findText(photoarchive_gui.NOT_THIS_PERSON_FILTER)
     )
@@ -644,8 +644,8 @@ def test_the_bulk_event_action_follows_the_view(seeded):
     assert "未割当をすべて除外" in window.bulk_event_button.text()
     assert window.bulk_event_button.isEnabled()
 
-    _select(window, person_id=persons["ひより"])
-    assert "ひより" in window.bulk_event_button.text()
+    _select(window, person_id=persons["${PERSON_4}"])
+    assert "${PERSON_4}" in window.bulk_event_button.text()
     assert "解除" in window.bulk_event_button.text()
 
     window.source_box.setCurrentIndex(
@@ -720,7 +720,7 @@ def test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page(tmp_path):
 def test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text():
     """**サムネイルの下の文字が枠から出ないこと。**
 
-    自動割当の表示は `13391 (自動 55) ひより (0歳)` のように長く、2行になる。
+    自動割当の表示は `13391 (自動 55) ${PERSON_4} (0歳)` のように長く、2行になる。
     """
     assert photoarchive_gui.ITEM_HEIGHT >= photoarchive_gui.THUMBNAIL_SIZE + 32
     assert photoarchive_gui.ITEM_WIDTH > photoarchive_gui.THUMBNAIL_SIZE
@@ -769,7 +769,7 @@ def test_orders_that_mean_nothing_in_the_view_cannot_be_chosen(seeded):
     )
     assert "年齢を出せません" in window.order_box.model().item(age_index).toolTip()
 
-    _select(window, person_id=persons["ひより"])
+    _select(window, person_id=persons["${PERSON_4}"])
     assert all(enabled().values()), "人物の表示ではどの並びも意味を持つ"
 
 
@@ -784,7 +784,7 @@ def test_the_person_view_is_sorted_by_the_shown_age_on_every_page(tmp_path, monk
     monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 2)
     database = tmp_path / "ages.db"
     connection = db.ensure_database(str(database))
-    person_id = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    person_id = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
     # id の順と年齢の順をわざと逆にする
     for index, year in enumerate((2024, 2016, 2020, 2012, 2018)):
         media_id = _media(connection, f"/photos/{index}.jpg", f"{year}-06-01T10:00:00", f"h{index}")

@@ -95,7 +95,7 @@ def test_reembed_leaves_every_assignment_alone(connection):
     （実データで手本126件・除外268件）が消える。`reembed` はそれを避けるために
     ある。書き換えるのは `embedding` と `embed_version` だけ。
     """
-    person_id = db.add_person(connection, "なつ")
+    person_id = db.add_person(connection, "${PERSON_2}")
     media_id = _add_media(connection)
     manual = _add_old_face(connection, media_id, color=(200, 120, 90))
     rejected = _add_old_face(connection, media_id, color=(10, 200, 60))
@@ -329,7 +329,7 @@ def test_match_only_sees_the_current_version(connection):
     混ざると `np.vstack` が落ちるか、次元が同じモデル同士なら**黙って
     無意味な距離**が出る。
     """
-    person_id = db.add_person(connection, "なつ")
+    person_id = db.add_person(connection, "${PERSON_2}")
     media_id = _add_media(connection)
     old_manual = _add_old_face(connection, media_id)
     db.assign_faces(connection, [old_manual], person_id, age=3)
@@ -349,7 +349,7 @@ def test_a_face_keeps_matching_itself_after_the_rebuild(connection):
     """作り直した手本で、同じ見た目の顔が同じ人物に紐づくこと。"""
     from photoarchive_ai.matcher import match_faces
 
-    person_id = db.add_person(connection, "なつ")
+    person_id = db.add_person(connection, "${PERSON_2}")
     teacher_media = _add_media(connection, "/photos/teacher.jpg")
     target_media = _add_media(connection, "/photos/target.jpg")
     teacher = _add_old_face(connection, teacher_media, color=(200, 120, 90))

@@ -1,6 +1,6 @@
 """検出元のディレクトリ（root）を複数持つこと（#24）。
 
-実データは root が2つある（`suzuki/Photo` と `natsuTemp/な携帯`）。設定は git 管理外で、
+実データは root が2つある（`${SURNAME}/Photo` と `person2Temp/${PERSON_2}携帯`）。設定は git 管理外で、
 2026-10-02 に失ったとき **DB から root を戻せず**、共通の親で走査する危ない設定を
 書きかけた。ここで守ること:
 
@@ -97,10 +97,10 @@ def test_the_safety_valve_still_works_per_root(tmp_path, connection):
 def test_nested_roots_are_refused(tmp_path):
     """**親を root にすること自体が事故**（共通の親で走査すると他家の写真まで入る）。"""
     parent = tmp_path / "photo"
-    (parent / "natsuTemp").mkdir(parents=True)
+    (parent / "person2Temp").mkdir(parents=True)
 
     with pytest.raises(ValueError, match="入れ子"):
-        normalize_source_roots([str(parent), str(parent / "natsuTemp")])
+        normalize_source_roots([str(parent), str(parent / "person2Temp")])
 
 
 def test_the_same_root_written_twice_is_scanned_once(tmp_path):
@@ -146,7 +146,7 @@ def test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything(tmp_
     置き換わり、正しい root で走査し直しても戻らなかった。
     """
     parent = tmp_path / "nanoPi"
-    photo = parent / "suzuki" / "Photo"
+    photo = parent / "${SURNAME}" / "Photo"
     write_image(photo / "a.jpg")
     write_image(parent / "katayama" / "other.jpg", color=(10, 200, 30))
     scan_directories([str(photo)], connection, workers=1)
@@ -277,12 +277,12 @@ def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path)
 def test_with_several_roots_the_folder_is_prefixed_with_the_root_name(tmp_path):
     """どちらの root にも `2021/` があるので、root の名前を付けないと別のフォルダが同じ名前になる。"""
     photo = tmp_path / "Photo"
-    phone = tmp_path / "な携帯"
+    phone = tmp_path / "${PERSON_2}携帯"
     roots = [str(photo), str(phone)]
 
     assert photo_label(photo / "2021", roots) == "Photo/2021"
-    assert photo_label(phone / "2021", roots) == "な携帯/2021"
-    assert photo_label(phone, roots) == "な携帯"
+    assert photo_label(phone / "2021", roots) == "${PERSON_2}携帯/2021"
+    assert photo_label(phone, roots) == "${PERSON_2}携帯"
     assert photo_label(tmp_path / "elsewhere", roots) == str(tmp_path / "elsewhere")
 
 

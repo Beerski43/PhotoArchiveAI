@@ -17,19 +17,19 @@
 ### 1. PR #62 をマージする（ユーザーが行う）
 
 **エージェントはマージしない。** レビュー対応は済んでいる（返信は
-[#issuecomment-5996015660](https://github.com/Beerski43/PhotoArchiveAI/pull/62#issuecomment-5996015660)）。
+[#issuecomment-5996015660](https://github.com/${GITHUB_OWNER}/PhotoArchiveAI/pull/62#issuecomment-5996015660)）。
 
 ### 2. `match` を流す（マージ後）
 
 ```bash
-cd /home/suu/github/PhotoArchiveAI && source .venv/bin/activate
+cd ${REPO_DIR} && source .venv/bin/activate
 photoarchive match --db data/photoarchive.db        # 閾値 0.45 / マージン 0.08（既定）
 ```
 
 **実行前の控えは取ってある。**
 
 ```
-/home/suu/photoarchive-recovery/before-match-20261006-002208.db   494MB・読み取り専用
+${HOME}/photoarchive-recovery/before-match-20261006-002208.db   494MB・読み取り専用
 ```
 
 **なぜマージを待つのか。** レビュー指摘1（日付不明の行事を束ねると、同じフォルダの

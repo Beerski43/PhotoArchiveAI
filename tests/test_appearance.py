@@ -121,7 +121,7 @@ def test_nothing_is_recorded_when_the_landmark_model_is_unavailable(monkeypatch)
 
 
 def test_filling_measures_only_assigned_faces_and_can_skip_writing(connection):
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     media = _add_media(connection, 1)
     teacher = _add_face(connection, media, _vector(1.0), person, db.ASSIGN_MANUAL)
     loose = _add_face(connection, media, _vector(0.0, 1.0))
@@ -143,7 +143,7 @@ def test_filling_measures_only_assigned_faces_and_can_skip_writing(connection):
 
 
 def test_a_face_close_only_to_an_unaligned_teacher_is_left_unassigned(connection):
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL, False)
     target = _add_face(connection, _add_media(connection, 2), _vector(1.0, 0.01))
 
@@ -157,19 +157,19 @@ def test_an_unaligned_teacher_still_blocks_a_stranger_as_the_runner_up(connectio
     """**手本を消すのではなく、根拠にしないだけ。** 対抗馬としては効き続けること。
 
     実データでは、整列できない手本を丸ごと消すと誤りが +418 件増えた。
-    虎太朗の手本が、ひよりと見分けのつかない赤ちゃんの顔を「2位」として止めていた。
+    ${PERSON_3}の手本が、${PERSON_4}と見分けのつかない赤ちゃんの顔を「2位」として止めていた。
     """
-    hiyori = db.add_person(connection, "ひより")
-    kotaro = db.add_person(connection, "虎太朗")
-    _add_face(connection, _add_media(connection, 1), _vector(1.0), hiyori, db.ASSIGN_MANUAL, True)
-    # 虎太朗の手本は整列できないが、候補のすぐ近くにいる
-    _add_face(connection, _add_media(connection, 2), _vector(1.02), kotaro, db.ASSIGN_MANUAL, False)
+    person4 = db.add_person(connection, "${PERSON_4}")
+    person3 = db.add_person(connection, "${PERSON_3}")
+    _add_face(connection, _add_media(connection, 1), _vector(1.0), person4, db.ASSIGN_MANUAL, True)
+    # ${PERSON_3}の手本は整列できないが、候補のすぐ近くにいる
+    _add_face(connection, _add_media(connection, 2), _vector(1.02), person3, db.ASSIGN_MANUAL, False)
     target = _add_face(connection, _add_media(connection, 3), _vector(1.01))
 
     match_faces(connection, metric=EUCLIDEAN, threshold=0.5, margin=0.05)
 
     assert db.get_face(connection, target)["person_id"] is None, (
-        "虎太朗が2位としてマージンを潰すので、ひよりにも付けない"
+        "${PERSON_3}が2位としてマージンを潰すので、${PERSON_4}にも付けない"
     )
 
 
@@ -178,7 +178,7 @@ def test_the_score_comes_from_the_aligned_teacher_that_decided(connection):
 
     `select` がこの値で並べるので、受け入れと同じ根拠でなければならない。
     """
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL, False)
     _add_face(connection, _add_media(connection, 2), _vector(1.3), person, db.ASSIGN_MANUAL, True)
     target = _add_face(connection, _add_media(connection, 3), _vector(1.0))
@@ -193,7 +193,7 @@ def test_the_score_comes_from_the_aligned_teacher_that_decided(connection):
 
 def test_unmeasured_teachers_are_measured_before_matching(connection):
     """未計測の手本は `match` が測ってから使う（測った値は DB に残る）。"""
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     teacher = _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL)
     target = _add_face(connection, _add_media(connection, 2), _vector(1.0, 0.01))
     APPEARANCE_STATE["aligned"] = False
@@ -205,7 +205,7 @@ def test_unmeasured_teachers_are_measured_before_matching(connection):
 
 
 def test_auto_assignments_record_the_rule_and_manual_ones_clear_it(connection):
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL, True)
     target = _add_face(connection, _add_media(connection, 2), _vector(1.0, 0.01))
 
@@ -219,7 +219,7 @@ def test_auto_assignments_record_the_rule_and_manual_ones_clear_it(connection):
 
 def test_evaluate_applies_the_same_rule(connection):
     """**`evaluate` も同じ規則で数える。** 揃えないと実測値が嘘になる。"""
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL, False)
     _add_face(connection, _add_media(connection, 2), _vector(1.01), person, db.ASSIGN_MANUAL, False)
 
@@ -231,7 +231,7 @@ def test_evaluate_applies_the_same_rule(connection):
 
 
 def test_evaluate_does_not_write_what_it_measures(connection):
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     teacher = _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL)
     _add_face(connection, _add_media(connection, 2), _vector(1.01), person, db.ASSIGN_MANUAL)
 
@@ -249,7 +249,7 @@ def test_a_version_4_database_gains_the_appearance_columns_and_keeps_its_faces(t
     """**移行して顔が減らないこと**（CLAUDE.md §4）。実データが通る経路。"""
     path = tmp_path / "v4.db"
     connection = db.ensure_database(str(path))
-    person = db.add_person(connection, "ひより")
+    person = db.add_person(connection, "${PERSON_4}")
     media = _add_media(connection, 1)
     for index in range(4):
         _add_face(connection, media, _vector(float(index)), person, db.ASSIGN_MANUAL)
@@ -313,10 +313,10 @@ def test_the_age_limits_only_tighten():
 
 
 def test_a_baby_teacher_needs_a_closer_face_than_an_adult_teacher(connection):
-    """**赤ちゃんの顔は誰でも互いに近い**（ひよりの誤りの 83% が 0〜5歳の手本に
+    """**赤ちゃんの顔は誰でも互いに近い**（${PERSON_4}の誤りの 83% が 0〜5歳の手本に
     引き寄せられていた）。8歳以下の手本は 0.35 までしか受け入れない。"""
-    baby = db.add_person(connection, "ひより", birth_date="2010-12-08")
-    adult = db.add_person(connection, "義行", birth_date="1978-09-11")
+    baby = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
+    adult = db.add_person(connection, "${PERSON_1}", birth_date="1978-09-01")
     _add_face(connection, _dated_media(connection, 1, "2012-01-01T00:00:00"), _vector(1.0), baby,
               db.ASSIGN_MANUAL, True)
     _add_face(connection, _dated_media(connection, 2, "2012-01-01T00:00:00"), _vector(0.0, 0.0, 5.0),
@@ -333,7 +333,7 @@ def test_a_baby_teacher_needs_a_closer_face_than_an_adult_teacher(connection):
 
 
 def test_a_teacher_of_unknown_age_is_limited_to_0_40(connection):
-    person = db.add_person(connection, "ひより")  # 誕生日なし・年齢なし
+    person = db.add_person(connection, "${PERSON_4}")  # 誕生日なし・年齢なし
     _add_face(connection, _add_media(connection, 1), _vector(1.0), person, db.ASSIGN_MANUAL, True)
     inside = _add_face(connection, _add_media(connection, 2), _vector(1.0, 0.38))
     outside = _add_face(connection, _add_media(connection, 3), _vector(1.0, 0.0, 0.42))
@@ -346,7 +346,7 @@ def test_a_teacher_of_unknown_age_is_limited_to_0_40(connection):
 
 def test_the_confirmed_age_wins_over_the_calculated_one(connection):
     """確定値（`Face.age`）を優先する。計算値は誕生日と撮影日時から。"""
-    person = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    person = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
     teacher = _add_face(connection, _dated_media(connection, 1, "2012-01-01T00:00:00"), _vector(1.0),
                         person, db.ASSIGN_MANUAL, True)
     assert db.load_manual_faces(connection).ages.tolist() == [1.0]
@@ -360,8 +360,8 @@ def test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else(connect
     距離に足し引きする形で入れると、勝つ人物が入れ替わり、マージンで止まって
     いた他人が別の人物へ流れた（実データで +258 件）。
     """
-    baby = db.add_person(connection, "ひより", birth_date="2010-12-08")
-    adult = db.add_person(connection, "奈津子", birth_date="1975-05-08")
+    baby = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
+    adult = db.add_person(connection, "${PERSON_2}", birth_date="1975-05-01")
     _add_face(connection, _dated_media(connection, 1, "2012-01-01T00:00:00"), _vector(1.0), baby,
               db.ASSIGN_MANUAL, True)
     # 大人の手本は候補から 0.44（閾値の内側）。赤ちゃんの手本は 0.40 で1位。
@@ -379,7 +379,7 @@ def test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else(connect
 
 
 def test_evaluate_applies_the_age_limits_too(connection):
-    person = db.add_person(connection, "ひより", birth_date="2010-12-08")
+    person = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
     for index in range(2):
         _add_face(connection, _dated_media(connection, index, f"2012-0{index + 1}-01T00:00:00"),
                   _vector(1.0, 0.40 * index), person, db.ASSIGN_MANUAL, True)

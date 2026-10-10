@@ -111,7 +111,7 @@ def test_nearest_distance_works_in_chunks(monkeypatch):
 
 def test_similarity_ranks_unassigned_faces_by_the_nearest_teacher(connection):
     """**点は手本との最小距離**（2026-10-08 の測定と同じ）。平均ではない。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     teachers = [_face(connection, 0, name="t0"), _face(connection, 90, name="t90")]
     db.assign_faces(connection, teachers, person, db.ASSIGN_MANUAL)
     near_second = _face(connection, 85, name="c85")
@@ -131,7 +131,7 @@ def test_similarity_ranks_unassigned_faces_by_the_nearest_teacher(connection):
 def test_teachers_that_could_not_be_aligned_are_not_used(connection):
     """**整列できない手本は根拠にしない。** 整列できない顔の特徴量は中身に関係なく
     近くなり、使うと横倒しの顔や顔でないものが上位に来る（2026-10-10）。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     good = _face(connection, 0, name="good")
     unaligned = _face(connection, 90, name="bad")
     db.assign_faces(connection, [good, unaligned], person, db.ASSIGN_MANUAL)
@@ -150,7 +150,7 @@ def test_teachers_that_could_not_be_aligned_are_not_used(connection):
 
 def test_faces_of_another_embedding_version_are_not_compared(connection):
     """**別の埋め込み空間の距離を比べるのは常に誤り**（CLAUDE.md §7）。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     teacher = _face(connection, 0, name="t")
     old_teacher = _face(connection, 90, version="old-model", name="told")
     db.assign_faces(connection, [teacher, old_teacher], person, db.ASSIGN_MANUAL)
@@ -171,7 +171,7 @@ def test_faces_of_another_embedding_version_are_not_compared(connection):
 
 def test_similarity_with_no_teachers_says_so(connection):
     """**手本が0件なら0を返す。** 呼び出し側が「並べられない」と出す。"""
-    person = db.add_person(connection, "旺志朗", "次男")
+    person = db.add_person(connection, "${PERSON_5}", "次男")
     candidate = _face(connection, 0)
     connection.commit()
 
@@ -183,7 +183,7 @@ def test_similarity_with_no_teachers_says_so(connection):
 
 def test_similarity_only_measures_faces_it_has_not_seen(connection, monkeypatch):
     """**ページを送るたびに計算し直さない。** 足りない顔の分だけ測る。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     db.assign_faces(connection, [_face(connection, 0, name="t")], person, db.ASSIGN_MANUAL)
     first, second = _face(connection, 10, name="a"), _face(connection, 20, name="b")
     connection.commit()
@@ -208,7 +208,7 @@ def test_adding_a_teacher_updates_the_ranking_without_measuring_everything_again
     connection, monkeypatch
 ):
     """**割り当てるたびに並びが良くなる。** 増えた手本とだけ比べる。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     db.assign_faces(connection, [_face(connection, 0, name="t0")], person, db.ASSIGN_MANUAL)
     near_new = _face(connection, 88, name="c88")
     near_old = _face(connection, 10, name="c10")
@@ -236,7 +236,7 @@ def test_adding_a_teacher_updates_the_ranking_without_measuring_everything_again
 
 def test_removing_a_teacher_measures_everything_again(connection):
     """**手本が減ったら測り直す。** 最小距離は手本を減らすと大きくなりうる。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     keep = _face(connection, 0, name="t0")
     wrong = _face(connection, 90, name="t90")
     db.assign_faces(connection, [keep, wrong], person, db.ASSIGN_MANUAL)
@@ -258,7 +258,7 @@ def test_teachers_not_yet_measured_are_measured_before_use(connection):
     （PR #71 レビュー指摘1）。測らずに使うと、横倒しの顔を割り当てた直後に
     横倒しの候補が本人らしい顔より上に来る。`match` と同じく
     `matcher.teacher_usable` で測り、結果を DB に残す。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     good = _face(connection, 0, name="good", thumbnail=_jpeg())
     db.assign_faces(connection, [good], person, db.ASSIGN_MANUAL)
     connection.execute("UPDATE Face SET aligned = 1, sharpness = 1.0 WHERE id = ?", (good,))
@@ -283,7 +283,7 @@ def test_teachers_not_yet_measured_are_measured_before_use(connection):
 def test_a_teacher_that_cannot_be_measured_is_still_used(connection):
     """**「測れない」と「整列できなかった」を混ぜない**（CLAUDE.md §8）。サムネイルが
     読めない手本は未計測のまま残し、根拠からも外さない。"""
-    person = db.add_person(connection, "ひより", "長女")
+    person = db.add_person(connection, "${PERSON_4}", "長女")
     broken = _face(connection, 0, name="broken", thumbnail=b"not a jpeg")
     db.assign_faces(connection, [broken], person, db.ASSIGN_MANUAL)
     candidate = _face(connection, 10, name="cand")

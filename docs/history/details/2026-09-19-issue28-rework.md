@@ -3,7 +3,7 @@
 対象 Issue: #28（scanとanalyzeの処理を変更）。#9 と #22 も併せて解消。
 ブランチ: `feature/#28_rework-scan-and-match`（`develop` から分岐）
 
-設計方針は [Issue #28 のコメント](https://github.com/Beerski43/PhotoArchiveAI/issues/28#issuecomment-5740379872) に起票済み。
+設計方針は [Issue #28 のコメント](https://github.com/${GITHUB_OWNER}/PhotoArchiveAI/issues/28#issuecomment-5740379872) に起票済み。
 
 ---
 
@@ -91,7 +91,7 @@ IOが律速でデコード時間は並列化で吸収できる以上、リスク
 | 対象 | 件数 | 容量 | 時間(--workers 4) | 検出顔 | エラー |
 |---|---|---|---|---|---|
 | Photo/2005（古いデジカメ） | 345 | 108MB | 29.9秒 | 570 | 0 |
-| な携帯/2023/ポケモン展（HEIC 56件含む） | 113 | 311MB | 19.7秒 | 7 | 0 |
+| ${PERSON_2}携帯/2023/ポケモン展（HEIC 56件含む） | 113 | 311MB | 19.7秒 | 7 | 0 |
 | Photo/2026（最近のスマホ） | 492 | 7.9GB | 49.7秒 | 260 | 0 |
 
 確認できたこと:

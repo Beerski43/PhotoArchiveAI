@@ -227,7 +227,7 @@ def test_rejected_and_auto_faces_are_left_out_of_the_bundles(seeded):
     根拠になる。
     """
     connection, faces, _path = seeded
-    person_id = db.add_person(connection, name="なつ")
+    person_id = db.add_person(connection, name="${PERSON_2}")
     db.reject_faces(connection, faces["far"])
     db.assign_faces(connection, [faces["near"][1]], person_id, db.ASSIGN_AUTO)
 
@@ -238,39 +238,39 @@ def test_rejected_and_auto_faces_are_left_out_of_the_bundles(seeded):
 
 def test_a_cluster_shows_the_teacher_it_contains(seeded):
     connection, faces, _path = seeded
-    person_id = db.add_person(connection, name="なつ")
+    person_id = db.add_person(connection, name="${PERSON_2}")
     db.assign_faces(connection, [faces["near"][0]], person_id, db.ASSIGN_MANUAL)
 
     dialog = _open_dialog(connection)
     assert dialog.cluster_list.item(0).text().startswith("束 1 — 2 件")
-    assert "手本: なつ" in dialog.cluster_list.item(0).text()
+    assert "手本: ${PERSON_2}" in dialog.cluster_list.item(0).text()
 
 
 def test_assigning_a_cluster_never_touches_the_teacher_in_it(seeded, monkeypatch):
     """**いちばん大事な一線。** 束に手本が混ざっていても、手本は触らない。"""
     connection, faces, _path = seeded
-    natsu = db.add_person(connection, name="なつ")
-    hiyori = db.add_person(connection, name="ひより")
+    person2 = db.add_person(connection, name="${PERSON_2}")
+    person4 = db.add_person(connection, name="${PERSON_4}")
     teacher, other = faces["near"]
-    db.assign_faces(connection, [teacher], natsu, db.ASSIGN_MANUAL, age=3)
+    db.assign_faces(connection, [teacher], person2, db.ASSIGN_MANUAL, age=3)
 
     dialog = _open_dialog(connection)
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog(7))
     dialog.person_box.setCurrentIndex(
-        [dialog.person_box.itemText(i) for i in range(dialog.person_box.count())].index("ひより")
+        [dialog.person_box.itemText(i) for i in range(dialog.person_box.count())].index("${PERSON_4}")
     )
     dialog.cluster_list.setCurrentRow(0)
     dialog._assign_cluster()
 
     kept = db.get_face(connection, teacher)
     assert (kept["person_id"], kept["assign_source"], kept["age"]) == (
-        natsu,
+        person2,
         db.ASSIGN_MANUAL,
         3,
     )
     moved = db.get_face(connection, other)
     assert (moved["person_id"], moved["assign_source"], moved["age"]) == (
-        hiyori,
+        person4,
         db.ASSIGN_MANUAL,
         7,
     )
@@ -279,7 +279,7 @@ def test_assigning_a_cluster_never_touches_the_teacher_in_it(seeded, monkeypatch
 def test_a_cluster_becomes_done_after_it_is_assigned(seeded, monkeypatch):
     """押したあと、その束が「済」になること。**同じ束を二度押さないため。**"""
     connection, faces, _path = seeded
-    db.add_person(connection, name="なつ")
+    db.add_person(connection, name="${PERSON_2}")
     dialog = _open_dialog(connection)
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog(None))
     dialog.cluster_list.setCurrentRow(0)
@@ -292,7 +292,7 @@ def test_a_cluster_becomes_done_after_it_is_assigned(seeded, monkeypatch):
 
 def test_rejecting_a_cluster_only_rejects_the_pending_faces(seeded, monkeypatch):
     connection, faces, _path = seeded
-    person_id = db.add_person(connection, name="なつ")
+    person_id = db.add_person(connection, name="${PERSON_2}")
     teacher, other = faces["near"]
     db.assign_faces(connection, [teacher], person_id, db.ASSIGN_MANUAL)
     monkeypatch.setattr(
@@ -328,12 +328,12 @@ def test_people_born_after_the_event_are_not_offered(seeded):
     まとめて押すときに画面に出るのは人物名だけなので、選べると気づけない。
     """
     connection, _faces, _path = seeded
-    db.add_person(connection, name="なつ", birth_date="2001-05-03")
+    db.add_person(connection, name="${PERSON_2}", birth_date="2001-05-03")
     db.add_person(connection, name="まだ", birth_date="2020-01-01")
 
     dialog = _open_dialog(connection)
     offered = [dialog.person_box.itemText(i) for i in range(dialog.person_box.count())]
-    assert offered == ["なつ"]
+    assert offered == ["${PERSON_2}"]
 
 
 def test_people_without_a_birth_date_stay_in_the_list(seeded):

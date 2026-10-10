@@ -208,8 +208,8 @@ def _thumbnail(color=(200, 120, 90), size=24) -> bytes:
 def _seed_database(path: Path) -> None:
     connection = db.ensure_database(str(path))
     try:
-        person = db.add_person(connection, "なつ")
-        other = db.add_person(connection, "ひより")
+        person = db.add_person(connection, "${PERSON_2}")
+        other = db.add_person(connection, "${PERSON_4}")
         rows = [
             ("/photos/2012/undoukai/a.jpg", "2012-10-06T10:00:00", person, (200, 120, 90)),
             ("/photos/2012/undoukai/b.jpg", "2012-10-06T11:00:00", other, (10, 200, 60)),
@@ -481,8 +481,8 @@ def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_pat
     database = tmp_path / "pairs.db"
     connection = db.ensure_database(str(database))
     try:
-        natsu = db.add_person(connection, "なつ")
-        hiyori = db.add_person(connection, "ひより")
+        person2 = db.add_person(connection, "${PERSON_2}")
+        person4 = db.add_person(connection, "${PERSON_4}")
         media_id = db.save_media(
             connection,
             {
@@ -502,8 +502,8 @@ def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_pat
         c = _add_face_with_vector(connection, media_id, _unit(1.0, 0.01))
         # 未割当（別人と仮定）
         _add_face_with_vector(connection, media_id, _unit(0.0, 0.0, 1.0))
-        db.assign_faces(connection, [a, c], natsu, age=3)
-        db.assign_faces(connection, [b], hiyori, age=1)
+        db.assign_faces(connection, [a, c], person2, age=3)
+        db.assign_faces(connection, [b], person4, age=1)
         connection.commit()
     finally:
         connection.close()

@@ -5,7 +5,7 @@
 ## 1. 準備
 
 ```bash
-cd /home/suu/github/PhotoArchiveAI
+cd PhotoArchiveAI   # clone したリポジトリの直下
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip

@@ -51,7 +51,7 @@ GUI は起動時に移行を勧める（`ensure_migrated`）。CLI は `photoarc
 **マージ後に利用者が流すもの**（この順）:
 ```
 photoarchive migrate          # 版7（バックアップは自動）
-photoarchive convert-heic     # 同名の JPEG が無い HEIC が3件ある（な携帯/2021/20210700いろいろ/IMG_6463〜6465.HEIC）。scan は知らせない
+photoarchive convert-heic     # 同名の JPEG が無い HEIC が3件ある（${PERSON_2}携帯/2021/20210700いろいろ/IMG_6463〜6465.HEIC）。scan は知らせない
 photoarchive scan             # root が2つ記録される。HEIC の行 1,761 件と顔 941 件が消える（2026-10-10 時点）
 ```
 

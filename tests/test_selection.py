@@ -175,7 +175,7 @@ def test_load_rule_raises_for_a_missing_file(tmp_path: Path):
 
 
 def test_family_only_keeps_media_where_a_family_member_is_assigned(connection):
-    _add(connection, "family.jpg", faces=[_face("ひより")])
+    _add(connection, "family.jpg", faces=[_face("${PERSON_4}")])
     _add(connection, "stranger.jpg", faces=[_face(None)])
     _add(connection, "nobody.jpg")
 
@@ -188,8 +188,8 @@ def test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_
     ボケて（鮮明さ 0）・整列できず（正面 0）・笑顔 0 の家族の顔は点が 0 になる。
     「点 > 0」で絞ると、家族が写っているのに落ちていた（実データの複製で 433 枚）。
     """
-    _add(connection, "crisp.jpg", faces=[_face("ひより")])
-    _add(connection, "worst.jpg", faces=[_face("ひより", sharpness=25.0, aligned=False, smile=0.0)])
+    _add(connection, "crisp.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "worst.jpg", faces=[_face("${PERSON_4}", sharpness=25.0, aligned=False, smile=0.0)])
     _add(connection, "stranger.jpg", faces=[_face(None)])
 
     assert _paths(select_media(connection, {"family_only": True})) == ["crisp.jpg", "worst.jpg"]
@@ -197,16 +197,16 @@ def test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_
 
 def test_a_blurred_family_photo_comes_after_a_crisp_one(connection):
     """**利用者の要望の核心。** 本人が写っていても、ボケていたら意味がない。"""
-    _add(connection, "blurred.jpg", faces=[_face("ひより", sharpness=20.0)])
-    _add(connection, "crisp.jpg", faces=[_face("ひより", sharpness=300.0)])
+    _add(connection, "blurred.jpg", faces=[_face("${PERSON_4}", sharpness=20.0)])
+    _add(connection, "crisp.jpg", faces=[_face("${PERSON_4}", sharpness=300.0)])
 
     assert _paths(select_media(connection, {})) == ["crisp.jpg", "blurred.jpg"]
 
 
 def test_a_profile_comes_after_a_frontal_face(connection):
-    _add(connection, "profile.jpg", faces=[_face("ひより", yaw=0.7)])
-    _add(connection, "frontal.jpg", faces=[_face("ひより", yaw=0.0)])
-    _add(connection, "unaligned.jpg", faces=[_face("ひより", aligned=False)])
+    _add(connection, "profile.jpg", faces=[_face("${PERSON_4}", yaw=0.7)])
+    _add(connection, "frontal.jpg", faces=[_face("${PERSON_4}", yaw=0.0)])
+    _add(connection, "unaligned.jpg", faces=[_face("${PERSON_4}", aligned=False)])
 
     selected = _paths(select_media(connection, {}))
     # 横顔と整列できない顔は、どちらも正面らしさ 0（同点）
@@ -215,8 +215,8 @@ def test_a_profile_comes_after_a_frontal_face(connection):
 
 
 def test_a_smile_ranks_above_a_straight_face(connection):
-    _add(connection, "straight.jpg", faces=[_face("ひより", smile=0.0)])
-    _add(connection, "smile.jpg", faces=[_face("ひより", smile=100.0)])
+    _add(connection, "straight.jpg", faces=[_face("${PERSON_4}", smile=0.0)])
+    _add(connection, "smile.jpg", faces=[_face("${PERSON_4}", smile=100.0)])
 
     assert _paths(select_media(connection, {})) == ["smile.jpg", "straight.jpg"]
 
@@ -225,17 +225,17 @@ def test_a_crisp_stranger_does_not_lift_a_blurred_family_photo(connection):
     """**写真の点は家族の顔だけから作る。** 以前は「写っている顔の最良値」で、
     隣の他人がくっきり笑っていれば、ボケた家族の写真が上位に来た。"""
     _add(connection, "blurred-with-stranger.jpg", quality=99.0, smile=100.0,
-         faces=[_face("ひより", sharpness=20.0), _face(None, sharpness=500.0)])
+         faces=[_face("${PERSON_4}", sharpness=20.0), _face(None, sharpness=500.0)])
     _add(connection, "crisp-family.jpg", quality=10.0, smile=0.0,
-         faces=[_face("ひより", sharpness=300.0)])
+         faces=[_face("${PERSON_4}", sharpness=300.0)])
 
     assert _paths(select_media(connection, {}))[0] == "crisp-family.jpg"
 
 
 def test_more_clear_family_members_rank_higher_but_blurred_ones_do_not_count(connection):
-    _add(connection, "one.jpg", faces=[_face("ひより")])
-    _add(connection, "two.jpg", faces=[_face("ひより"), _face("虎太朗")])
-    _add(connection, "one-and-a-blur.jpg", faces=[_face("ひより"), _face("虎太朗", sharpness=20.0)])
+    _add(connection, "one.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "two.jpg", faces=[_face("${PERSON_4}"), _face("${PERSON_3}")])
+    _add(connection, "one-and-a-blur.jpg", faces=[_face("${PERSON_4}"), _face("${PERSON_3}", sharpness=20.0)])
 
     selected = _paths(select_media(connection, {}))
     assert selected[0] == "two.jpg"
@@ -252,7 +252,7 @@ def selected_id(connection, path):
 def test_a_change_made_in_the_gui_reaches_select_without_running_match(connection):
     """**保存済みの `family_score` を読まない。** GUI は `AnalysisResult` を更新しないので、
     読むと人が直した結果が次の `match` まで `select` に届かない（仕様書 §10.6）。"""
-    _add(connection, "a.jpg", faces=[_face("ひより")])
+    _add(connection, "a.jpg", faces=[_face("${PERSON_4}")])
     db.recompute_family_scores(connection)
     face_id = connection.execute("SELECT id FROM Face").fetchone()[0]
 
@@ -263,7 +263,7 @@ def test_a_change_made_in_the_gui_reaches_select_without_running_match(connectio
 
 def test_match_writes_the_same_score_that_select_uses(connection):
     """`family_score`（match が書く）と select の点は同じ式から出る。"""
-    _add(connection, "a.jpg", faces=[_face("ひより", sharpness=80.0, yaw=0.3, smile=40.0)])
+    _add(connection, "a.jpg", faces=[_face("${PERSON_4}", sharpness=80.0, yaw=0.3, smile=40.0)])
     db.recompute_family_scores(connection)
     stored = connection.execute("SELECT family_score FROM AnalysisResult").fetchone()[0]
 
@@ -272,7 +272,7 @@ def test_match_writes_the_same_score_that_select_uses(connection):
 
 def test_select_measures_family_faces_that_were_never_measured(connection):
     media_id = _add(connection, "a.jpg")
-    person_id = db.add_person(connection, "ひより")
+    person_id = db.add_person(connection, "${PERSON_4}")
     face_id = db.add_face(
         connection, media_id=media_id, bbox=(0, 10, 10, 0),
         embedding=[0.0] * db.EMBEDDING_DIM, embed_version=db.embedding_model.ACTIVE.version,
@@ -301,7 +301,7 @@ def _crisp_jpeg() -> bytes:
 def test_select_warns_when_auto_assignments_came_from_an_older_rule(connection):
     """**`match` と `select` の判定をずらさない。** 規則を変えたあと `match` を
     流し直していなければ、そう知らせる。"""
-    _add(connection, "a.jpg", faces=[_face("ひより", source=db.ASSIGN_AUTO, rule=None)])
+    _add(connection, "a.jpg", faces=[_face("${PERSON_4}", source=db.ASSIGN_AUTO, rule=None)])
     assert "1 件" in stale_assignment_notice(connection)
 
     connection.execute("UPDATE Face SET assign_rule = ?", (MATCH_RULE,))
@@ -311,7 +311,7 @@ def test_select_warns_when_auto_assignments_came_from_an_older_rule(connection):
 def test_media_without_family_are_ordered_by_quality_then_smile(connection):
     _add(connection, "low.jpg", quality=10.0, smile=90.0)
     _add(connection, "high.jpg", quality=90.0, smile=10.0)
-    _add(connection, "family.jpg", quality=1.0, faces=[_face("ひより")])
+    _add(connection, "family.jpg", quality=1.0, faces=[_face("${PERSON_4}")])
 
     assert _paths(select_media(connection, {})) == ["family.jpg", "high.jpg", "low.jpg"]
 

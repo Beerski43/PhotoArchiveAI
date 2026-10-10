@@ -165,12 +165,12 @@ def test_comments_and_japanese_paths_are_read(tmp_path, monkeypatch):
     path = tmp_path / "config/app_settings.yml"
     path.parent.mkdir(parents=True)
     path.write_text(
-        "# 実データの root\nsource_roots: /mnt/nfs/写真/な携帯  # 注釈\ndlib_model_dir: null\n",
+        "# 実データの root\nsource_roots: /mnt/nfs/写真/${PERSON_2}携帯  # 注釈\ndlib_model_dir: null\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
 
-    assert config.load_settings() == {"source_roots": "/mnt/nfs/写真/な携帯", "dlib_model_dir": None}
+    assert config.load_settings() == {"source_roots": "/mnt/nfs/写真/${PERSON_2}携帯", "dlib_model_dir": None}
 
 
 def test_a_leftover_json_settings_file_is_not_read_but_reported(tmp_path, monkeypatch, caplog):

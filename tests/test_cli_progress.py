@@ -10,7 +10,7 @@ import photoarchive_ai.cli as cli
 from photoarchive_ai.progress import ProgressDisplay, display_width, fit
 from tests.helpers import render_terminal
 
-LONG_NAME = "/mnt/nfs/photo/2022/20221030穂高ハイキング/とても長いフォルダの名前/IMG_8105.jpg"
+LONG_NAME = "/mnt/nfs/photo/2022/20221030山歩きの記録/とても長いフォルダの名前/IMG_8105.jpg"
 
 
 def _terminal(width=80):
@@ -123,12 +123,12 @@ def test_kept_lines_are_not_cut_and_leave_no_old_lines():
 
 
 def test_fit_counts_wide_characters_as_two_columns():
-    assert display_width("穂高") == 4
+    assert display_width("山歩") == 4
     # 曖昧幅は全角で描く端末があるので2桁（PR #81 のレビュー指摘2）。ASCII は1桁のまま
     assert display_width("①※×…") == 8
     assert display_width("IMG_0001.jpg") == 12
-    assert fit("穂高ハイキング", 9) == "穂高ハ..."
-    assert display_width(fit("穂高ハイキング", 9)) <= 9
+    assert fit("山歩きの記録", 9) == "山歩き..."
+    assert display_width(fit("山歩きの記録", 9)) <= 9
     assert fit("de\ntail", 20) == "de tail"
 
 

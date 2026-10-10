@@ -184,7 +184,7 @@ def test_the_backup_keeps_writes_that_are_still_in_the_wal(tmp_path):
     try:
         # 自動の書き戻し（checkpoint）を止め、書き込みを WAL に留めておく
         writer.execute("PRAGMA wal_autocheckpoint = 0")
-        db.add_person(writer, "ひより")
+        db.add_person(writer, "${PERSON_4}")
         assert (tmp_path / "live.db-wal").stat().st_size > 0, "WAL に残っている前提"
 
         created = backup_database(str(database), str(tmp_path / "copy.db"))
@@ -196,7 +196,7 @@ def test_the_backup_keeps_writes_that_are_still_in_the_wal(tmp_path):
         names = [row[0] for row in copied.execute("SELECT name FROM Person")]
     finally:
         copied.close()
-    assert names == ["ひより"]
+    assert names == ["${PERSON_4}"]
 
 
 def test_backup_database_writes_to_an_explicit_path(tmp_path):

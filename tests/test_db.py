@@ -198,12 +198,12 @@ def test_person_birth_date_is_stored_and_can_be_cleared(tmp_path):
     """
     connection = db.ensure_database(str(tmp_path / "test.db"))
     try:
-        person_id = db.add_person(connection, "なつ", "daughter", "メモ", birth_date="2011-05-03")
+        person_id = db.add_person(connection, "${PERSON_2}", "daughter", "メモ", birth_date="2011-05-03")
 
         stored = db.list_persons(connection)[0]
         assert stored["birth_date"] == "2011-05-03"
 
-        db.update_person(connection, person_id, "なつ", "daughter", "メモ", birth_date=None)
+        db.update_person(connection, person_id, "${PERSON_2}", "daughter", "メモ", birth_date=None)
 
         assert db.list_persons(connection)[0]["birth_date"] is None
     finally:
@@ -279,16 +279,16 @@ def test_updating_a_person_without_a_birth_date_keeps_it(tmp_path: Path):
     connection = db.ensure_database(str(tmp_path / "person.db"))
     try:
         person_id = db.add_person(
-            connection, "なつ", "daughter", "メモ", birth_date="2011-05-03"
+            connection, "${PERSON_2}", "daughter", "メモ", birth_date="2011-05-03"
         )
 
-        db.update_person(connection, person_id, "なつ", "daughter", "メモ2")
+        db.update_person(connection, person_id, "${PERSON_2}", "daughter", "メモ2")
 
         assert db.list_persons(connection)[0]["birth_date"] == "2011-05-03"
         assert db.list_persons(connection)[0]["memo"] == "メモ2"
 
         # None は消す指示として、これまで通り効く
-        db.update_person(connection, person_id, "なつ", "daughter", "メモ2", birth_date=None)
+        db.update_person(connection, person_id, "${PERSON_2}", "daughter", "メモ2", birth_date=None)
         assert db.list_persons(connection)[0]["birth_date"] is None
     finally:
         connection.close()
@@ -305,7 +305,7 @@ def _seed_for_ordering(connection):
     **品質スコアと撮影日時と年齢を、わざと逆の順に振る。** 同じ順に振ると、
     どの並び順を指定しても同じ結果になり、テストが何も確かめられない。
     """
-    person_id = db.add_person(connection, "なつ")
+    person_id = db.add_person(connection, "${PERSON_2}")
     faces = {}
     plan = [
         # (キー, 撮影日時, 品質スコア, 年齢)
@@ -557,7 +557,7 @@ def test_the_number_of_affected_faces_is_right_even_with_progress(tmp_path: Path
     """
     connection = db.ensure_database(str(tmp_path / "count.db"))
     try:
-        person_id = db.add_person(connection, "なつ")
+        person_id = db.add_person(connection, "${PERSON_2}")
         media_id = db.save_media(
             connection,
             {
@@ -1018,7 +1018,7 @@ def test_the_age_order_uses_the_calculated_age_across_every_page(tmp_path: Path)
     """**年齢の若い順は、画面に出ている年齢で全件を並べてからページに分ける。**
 
     以前は `Face.age`（人が入れた確定値）だけで並べていた。実データでは
-    ひよりの 9,502 件のうち確定値は 199 件だけで、**残り 9,303 件は id 順のまま
+    ${PERSON_4}の 9,502 件のうち確定値は 199 件だけで、**残り 9,303 件は id 順のまま
     2ページ目以降に並んでいた。** 画面には括弧つきの計算年齢が出ているので、
     利用者には「ページの中しか並んでいない」ように見えた（2026-10-09 に報告）。
 
@@ -1027,7 +1027,7 @@ def test_the_age_order_uses_the_calculated_age_across_every_page(tmp_path: Path)
     """
     connection = db.ensure_database(str(tmp_path / "age.db"))
     try:
-        person_id = db.add_person(connection, "ひより", birth_date="2010-12-08")
+        person_id = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
         plan = [
             ("13歳", "2024-06-01T10:00:00", None),
             ("9歳", "2020-01-01T10:00:00", None),
@@ -1052,7 +1052,7 @@ def test_the_age_order_uses_the_calculated_age_across_every_page(tmp_path: Path)
                     connection,
                     person_id=person_id,
                     order=db.ORDER_AGE,
-                    birth_date="2010-12-08",
+                    birth_date="2010-12-01",
                     limit=2,
                     offset=page * 2,
                 )
@@ -1177,7 +1177,7 @@ def test_unassigned_faces_marked_not_this_person_are_left_out(tmp_path: Path):
     connection = db.ensure_database(str(tmp_path / "not-this.db"))
     try:
         person_id, faces = _seed_for_ordering(connection)
-        other = db.add_person(connection, "ひより")
+        other = db.add_person(connection, "${PERSON_4}")
         db.reject_faces_for_person(connection, [faces["古い"]], person_id)
         connection.commit()
 

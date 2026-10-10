@@ -270,7 +270,7 @@ def test_the_shooting_date_is_shown_when_the_photo_has_one():
     """
     info = photoarchive_gui.format_media_info(
         {
-            "path": "/photo/2017/171216クリスマスパーティー/a.JPG",
+            "path": "/photo/2017/171216${EVENT}/a.JPG",
             "shooting_date": "2017-12-16T18:46:32",
             "created_time": "2020-01-01T00:00:00",
         },
@@ -290,7 +290,7 @@ def test_a_photo_without_exif_says_so_and_falls_back_to_the_file_time():
     """
     info = photoarchive_gui.format_media_info(
         {
-            "path": "/photo/2013/130914七五三/b.JPG",
+            "path": "/photo/2013/130914${EVENT}/b.JPG",
             "shooting_date": None,
             "created_time": "2013-03-24T13:56:26",
         },
@@ -307,11 +307,11 @@ def test_the_folder_is_shown_relative_to_the_root():
     絶対パスのままだと NFS のマウント先が長すぎて読めない。
     """
     info = photoarchive_gui.format_media_info(
-        {"path": "/photo/2013/130914七五三/b.JPG", "shooting_date": None},
+        {"path": "/photo/2013/130914${EVENT}/b.JPG", "shooting_date": None},
         source_roots="/photo",
     )
 
-    assert "フォルダ: 2013/130914七五三" in info
+    assert "フォルダ: 2013/130914${EVENT}" in info
     assert "ファイル: b.JPG" in info
 
 
@@ -430,9 +430,9 @@ def test_a_relative_root_is_anchored_to_the_settings_file(tmp_path, monkeypatch)
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
 
-    resolved = photoarchive_gui.resolve_root("mediaFiles/suzukiFamily")
+    resolved = photoarchive_gui.resolve_root("mediaFiles/${SURNAME}Family")
 
-    assert resolved == str(tmp_path / "mediaFiles/suzukiFamily")
+    assert resolved == str(tmp_path / "mediaFiles/${SURNAME}Family")
 
 
 def test_an_absolute_root_is_left_alone(tmp_path):
@@ -552,10 +552,10 @@ def test_the_preview_shows_the_age_of_the_selected_person():
     info = photoarchive_gui.format_media_info(
         {"path": "/photo/2017/クリスマス/a.JPG", "shooting_date": "2017-12-16T18:46:32"},
         source_roots="/photo",
-        person={"name": "なつ", "birth_date": "2011-05-03"},
+        person={"name": "${PERSON_2}", "birth_date": "2011-05-03"},
     )
 
-    assert info.splitlines()[-1] == "なつ: 6歳"
+    assert info.splitlines()[-1] == "${PERSON_2}: 6歳"
 
 
 def test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated():
@@ -565,13 +565,13 @@ def test_the_preview_leaves_the_age_line_out_when_it_cannot_be_calculated():
     """
     photo = {"path": "/photo/2017/クリスマス/a.JPG", "shooting_date": "2017-12-16T18:46:32"}
     no_exif = {"path": "/photo/2013/七五三/b.JPG", "shooting_date": None}
-    natsu = {"name": "なつ", "birth_date": "2011-05-03"}
+    person2 = {"name": "${PERSON_2}", "birth_date": "2011-05-03"}
 
-    assert "なつ" not in photoarchive_gui.format_media_info(photo, person=None)
+    assert "${PERSON_2}" not in photoarchive_gui.format_media_info(photo, person=None)
     assert "歳" not in photoarchive_gui.format_media_info(
         photo, person={"name": "父", "birth_date": None}
     )
-    assert "歳" not in photoarchive_gui.format_media_info(no_exif, person=natsu)
+    assert "歳" not in photoarchive_gui.format_media_info(no_exif, person=person2)
 
 
 def test_switching_the_view_does_not_reload_the_original_photo(window, monkeypatch):
@@ -589,7 +589,7 @@ def test_switching_the_view_does_not_reload_the_original_photo(window, monkeypat
     db.update_person(
         connection, db.list_persons(connection)[0]["id"], "父", "father", "", birth_date="1980-01-01"
     )
-    db.add_person(connection, "なつ", "daughter", "", birth_date="2011-05-03")
+    db.add_person(connection, "${PERSON_2}", "daughter", "", birth_date="2011-05-03")
     window._reload_person_list()
     window.face_list.setCurrentRow(0)
     window._show_preview()
@@ -696,12 +696,12 @@ def test_the_person_dialog_round_trips_a_birth_date(qt_app):
     **保存済みの誕生日は、年・月・日の欄に割って表示する。**
     """
     dialog = photoarchive_gui.PersonDialog(
-        name="なつ", relation="daughter", memo="メモ", birth_date="2011-05-03"
+        name="${PERSON_2}", relation="daughter", memo="メモ", birth_date="2011-05-03"
     )
 
     assert (dialog.birth_year.value(), dialog.birth_month.value()) == (2011, 5)
     assert dialog.birth_day.value() == 3
-    assert dialog.values() == ("なつ", "daughter", "メモ", (2011, 5, 3))
+    assert dialog.values() == ("${PERSON_2}", "daughter", "メモ", (2011, 5, 3))
 
     # 未設定の人物は3つとも空で開く
     empty = photoarchive_gui.PersonDialog(name="父")
@@ -717,7 +717,7 @@ def test_typing_a_birth_date_straight_from_the_keyboard(qt_app):
     """
     from PySide6.QtTest import QTest
 
-    dialog = photoarchive_gui.PersonDialog(name="なつ")
+    dialog = photoarchive_gui.PersonDialog(name="${PERSON_2}")
     dialog.show()
     qt_app.processEvents()
 
@@ -1000,7 +1000,7 @@ def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window
         "",
         birth_date="1980-01-02",
     )
-    db.add_person(window.connection, "なつ", "daughter", "", birth_date="2011-05-03")
+    db.add_person(window.connection, "${PERSON_2}", "daughter", "", birth_date="2011-05-03")
     # 同じ写真にもう1つ顔を足し、片方だけ「父」に割り当てる。
     # **人物の表示と未割当の表示で、同じ写真を見比べるため。**
     media_id = db.list_faces(window.connection, with_thumbnail=False)[0]["media_id"]
@@ -1028,7 +1028,7 @@ def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window
     window._show_preview()
 
     last = window.preview_info.text().splitlines()[-1]
-    assert last == "撮影時の年齢: 父 37歳 / なつ 6歳"
+    assert last == "撮影時の年齢: 父 37歳 / ${PERSON_2} 6歳"
     assert "父: 37歳" not in window.preview_info.text(), "1人ぶんの行は残さない"
 
 
@@ -1039,15 +1039,15 @@ def test_a_new_person_is_selected_so_the_age_shows_immediately(window, monkeypat
     monkeypatch.setattr(
         photoarchive_gui,
         "PersonDialog",
-        _make_dialog_class(accepted=True, values=("なつ", "daughter", "", (2011, 5, 3))),
+        _make_dialog_class(accepted=True, values=("${PERSON_2}", "daughter", "", (2011, 5, 3))),
     )
 
     window._add_person()
 
-    assert window._current_person()["name"] == "なつ"
+    assert window._current_person()["name"] == "${PERSON_2}"
     assert "誕生日: 2011-05-03" in window.details_label.text()
     # 打鍵の割り当ても増える。**左の一覧に並んでいる順に 1 から振る。**
-    assert [action.data()["name"] for action in window.assign_actions] == ["父", "なつ"]
+    assert [action.data()["name"] for action in window.assign_actions] == ["父", "${PERSON_2}"]
 
 
 # ---------------------------------------------------------------------------

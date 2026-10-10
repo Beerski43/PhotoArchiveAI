@@ -129,7 +129,7 @@ def test_scan_reads_the_source_roots_from_the_settings(tmp_path, monkeypatch):
 def test_scan_refuses_nested_sources_before_touching_anything(tmp_path, monkeypatch):
     """**親と子を両方 root にしない。** 共通の親で走査すると他家の写真まで入った（2026-10-02）。"""
     parent = tmp_path / "photo"
-    child = parent / "natsuTemp"
+    child = parent / "person2Temp"
     child.mkdir(parents=True)
     database = tmp_path / "photoarchive.db"
     run_cli(["init-db", "--db", str(database)], tmp_path)

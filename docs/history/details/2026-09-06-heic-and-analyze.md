@@ -14,7 +14,7 @@
 `Media.id=2` の画像は次のJPEGだった。
 
 ```text
-/mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯/2026/20260100いろいろ/IMG_2518.JPG
+${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯/2026/20260100いろいろ/IMG_2518.JPG
 ```
 
 画像は正常に読み込める `1706x960` のRGB JPEGで、人物が写っている。

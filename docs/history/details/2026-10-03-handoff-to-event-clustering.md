@@ -34,7 +34,7 @@ photoarchive reembed --db data/photoarchive.db --yes
 照合の候補（未割当・特徴量あり）: 57,770
 ```
 
-**バックアップ**: `/home/suu/photoarchive-recovery/before-reembed-20261003-212933.db`
+**バックアップ**: `${HOME}/photoarchive-recovery/before-reembed-20261003-212933.db`
 （423MB・読み取り専用。作り直す前の状態）
 
 ### ⚠️ `photoarchive match` はまだ流していない
@@ -126,13 +126,13 @@ photoarchive match --db data/photoarchive.db
 
 - `config/app_settings.json` は再作成したもの。**`output_root` と `rule_path` は
   未確認**（既定値とひな形を入れてある）
-- `source_root` は `/mnt/nfs/nanoPi-NEO2/suzuki/Photo`。
-  **共通接頭辞の `/mnt/nfs/nanoPi-NEO2` にしてはいけない**（他家の写真 `katayama` と
+- `source_root` は `${NFS_ROOT}/${SURNAME}/Photo`。
+  **共通接頭辞の `${NFS_ROOT}` にしてはいけない**（他家の写真 `katayama` と
   `temp` を取り込む）。経緯は Issue #24 のコメント
 - 実データは2つの root を切り替えて2回スキャンして作られている。
-  `mediaFiles/suzukiFamily` と `mediaFiles/photo_natsu` がその記録（**アプリは
+  `mediaFiles/${SURNAME}Family` と `mediaFiles/photo_person2` がその記録（**アプリは
   `mediaFiles/` を見ない**）
-- **バックアップの置き場**: `/home/suu/photoarchive-recovery/`（読み取り専用で保持）
+- **バックアップの置き場**: `${HOME}/photoarchive-recovery/`（読み取り専用で保持）
 
 ### ⚠️ 長時間の作業は、消える場所に置かない
 

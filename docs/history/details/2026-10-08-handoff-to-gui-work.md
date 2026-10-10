@@ -62,7 +62,7 @@ ArcFace 中央 **1 番目**・1ページ目に **94.0%**）。
 ## 実データを触るときの約束
 
 **`match` を流す前後で控えを取る。** `cp` ではなく `sqlite3 .backup`（WAL を
-取り込むため）。控えの一覧と戻し方は `/home/suu/photoarchive-recovery/BACKUPS.md`。
+取り込むため）。控えの一覧と戻し方は `${HOME}/photoarchive-recovery/BACKUPS.md`。
 
 **`match` は決定的なので、控えがあれば後から結果を再現できる。**
 2026-10-08 に、利用者が解除した顔がどれだったか分からなくなったとき、

@@ -8,12 +8,12 @@
 4. **既定の閾値 0.60 は緩すぎた。** 他人誤認率を測って **0.45 へ変えた**
 
 実データ本体 (`data/photoarchive.db`) には触っていない。複製
-(`/home/suu/photoarchive-proof/proof.db`) に対して実行した。
+(`${HOME}/photoarchive-proof/proof.db`) に対して実行した。
 
 ```bash
-photoarchive reembed --db /home/suu/photoarchive-proof/proof.db --yes
-photoarchive evaluate --db /home/suu/photoarchive-proof/proof.db
-python scripts/measure_embedding_models.py --db /home/suu/photoarchive-proof/proof.db \
+photoarchive reembed --db ${HOME}/photoarchive-proof/proof.db --yes
+photoarchive evaluate --db ${HOME}/photoarchive-proof/proof.db
+python scripts/measure_embedding_models.py --db ${HOME}/photoarchive-proof/proof.db \
     --same-photo-pairs
 ```
 
@@ -81,14 +81,14 @@ ArcFace 済み          58,163
 
 | 人物 | 手本 | 正解 | 取りこぼし | 誤り |
 |---|---|---|---|---|
-| 義行 | 18 | 16 | 0 | **2** |
-| 奈津子 | 46 | 46 | 0 | 0 |
-| 虎太朗 | 18 | 14 | 4 | 0 |
-| ひより | 28 | 23 | 5 | 0 |
-| 旺志朗 | 16 | 13 | 3 | 0 |
+| ${PERSON_1} | 18 | 16 | 0 | **2** |
+| ${PERSON_2} | 46 | 46 | 0 | 0 |
+| ${PERSON_3} | 18 | 14 | 4 | 0 |
+| ${PERSON_4} | 28 | 23 | 5 | 0 |
+| ${PERSON_5} | 16 | 13 | 3 | 0 |
 
-**誤りは義行（父）の2件だけ。** 取りこぼしは子ども3人に偏っている
-（虎太朗・ひより・旺志朗で 12 件）。**成長による見た目の変化が、まだ残っている
+**誤りは${PERSON_1}（父）の2件だけ。** 取りこぼしは子ども3人に偏っている
+（${PERSON_3}・${PERSON_4}・${PERSON_5}で 12 件）。**成長による見た目の変化が、まだ残っている
 いちばん大きな壁**という読みと一致する。
 
 ---

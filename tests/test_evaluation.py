@@ -458,8 +458,8 @@ def test_the_measurement_filters_by_birth_date_just_like_match(connection):
     `match` は誕生日で候補を外す。外すとマージンの通り方まで変わるので、
     測定だけ素通しにすると、**実際には起きない誤りを数えてしまう。**
     """
-    兄 = db.add_person(connection, "兄", birth_date="2009-02-19")
-    妹 = db.add_person(connection, "妹", birth_date="2010-12-08")
+    兄 = db.add_person(connection, "兄", birth_date="2009-02-01")
+    妹 = db.add_person(connection, "妹", birth_date="2010-12-01")
     # 兄の顔は、妹が生まれる前の写真にある。妹の手本とそっくり。
     before = _add_media(connection, 1)
     connection.execute(
@@ -492,7 +492,7 @@ def test_a_teacher_whose_person_was_not_born_yet_is_not_silently_correct(connect
     手本のラベルか誕生日のどちらかが間違っている。黙って正解にすると、
     **データの矛盾が実測値の中に隠れる。**
     """
-    妹 = db.add_person(connection, "妹", birth_date="2010-12-08")
+    妹 = db.add_person(connection, "妹", birth_date="2010-12-01")
     for index, when in enumerate(("2005-06-01T10:00:00", "2011-06-01T10:00:00"), start=1):
         media = _add_media(connection, index)
         connection.execute(
