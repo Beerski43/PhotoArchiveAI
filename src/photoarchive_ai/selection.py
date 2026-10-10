@@ -3,10 +3,11 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
 
+from . import appearance, db, scoring
 from .db import get_media_with_analysis
 
 
@@ -67,13 +68,63 @@ def _build_duplicate_groups(media_list: List[Dict[str, Any]]) -> Dict[str, List[
     return groups
 
 
-def select_media(connection, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
+def stale_assignment_notice(connection) -> Optional[str]:
+    """古い規則で付いた自動割り当てが残っていれば、その知らせ。無ければ None。
+
+    **`select` は `match` の判定をそのまま使う。** 規則を変えたあと `match` を
+    流し直していないと、古い判定で写真を選ぶことになる（利用者の要望
+    「match と select で選定の仕組みが異なると、結果がおかしくなる」）。
+    """
+    from .matcher import MATCH_RULE
+
+    stale = db.count_stale_auto_assignments(connection, MATCH_RULE)
+    if not stale:
+        return None
+    return (
+        f"自動割り当て {stale} 件は、いまの規則（{MATCH_RULE}）より前に付いたものです。"
+        " `photoarchive match` を流し直してから select すると、いまの規則で選べます。"
+    )
+
+
+def family_scores(
+    connection, progress_callback: Optional[Callable[[int, int, str], None]] = None
+) -> Tuple[Dict[int, float], Set[int]]:
+    """写真ごとの家族写真としての良さと、家族の顔が写っている写真の集合。
+
+    **いまの割り当てからその場で**計算する。
+
+    **「写っているか」と「どれだけ良いか」を同じ数で表さない**（PR #70 の
+    レビュー指摘1）。点は鮮明さ・正面・笑顔がすべて 0 なら 0 になるので、
+    「点 > 0」で絞ると、**家族が写っているのにボケて横を向いた写真が落ちる**
+    （実データの複製で 20,828 枚中 433 枚）。`family_only` は集合で絞り、
+    点は並びにだけ使う。
+
+    **保存済みの `family_score` を読まない。** GUI で割り当てを直しても
+    `AnalysisResult` は次の `match` まで古いまま（仕様書 §10.6）なので、それを
+    読むと人が直した結果が `select` に届かない。式は `scoring.family_photo_score`
+    （`match` が書く `family_score` と同じもの）。
+
+    見え方が未計測の家族の顔は、先に測る（初回は数分。2回目からは差分だけ）。
+    """
+    appearance.fill_missing(connection, progress_callback=progress_callback)
+    rows = db.family_faces(connection)
+    return scoring.family_photo_scores(rows), {row["media_id"] for row in rows}
+
+
+def select_media(
+    connection,
+    rule: Dict[str, Any],
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> List[Dict[str, Any]]:
     media_list = get_media_with_analysis(connection)
+    scores, with_family = family_scores(connection, progress_callback)
+    for media in media_list:
+        media["family_score"] = scores.get(media["id"], 0.0)
     filtered = [m for m in media_list if _passes_date_filter(m, rule)]
     if not rule.get("include_video", True):
         filtered = [m for m in filtered if m.get("type") != "video"]
     if rule.get("family_only"):
-        filtered = [m for m in filtered if (m.get("family_score") or 0.0) > 0.0]
+        filtered = [m for m in filtered if m["id"] in with_family]
 
     filtered.sort(key=lambda m: (
         -(m.get("family_score") or 0.0),

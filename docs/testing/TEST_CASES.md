@@ -25,6 +25,13 @@
 | `test_gui_person.py::test_another_shape_of_broken_exif_is_also_treated_as_missing` | **`0000` で始まるかだけを見ていた。** 別の壊れ方（`TTTT-TT-TTTTT:TT:TT`、実データ Media 67件）が素通りし、撮影日時としてそのまま画面に出ていた |
 | `test_gui_assignment.py::test_rebuilding_the_list_does_not_reload_the_preview` | **一覧を作り直すたびにプレビューが再描画され、元写真を NFS から読み直していた。** 200件を選んで割り当てると100回読み直し、1回の操作に17秒かかった（実測。止めると92ms） |
 | `test_db.py::test_a_broken_exif_date_does_not_take_over_the_newest_page` | **撮影日時の新しい順にすると、壊れた EXIF が1ページ目をまるごと占領する**（`T` は数字より大きい。実データで顔123件） |
+| `test_appearance.py::test_an_unaligned_teacher_still_blocks_a_stranger_as_the_runner_up` | **整列できない手本を丸ごと外すと、誤りが +418 件増えた**（実データ・2026-10-09）。その人物が2位の対抗馬として他人を止めていた役目まで消えた |
+| `test_appearance.py::test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else` | **年齢の差を距離に足し引きすると、勝つ人物が入れ替わった**（大人の手本を締めて +258 件） |
+| `test_appearance.py::test_nothing_is_recorded_when_the_landmark_model_is_unavailable` | 目印の検出器が無い環境で「整列できない」と書くと、全部の手本が根拠から外れ二度と測り直されない（実装中にテストのフェイクで踏んだ） |
+| `test_selection.py::test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | `family_only` を「点 > 0」で絞っていたので、**家族が写っているのにボケて横を向いた写真が落ちた**（実データの複製で 433 枚） |
+| `test_appearance.py::test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | 年齢の上限を最も近い1件で判定していたので、**手本を足すと割り当てが減った** |
+| `test_selection.py::test_a_crisp_stranger_does_not_lift_a_blurred_family_photo` | 写真の笑顔・画質が「写っている顔の最良値」で、**隣の他人がくっきり笑っていればボケた家族の写真が上位に来た** |
+| `test_selection.py::test_a_change_made_in_the_gui_reaches_select_without_running_match` | `select` が保存済みの `family_score` を読んでいたので、GUI で直した割り当てが次の `match` まで届かなかった |
 | `test_db.py::test_saving_scores_does_not_clear_family_score` | `INSERT OR REPLACE` で `scan` が `match` の書いた値を消していた |
 | `test_gui_assignment.py::test_face_age_dialog_keeps_zero_distinct_from_unset` | `value() or None` で0歳が「未設定」に潰れた |
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
@@ -527,15 +534,25 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（16件）
+### `test_selection.py` — 抽出とコピー（26件）
 
 | テスト | 内容 |
 |---|---|
 | `test_select_media_filters_by_rule` | 日付と `include_video` |
 | `test_load_rule_reads_json` / `test_load_rule_reads_yaml` | ルールの読み込み（拡張子で分岐） |
 | `test_load_rule_raises_for_a_missing_file` | 無いファイル |
-| `test_family_only_keeps_media_with_a_family_score` | `family_only` |
-| `test_results_are_ordered_by_family_then_quality_then_smile` | 並び順 |
+| `test_family_only_keeps_media_where_a_family_member_is_assigned` | `family_only` は家族の顔が写っているか |
+| `test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_away` | **点 0 の家族の写真も `family_only` で残る**（PR #70 のレビュー指摘1） |
+| `test_a_blurred_family_photo_comes_after_a_crisp_one` | **ボケた家族の写真は後ろ**（利用者の要望の核心） |
+| `test_a_profile_comes_after_a_frontal_face` | 横顔・整列できない顔は正面の後ろ |
+| `test_a_smile_ranks_above_a_straight_face` | 笑顔が上 |
+| `test_a_crisp_stranger_does_not_lift_a_blurred_family_photo` | **点は家族の顔だけから作る** |
+| `test_more_clear_family_members_rank_higher_but_blurred_ones_do_not_count` | はっきり写った家族が多いほど上。ボケた家族は数えない |
+| `test_a_change_made_in_the_gui_reaches_select_without_running_match` | 保存済みの `family_score` を読まない |
+| `test_match_writes_the_same_score_that_select_uses` | `match` が書く点と `select` の点は同じ式 |
+| `test_select_measures_family_faces_that_were_never_measured` | 未計測の家族の顔は `select` が測る |
+| `test_select_warns_when_auto_assignments_came_from_an_older_rule` | 古い規則の自動割り当てを知らせる（`Face.assign_rule`） |
+| `test_media_without_family_are_ordered_by_quality_then_smile` | 家族のいない写真は画質 → 笑顔の順 |
 | `test_count_per_year_limits_each_year_independently` | 年ごとの上限 |
 | `test_count_per_year_keeps_the_best_of_each_year` | 年内では上位から採る |
 | `test_remove_duplicate_keeps_one_row_per_file_hash` | ハッシュ一致の重複除去 |
@@ -546,6 +563,31 @@
 | `test_copy_flattens_media_that_lives_outside_the_source_root` | 基準の外はファイル名だけにする |
 | `test_copy_skips_entries_without_a_path_and_reports_progress` | パスが無い行を飛ばす |
 | `test_copy_makes_room_when_the_name_is_taken` | 名前の衝突で連番を付ける |
+
+### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_frontal_face_has_no_yaw_and_a_turned_face_has_some` | 向き（鼻のずれ ÷ 両目の間隔） |
+| `test_a_blurred_face_is_less_sharp_than_a_crisp_one` | 鮮明さ（ラプラシアン分散） |
+| `test_a_face_without_landmarks_is_recorded_as_not_aligned` | 目印が取れない顔は「整列できない」 |
+| `test_nothing_is_recorded_when_the_landmark_model_is_unavailable` | **測れないときは書かない** |
+| `test_filling_measures_only_assigned_faces_and_can_skip_writing` | 割り当てのある顔だけ測る。`write=False` は書かない |
+| `test_a_face_close_only_to_an_unaligned_teacher_is_left_unassigned` | 整列できない手本は根拠にしない |
+| `test_an_unaligned_teacher_still_blocks_a_stranger_as_the_runner_up` | **対抗馬としては残す** |
+| `test_the_score_comes_from_the_aligned_teacher_that_decided` | `assign_score` は受け入れを決めた手本から |
+| `test_unmeasured_teachers_are_measured_before_matching` | 未計測の手本は `match` が測る |
+| `test_auto_assignments_record_the_rule_and_manual_ones_clear_it` | `assign_rule` は auto の行だけ |
+| `test_evaluate_applies_the_same_rule` / `test_evaluate_does_not_write_what_it_measures` | `evaluate` も同じ規則・書かない |
+| `test_a_version_4_database_gains_the_appearance_columns_and_keeps_its_faces` | **v4 → v5 で顔が減らない** |
+| `test_the_age_limits_only_tighten` | 年齢の上限は締めるだけ |
+| `test_a_baby_teacher_needs_a_closer_face_than_an_adult_teacher` | 8歳以下の手本は 0.35 |
+| `test_a_teacher_of_unknown_age_is_limited_to_0_40` | 年齢不明は 0.40 |
+| `test_the_confirmed_age_wins_over_the_calculated_one` | 年齢は確定値が優先 |
+| `test_a_rejected_young_teacher_does_not_hand_the_face_to_someone_else` | **上限は勝者とマージンに効かせない** |
+| `test_evaluate_applies_the_age_limits_too` | `evaluate` も年齢の上限を効かせる |
+| `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
+| `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
 ### `test_converter.py` — HEIC → JPEG（10件）
 

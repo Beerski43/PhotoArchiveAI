@@ -374,7 +374,9 @@ def test_unassign_auto_recomputes_the_family_score(tmp_path, capsys):
     database, connection, face_ids = _database_with_mixed_assignments(tmp_path)
     auto_media = db.get_face(connection, face_ids[db.ASSIGN_AUTO])["media_id"]
     manual_media = db.get_face(connection, face_ids[db.ASSIGN_MANUAL])["media_id"]
-    assert db.get_analysis_result(connection, auto_media)["family_score"] == 55.0
+    # 家族の顔が写っているので点がある（式は `scoring.family_photo_score`）
+    assert db.get_analysis_result(connection, auto_media)["family_score"] > 0.0
+    manual_before = db.get_analysis_result(connection, manual_media)["family_score"]
     connection.close()
     capsys.readouterr()
 
@@ -383,8 +385,8 @@ def test_unassign_auto_recomputes_the_family_score(tmp_path, capsys):
     connection = db.ensure_database(str(database))
     try:
         assert db.get_analysis_result(connection, auto_media)["family_score"] == 0.0
-        # 手本の写真は 100 のまま（手動割当は確信度100として扱う）。
-        assert db.get_analysis_result(connection, manual_media)["family_score"] == 100.0
+        # 手本の写真の点は変わらない（手本は消していない）。
+        assert db.get_analysis_result(connection, manual_media)["family_score"] == manual_before
         # scan が書いたスコアは潰れていない。
         assert db.get_analysis_result(connection, auto_media)["smile_score"] == 10.0
     finally:

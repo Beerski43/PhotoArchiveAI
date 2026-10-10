@@ -3,7 +3,9 @@ import os
 import pytest
 
 from tests.fakes import (
+    APPEARANCE_STATE,
     FACE_MESH_STATE,
+    FRONTAL_POINTS,
     _FakeArcFaceSession,
     _FakeRecognitionModel,
     _FakeShapePredictor,
@@ -71,6 +73,22 @@ def fake_face_models(monkeypatch):
     monkeypatch.setattr(face, "_load_arcface_session", lambda: _FakeArcFaceSession())
     # **5点は取れないことにして、縮小の経路を通す**（理由は tests/fakes.py）。
     monkeypatch.setattr(face, "detect_five_points", lambda _rgb: None)
+    # **見え方の判定では5点が取れる（正面）ことにする。** 特徴量の経路と同じく
+    # 取れないことにすると、手本が全部「整列できない」になり `match` が何も
+    # 割り当てなくなる。整列できない手本は `APPEARANCE_STATE` で作る。
+    from photoarchive_ai import appearance
+    import numpy as np
+
+    APPEARANCE_STATE["aligned"] = True
+    monkeypatch.setattr(
+        appearance,
+        "_five_points",
+        lambda _rgb: (
+            np.asarray(FRONTAL_POINTS, dtype=np.float64)
+            if APPEARANCE_STATE["aligned"]
+            else None
+        ),
+    )
 
     # **ここに「実物を読もうとしたら落ちる」番人は置けない。** `monkeypatch.undo()`
     # は差し替えを**すべて**巻き戻すので、番人ごと消える（PR #60 の指摘1で実測）。
