@@ -659,7 +659,7 @@
 | `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
 | `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
-### `test_converter.py` — HEIC → JPEG（10件）
+### `test_converter.py` — HEIC → JPEG（14件）
 
 | テスト | 内容 |
 |---|---|
@@ -670,7 +670,11 @@
 | `test_convert_reports_progress_for_every_source` | 進捗 |
 | `test_convert_raises_for_a_missing_directory` | 無いディレクトリ |
 | `test_convert_asks_before_continuing_when_the_output_cannot_be_written` | 書き込み失敗時の確認 |
-| `test_fingerprint_matches_the_same_picture_and_differs_for_another` | 同一画像の判定 |
+| `test_difference_is_small_for_the_same_picture_and_large_for_another` | 同一画像の判定 |
+| `test_same_image_requires_the_same_dimensions` | 寸法が違えば別の写真（#79） |
+| `test_convert_skips_a_textured_photo_on_the_second_run` | 模様のある写真で2回目以降に `_1.jpg` を作らない。単色では JPEG の画素ずれが起きず見逃していた（#79） |
+| `test_convert_numbers_the_output_when_a_similar_but_different_photo_exists` | 模様の違う写真なら連番（#79） |
+| `test_the_measurement_separates_the_same_photo_from_the_next_one` | 閾値を測るスクリプト（`scripts/measure_heic_duplicates.py`）の集計 |
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
