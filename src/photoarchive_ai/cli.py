@@ -576,11 +576,24 @@ def main() -> None:
             if not source_roots:
                 raise SystemExit(SOURCE_ROOTS_REQUIRED)
 
-            def confirm_write_error(path: Path, error: Exception) -> bool:
-                answer = input(
-                    f"Write failed for {path}: {error}\nContinue with the next file? [y/N]: "
-                )
+            unreadable: List[Path] = []
+
+            def ask_to_continue(message: str) -> bool:
+                # 描いている進捗の2行を消してから聞く。消さないと、答えたあとの
+                # 書き直しが問いの行を巻き込み、古いバーが残る
+                _display.clear()
+                answer = input(f"{message}\nContinue with the next file? [y/N]: ")
                 return answer.strip().lower() in {"y", "yes"}
+
+            def confirm_write_error(path: Path, error: Exception) -> bool:
+                return ask_to_continue(f"Write failed for {path}: {error}")
+
+            def confirm_read_error(path: Path, error: Exception) -> bool:
+                # 書き込み先ではなく、元の HEIC が読めない（壊れている）
+                if ask_to_continue(f"Cannot read {path} (the file may be damaged): {error}"):
+                    unreadable.append(path)
+                    return True
+                return False
 
             converted = skipped = 0
             try:
@@ -592,12 +605,17 @@ def main() -> None:
                             current, total, detail, prefix="Converting"
                         ),
                         confirm_write_error=confirm_write_error,
+                        confirm_read_error=confirm_read_error,
                     )
                     converted += done
                     skipped += already
             except (OSError, PermissionError, ValueError) as error:
                 raise SystemExit(f"Conversion stopped: {error}") from error
             print(f"Converted {converted} files; skipped {skipped} existing files.")
+            if unreadable:
+                print(f"Could not read {len(unreadable)} files (left as they are):")
+                for path in unreadable:
+                    print(f"  {path}")
             return
 
         if args.command == "match":

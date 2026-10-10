@@ -660,7 +660,7 @@
 | `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
 | `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
-### `test_converter.py` — HEIC → JPEG（14件）
+### `test_converter.py` — HEIC → JPEG（16件）
 
 | テスト | 内容 |
 |---|---|
@@ -678,6 +678,8 @@
 | `test_the_measurement_separates_the_same_photo_from_the_next_one` | 閾値を測るスクリプト（`scripts/measure_heic_duplicates.py`）の集計 |
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
+| `test_a_damaged_heic_is_asked_about_as_a_read_failure` | **壊れた HEIC は「読めない」として聞き、「書けない」と言わない**（PR #81 で利用者の依頼） |
+| `test_a_damaged_heic_stops_the_run_without_a_read_confirmation` | 読めないときの確認が無ければ止まる |
 
 ### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（11件）
 
@@ -761,7 +763,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_folder_of_only_heic_is_treated_as_having_no_media` | **scan は HEIC を一切見ない。** HEIC だけのフォルダは「メディアが1件も無い」で止まる（PR #76 のレビューで利用者が決めた） |
 | `test_heic_rows_are_not_counted_by_the_missing_file_check_on_its_own` | `prune_missing_media` 単体でも HEIC の行を安全弁に数えない（PR #76 のレビュー指摘4） |
 
-### `test_cli_progress.py` — 進捗表示（13件）
+### `test_cli_progress.py` — 進捗表示（15件）
 
 **画面に何が残るか**を、端末の写し（`tests/helpers.py` の `render_terminal`。カーソル移動・行の消去・
 **幅での折り返し**を解釈する）で確かめる。出力の文字列を見るだけでは、折り返しで古い行が残る
@@ -782,6 +784,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_emit_progress_keeps_the_error_it_is_given` | CLI の呼び出し口は、渡されたエラーを1度だけ残す |
 | `test_resetting_forgets_the_previous_error` | 次のコマンドでは同じエラーをもう一度残す |
 | `test_scan_reports_listing_progress_and_file_errors` | `scan` が一覧づくりの進み具合とファイルごとのエラーを知らせる（#78） |
+| `test_clearing_before_a_question_leaves_no_old_bar` | 問いを出す前に2行を消し、答えたあとに古いバーが残らない |
+| `test_convert_heic_says_which_files_could_not_be_read` | `convert-heic` は壊れた HEIC を「読めない」と聞き、最後に一覧で知らせる |
 
 ### `test_migration.py` — スキーマの移行（27件）
 

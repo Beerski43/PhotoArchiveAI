@@ -127,7 +127,15 @@ def convert_heic_files(
     source_dir: str,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     confirm_write_error: Optional[Callable[[Path, Exception], bool]] = None,
+    confirm_read_error: Optional[Callable[[Path, Exception], bool]] = None,
 ) -> tuple[int, int]:
+    """HEIC/HEIF を同じフォルダの JPEG にする。``(変換した件数, スキップした件数)`` を返す。
+
+    **読めない HEIC と、書けない JPEG を分けて聞く**（``confirm_read_error`` /
+    ``confirm_write_error``。真を返せば次のファイルへ進む）。以前は両方を「Write failed」と
+    聞いており、壊れた HEIC を書き込み先の問題と読ませていた（PR #81 で利用者の依頼）。
+    どちらも渡さなければ例外をそのまま投げる。
+    """
     root = Path(source_dir)
     if not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -145,12 +153,20 @@ def convert_heic_files(
                     # EXIF からしか読まない。pillow-heif は回転を済ませて Orientation を
                     # 1 にした EXIF を返すので、そのまま渡しても二重に回らない。
                     exif = image.info.get("exif")
-                    extra = {"exif": exif} if exif else {}
-                    image.convert("RGB").save(output, "JPEG", quality=95, **extra)
-                converted += 1
-            except (OSError, PermissionError) as error:
-                if confirm_write_error is None or not confirm_write_error(source, error):
+                    rgb = image.convert("RGB")
+            except OSError as error:
+                # 壊れた HEIC など（UnidentifiedImageError も OSError）
+                rgb = None
+                if confirm_read_error is None or not confirm_read_error(source, error):
                     raise
+            if rgb is not None:
+                try:
+                    extra = {"exif": exif} if exif else {}
+                    rgb.save(output, "JPEG", quality=95, **extra)
+                    converted += 1
+                except OSError as error:
+                    if confirm_write_error is None or not confirm_write_error(source, error):
+                        raise
         if progress_callback is not None:
             progress_callback(index, len(sources), source.name)
     return converted, skipped

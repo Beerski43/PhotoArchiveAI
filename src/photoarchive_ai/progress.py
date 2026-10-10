@@ -180,6 +180,13 @@ class ProgressDisplay:
             self.stream.flush()
             self._block = ("", "")
 
+    def clear(self) -> None:
+        """描いている2行を消す（問いを出す前など）。次の ``update`` はカーソルの位置から描く。"""
+        if self._drawn and self._is_interactive():
+            self.stream.write(self._erase())
+            self.stream.flush()
+        self._drawn = 0
+
     def finish(self) -> None:
         """段を終える。バーの行は残し、最新のメッセージの行は消す。"""
         if self._drawn and self._is_interactive():
