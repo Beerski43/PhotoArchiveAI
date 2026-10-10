@@ -70,7 +70,7 @@ GUIを通常のデスクトップで起動するには、X11またはWaylandの�
 通常は以下で全Python依存をインストールできます。
 
 ```bash
-cd ${REPO_DIR}
+cd PhotoArchiveAI   # clone したリポジトリの直下
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
@@ -92,7 +92,7 @@ python -m pip install git+https://github.com/ageitgey/face_recognition_models
 次のコマンドで `models/` に取得してください。
 
 ```bash
-cd ${REPO_DIR}
+cd PhotoArchiveAI   # clone したリポジトリの直下
 source .venv/bin/activate
 python scripts/fetch_models.py
 ```
@@ -130,11 +130,11 @@ cp config/app_settings.sample.yml config/app_settings.yml
 
 ```yaml
 source_roots:
-  - ${NFS_ROOT}/${SURNAME}/Photo
-  - ${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯
+  - /mnt/nas/family/Photo
+  - /mnt/nas/share/phone-photos
 ```
 
-**共通の親（`${NFS_ROOT}`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つだけのキー）は読みません。残っていれば警告を出すので、`source_roots:` に書き直してください。
+**共通の親（上の例なら `/mnt/nas`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つだけのキー）は読みません。残っていれば警告を出すので、`source_roots:` に書き直してください。
 
 **設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身は YAML として読めるので、**空白で字下げしていれば** `mv config/app_settings.json config/app_settings.yml` でも移れます（タブで字下げしていると読めません）（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
 
@@ -290,10 +290,10 @@ GUI で見直して結果が信用できなかったときは、**自動割り�
 photoarchive unassign-auto
 
 # 1人ぶんだけ（名前か id）
-photoarchive unassign-auto --person ${PERSON_4}
+photoarchive unassign-auto --person "人物名"
 
 # 消す前に件数だけ確かめる
-photoarchive unassign-auto --person ${PERSON_4} --dry-run
+photoarchive unassign-auto --person "人物名" --dry-run
 ```
 
 **手動で割り当てた顔（手本）・除外した顔・設定した年齢には触りません。**
@@ -391,6 +391,19 @@ pytest -q -m models                # 実物の dlib モデルを使う確認だ�
 
 詳しい手順は [テストの実行手順](docs/testing/TESTING.md)、何がテストで守られているかは [テスト項目一覧](docs/testing/TEST_CASES.md) を参照してください。
 
+### 公開しない情報（家族の名前・パスなど）
+
+このリポジトリは公開されています。**家族の名前・誕生日・写真の置き場所のパス・ホームディレクトリ・行事や地名の入ったフォルダ名・GitHub のアカウント名は書きません**（#77）。文書では `${PERSON_1}`・`${NFS_ROOT}`・`${EVENT}` のような変数で書いています。どの変数が誰かは、git に入らない `config/private_terms.yml` にだけあります。
+
+clone したら、コミットの前の検査を有効にしてください。
+
+```bash
+cp config/private_terms.sample.yml config/private_terms.yml   # 実際の語を書く
+git config core.hooksPath .githooks
+```
+
+これで、公開しない語を含むコミット（中身・ファイル名・メッセージ）は止まります。回帰テストの 6/6 でも検査します。手で検査するときは `python scripts/check_private_terms.py`、置き換えるときは `--fix` を付けます。
+
 ## ディレクトリ構成
 
 ```
@@ -403,6 +416,7 @@ PhotoArchiveAI/
     run_regression.sh          回帰テスト
     summarize_pytest.py        回帰テストの集計行を作る
     archive_worklog.py         作業履歴の切り出し
+    check_private_terms.py     公開しない語（家族の名前・パスなど）の検査と置き換え
     measure_heic_duplicates.py convert-heic の「同じ写真」の閾値を実データで測る
     restore_heic_exif.py       撮影日時を落とした変換済み JPEG に EXIF を戻す（一度きりの修復）
   config/

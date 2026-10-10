@@ -1,0 +1,7 @@
+#!/bin/sh
+# 公開しない語（家族の名前・パスなど）をコミットさせない（#77）。
+# 有効にする: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel)
+python=$root/.venv/bin/python
+[ -x "$python" ] || python=python3
+exec "$python" "$root/scripts/check_private_terms.py" --staged

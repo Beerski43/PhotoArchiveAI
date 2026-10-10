@@ -918,9 +918,25 @@ pytest 出力から件数と所要時間を読めること、`0 passed / 0 faile
 | `test_a_rounded_number_is_not_treated_as_a_count` | 丸めた表現は引っかからない（逃げ道） |
 
 git と GitHub の状態（PR の無いブランチなど）は `scripts/check_handoff.py`。
-`run_regression.sh` の 5/5 で**実行する**が、**合否には含めない**
+`run_regression.sh` の 5/6 で**実行する**が、**合否には含めない**
 （ネットワークが要るため）。**そのスクリプト自体のテストは
 `test_check_handoff.py`。**
+
+### `test_check_private_terms.py` — 公開しない語を入れない（9件）
+
+語は架空のもの（実際の一覧は git に入らない）。**見つけても語を出さず変数だけを出す**（出力は PR 本文に貼られる）。
+
+| テスト | 内容 |
+|---|---|
+| `test_longer_terms_are_replaced_first` | 長い語から置き換える（姓が氏名の一部を先に置き換えない）。ローマ字は大文字小文字を区別しない |
+| `test_a_tracked_file_with_a_term_fails_without_printing_the_term` | **中身とファイル名の語で失敗し、語を出さない** |
+| `test_a_clean_repository_passes` | 変数だけなら通る |
+| `test_staged_content_is_checked_before_commit` | pre-commit は作業ツリーではなく、コミットする中身を見る |
+| `test_the_commit_message_is_checked` | commit-msg |
+| `test_fix_replaces_tracked_files` | `--fix` で置き換える。バイナリは触らない |
+| `test_filter_repo_expressions_keep_case_insensitive_terms` | 履歴の書き換えに渡す式（長い語から・大文字小文字の区別） |
+| `test_without_a_term_list_the_check_is_skipped` | 一覧の無い環境では止めない |
+| `test_the_repository_holds_no_private_terms` | **このリポジトリに手元の一覧の語が無い**（一覧がある環境だけ） |
 
 ### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
 

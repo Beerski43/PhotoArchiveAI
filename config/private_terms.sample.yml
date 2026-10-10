@@ -1,0 +1,19 @@
+# 公開しない語と、置き換える変数（#77）。**これは形を示す見本で、中身は架空の値。**
+# config/private_terms.yml にコピーして実際の語を書く（config/* は git に入らない）。
+# scripts/check_private_terms.py と .githooks/ がこれを読み、コミットの前に止める。
+#
+# 変数の決まり:
+#   ${PERSON_1}…${PERSON_n}  家族の名前（番号は DB の Person.id の順）
+#   person1…personN          ローマ字の名前（識別子・ファイル名に入るので ${} を使わない）
+#   ${SURNAME} ${NFS_ROOT} ${NFS_HOST} ${REPO_DIR} ${HOME} ${USER} ${GITHUB_OWNER}
+#   ${EVENT}                  フォルダ名の行事の部分（日付の数字は残す）
+#   ${PLACE}                  地名
+#   誕生日は架空の日付に置き換える
+terms:
+  - {text: "山田太郎", replace: "${PERSON_1}"}
+  - {text: "taro", replace: "person1", ignore_case: true}
+  - {text: "山田", replace: "${SURNAME}"}
+  - {text: "/mnt/nas-example", replace: "${NFS_ROOT}"}
+  - {text: "/home/example", replace: "${HOME}"}
+  - {text: "1980-01-23", replace: "1980-01-01"}
+  - {text: "120101どこかの旅行", replace: "120101${EVENT}"}

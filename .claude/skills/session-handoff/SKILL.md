@@ -37,7 +37,7 @@ description: >-
 - いまのブランチ・作業ツリー・push の状態を見る
 
 ```bash
-cd ${REPO_DIR} && source .venv/bin/activate
+cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate
 git status -sb && git log --oneline -5
 python scripts/check_handoff.py
 ```

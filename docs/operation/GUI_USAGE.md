@@ -588,7 +588,7 @@ photoarchive match
 自動紐づけの結果が信用できなかったときは、コマンドでまとめて取り消せます。
 
 ```bash
-photoarchive unassign-auto --person ${PERSON_4}   # 1人ぶん
+photoarchive unassign-auto --person "人物名"   # 1人ぶん
 photoarchive unassign-auto                   # 全員ぶん
 ```
 

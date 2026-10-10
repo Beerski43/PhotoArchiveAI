@@ -1,6 +1,6 @@
 """引き継ぎの点検が、**自分の故障を隠さない**ことを確かめる。
 
-`scripts/check_handoff.py` は `run_regression.sh` の 5/5 から毎回呼ばれる。
+`scripts/check_handoff.py` は `run_regression.sh` の 5/6 から毎回呼ばれる。
 **点検が働かなかったことを「異常なし」と報告すると、壊れた番人に守られている
 つもりになる。** ここで見張るのはその1点。
 
@@ -139,8 +139,8 @@ def test_an_undocumented_branch_without_a_pull_request_is_a_warning(tmp_path, mo
 def test_a_slow_command_does_not_block_the_check():
     """**繋がらない環境で止まらないこと。**
 
-    5/5 は PR の前に必ず通る。`git fetch` が返らないと、画面には
-    `=== 5/5 引き継ぎの状態 ===` が出たきり何も起きない。
+    5/6 は PR の前に必ず通る。`git fetch` が返らないと、画面には
+    `=== 5/6 引き継ぎの状態 ===` が出たきり何も起きない。
     """
     # **待ち時間は短くてよい。** 見ているのは終了コードと文面で、待った長さ自体
     # ではない。待つ理由が無いので待たない。

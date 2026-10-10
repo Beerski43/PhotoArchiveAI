@@ -10,11 +10,12 @@
 #   3. `pytest -m models` — 実物の dlib モデルがある環境でのみ。参考情報あつかい
 #   4. 作業履歴の切り出しが必要かの確認 — 通知のみ。結果に影響しない
 #   5. 引き継ぎの状態 — 通知のみ。結果に影響しない
+#   6. 公開しない語（家族の名前・パスなど）が入っていないか（#77）— **見つかれば失敗**
 #
 # 引数:
 #   --offline   5 で remote を見ない(繋がらない環境や、急ぐとき)
 #
-# 終了コード: 1 と 2 がすべて成功したときだけ 0。
+# 終了コード: 1・2・6 がすべて成功したときだけ 0。
 #
 set -uo pipefail
 
@@ -39,13 +40,13 @@ trap 'rm -f "$LOG"' EXIT
 
 failed=0
 
-echo "=== 1/5 回帰テスト (pytest -m \"not models\") ==="
+echo "=== 1/6 回帰テスト (pytest -m \"not models\") ==="
 python -m pytest -q -m "not models" --durations=5 2>&1 | tee "$LOG"
 pytest_status="${PIPESTATUS[0]}"
 [ "$pytest_status" -eq 0 ] || failed=1
 
 echo
-echo "=== 2/5 コマンドの起動スモーク ==="
+echo "=== 2/6 コマンドの起動スモーク ==="
 for cmd in "photoarchive --help" "photoarchive-gui --help"; do
   if $cmd >/dev/null 2>&1; then
     echo "  OK   $cmd"
@@ -56,12 +57,12 @@ for cmd in "photoarchive --help" "photoarchive-gui --help"; do
 done
 
 echo
-echo "=== 3/5 実物モデルを使う確認 (pytest -m models) ==="
+echo "=== 3/6 実物モデルを使う確認 (pytest -m models) ==="
 echo "    環境依存のため、結果は回帰テストの合否に含めない。"
 python -m pytest -q -m models 2>&1 | tail -3
 
 echo
-echo "=== 4/5 作業履歴の状態 ==="
+echo "=== 4/6 作業履歴の状態 ==="
 if [ -f scripts/archive_worklog.py ]; then
   python scripts/archive_worklog.py --check || true
 else
@@ -69,7 +70,7 @@ else
 fi
 
 echo
-echo "=== 5/5 引き継ぎの状態 ==="
+echo "=== 5/6 引き継ぎの状態 ==="
 # **文書に書いていない作業が、ブランチの中に浮いていないか。**
 # セッションを切る前に確認する約束(CLAUDE.md §5)だが、思い出せるかに頼ると
 # 忘れる。PR の前に必ず通るここへ置いて、目に入るようにする。
@@ -90,6 +91,21 @@ if [ -f scripts/check_handoff.py ]; then
   fi
 else
   echo "  scripts/check_handoff.py が無い"
+fi
+
+echo
+echo "=== 6/6 公開しない語 ==="
+# 一覧（config/private_terms.yml）は git に入らないので、無い環境では飛ばす。
+# **見つかったら失敗にする。** 公開リポジトリに家族の名前が出るのは取り返しがつかない（#77）。
+# 出力は語を出さず、置き換える変数だけを出す（この結果は PR 本文に貼られる）。
+if [ -f scripts/check_private_terms.py ]; then
+  private="$(python scripts/check_private_terms.py 2>&1)" || failed=1
+  printf '%s\n' "$private" | tail -5 | sed 's/^/  /'
+  if [ -f config/private_terms.yml ] && [ "$(git config core.hooksPath)" != ".githooks" ]; then
+    echo "  コミット前の検査が有効になっていない: git config core.hooksPath .githooks"
+  fi
+else
+  echo "  scripts/check_private_terms.py が無い"
 fi
 
 # 1 の結果をまとめる。pytest は出力先が端末だと着色するので、
