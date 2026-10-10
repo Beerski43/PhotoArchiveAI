@@ -4,6 +4,7 @@ import pytest
 
 from photoarchive_ai import db
 from photoarchive_ai.migration import (
+    DuplicatePersonNames,
     backup_database,
     describe_for_operator,
     describe_migration,
@@ -719,3 +720,115 @@ def test_migrate_reports_the_rebuild_and_vacuum_of_a_v1_database(tmp_path):
         assert (0, 1, name) in steps and (1, 1, name) in steps
     # 進捗を出すときは、VACUUM の始まりを記録の行に重ねて出さない
     assert not any("VACUUM" in message for message in messages)
+
+
+# ---------------------------------------------------------------------------
+# v8 → v9: Person.name の一意索引（#90）
+# ---------------------------------------------------------------------------
+
+
+def _build_v8_database(path, names=("父", "母")):
+    """現行のDBから一意索引を外して版8にしたもの。**同名を入れられる。**"""
+    connection = db.ensure_database(str(path))
+    media_id = db.save_media(connection, {
+        "path": "/p/2019/a.jpg", "filename": "a.jpg", "type": "image", "file_hash": "h",
+        "file_size": 1, "created_time": "2019-01-01T00:00:00",
+    })
+    connection.execute("DROP INDEX idx_person_name")
+    person_ids = [db.add_person(connection, name) for name in names]
+    for person_id in person_ids:
+        db.add_face(
+            connection, media_id=media_id, bbox=(0, 10, 10, 0),
+            embedding=[0.0] * db.EMBEDDING_DIM, embed_version=db.embedding_model.ACTIVE.version,
+            person_id=person_id, assign_source=db.ASSIGN_MANUAL,
+        )
+    connection.execute("PRAGMA user_version = 8")
+    connection.commit()
+    connection.close()
+    return person_ids
+
+
+def _has_name_index(path) -> bool:
+    raw = sqlite3.connect(str(path))
+    try:
+        return bool(raw.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_person_name'"
+        ).fetchone()[0])
+    finally:
+        raw.close()
+
+
+def test_a_version_8_database_gains_the_unique_name_index_and_keeps_its_faces(tmp_path):
+    database = tmp_path / "v8.db"
+    _build_v8_database(database)
+    assert needs_migration(str(database))
+
+    migrate_database(str(database), make_backup=False)
+
+    assert _has_name_index(database)
+    assert needs_migration(str(database)) is False
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.get_schema_version(connection) == db.SCHEMA_VERSION == 9
+        assert db.count_faces(connection, assign_source=db.ASSIGN_MANUAL) == 2
+        with pytest.raises(db.DuplicatePersonName):
+            db.add_person(connection, "父")
+    finally:
+        connection.close()
+
+
+def test_a_database_with_duplicated_names_is_not_migrated_and_nothing_is_written(tmp_path):
+    """**同名があれば、控えを取る前に止める。** 勝手に改名も統合もしない。"""
+    database = tmp_path / "v8.db"
+    ids = _build_v8_database(database, names=("父", "母", "父"))
+    before = _dump(database)
+
+    with pytest.raises(DuplicatePersonNames) as error:
+        migrate_database(str(database))
+
+    message = str(error.value)
+    assert "父" in message and f"id {ids[0]}, {ids[2]}" in message
+    assert "母" not in message
+    assert error.value.duplicates == [{"name": "父", "ids": [ids[0], ids[2]]}]
+    # 版も中身も変わらず、控えも作っていない
+    assert _dump(database) == before
+    assert sorted(path.name for path in tmp_path.iterdir() if ".bak-" in path.name) == []
+    raw = sqlite3.connect(str(database))
+    try:
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == 8
+    finally:
+        raw.close()
+    assert not _has_name_index(database)
+
+
+def test_a_legacy_database_with_duplicated_names_stops_before_dropping_its_faces(tmp_path):
+    """v1 の再構築経路でも先に止める。**顔を捨てたあとで止まらない。**"""
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+    raw = sqlite3.connect(str(database))
+    raw.execute("INSERT INTO Person (name, relation, memo, age) VALUES ('父', '', '', 41)")
+    raw.commit()
+    raw.close()
+
+    with pytest.raises(DuplicatePersonNames):
+        migrate_database(str(database), make_backup=False)
+
+    raw = sqlite3.connect(str(database))
+    try:
+        assert raw.execute("SELECT COUNT(*) FROM FaceEmbedding").fetchone()[0] == 1
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == 0
+    finally:
+        raw.close()
+
+
+def test_duplicate_person_names_lists_each_name_with_its_ids(tmp_path):
+    database = tmp_path / "v8.db"
+    ids = _build_v8_database(database, names=("B", "A", "B", "A", "C"))
+    raw = sqlite3.connect(str(database))
+    try:
+        assert db.duplicate_person_names(raw) == [
+            {"name": "A", "ids": [ids[1], ids[3]]},
+            {"name": "B", "ids": [ids[0], ids[2]]},
+        ]
+    finally:
+        raw.close()

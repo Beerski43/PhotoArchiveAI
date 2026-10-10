@@ -78,7 +78,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（38件）
+### `test_db.py` — スキーマと永続化（40件）
 
 | テスト | 内容 |
 |---|---|
@@ -93,6 +93,8 @@
 | `test_updating_a_person_without_a_birth_date_keeps_it` | **省いて呼んだら触らない**（`None` は消す指示） |
 | `test_person_birth_date_is_stored_and_can_be_cleared` | 誕生日は未設定と区別し、未設定へ戻せる |
 | `test_a_person_without_a_birth_date_is_stored_as_unset` | 誕生日は任意 |
+| `test_a_second_person_with_the_same_name_is_refused` | **名前は重複不可**（#90）。同名の登録は `DuplicatePersonName` で断り、断ったあとも続けて登録できる |
+| `test_renaming_to_another_persons_name_is_refused_but_keeping_ones_own_is_not` | 他人の名前への改名は断る。自分の名前のままの更新は通り、誕生日も残る |
 | `test_faces_can_be_listed_newest_shot_first` | 撮影日時の新しい順。**日時の無い顔は最後** |
 | `test_faces_can_be_listed_youngest_age_first` | 年齢の若い順。**未設定は最後**（SQLite の NULL は最小） |
 | `test_the_default_order_is_still_the_quality_score` | **既定を変えない**（`match` と `evaluate` も通る） |
@@ -538,13 +540,16 @@
 | `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
 | `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（59件）
+### `test_gui_person.py` — 人物編集とプレビュー（62件）
 
 | テスト | 内容 |
 |---|---|
 | `test_editing_a_person_saves_the_new_values` | 今の値でダイアログを開き、保存で一覧まで入れ替わる |
 | `test_cancelling_the_edit_changes_nothing` | 取り消しで何も変えない |
 | `test_an_empty_name_is_rejected` | 名前は必須。空で上書きしない |
+| `test_adding_a_person_with_an_existing_name_is_refused` | 同名の人物を追加しようとすると警告を出し、作らない（#90） |
+| `test_renaming_a_person_to_another_persons_name_is_refused` | 他人の名前への改名は警告を出し、変えない |
+| `test_keeping_the_same_name_while_editing_other_fields_is_allowed` | 自分の名前のまま他の欄を直すのは重複ではない |
 | `test_editing_without_a_selection_does_not_open_a_dialog` | 人物未選択ならダイアログを開かない |
 | `test_selecting_a_face_previews_it_from_the_original_photo` | サムネイルではなく元写真から取り直して表示する |
 | `test_the_preview_names_the_file_when_the_original_is_gone` | **元写真が消えていたらパスを出す**（NFS 未マウント時に起きる） |
@@ -743,6 +748,7 @@
 | `test_commands_that_need_a_database_still_say_so` | 使うコマンドはこれまで通り要求する |
 | `test_init_db_creates_a_usable_database` | `init-db` |
 | `test_migrate_reports_that_a_fresh_database_is_current` | `migrate` は移行済みDBに何もしない |
+| `test_migrate_stops_before_asking_when_person_names_are_duplicated` | **同名の人物がいると、確認を聞く前に**重なりを伝えて止まる（#90） |
 | `test_scan_arguments_reach_the_scanner` | `scan` の全オプションが下へ届く |
 | `test_scan_takes_several_sources_in_the_given_order` | **`--source` は何度でも書け、書いた順に root ごとに走査する**（#24） |
 | `test_scan_reads_the_source_roots_from_the_settings` | 設定の `source_roots`（配列） |
@@ -828,7 +834,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_clearing_before_a_question_leaves_no_old_bar` | 問いを出す前に2行を消し、答えたあとに古いバーが残らない |
 | `test_convert_heic_says_which_files_could_not_be_read` | `convert-heic` は壊れた HEIC を「読めない」と聞き、最後に一覧で知らせる |
 
-### `test_migration.py` — スキーマの移行（27件）
+### `test_migration.py` — スキーマの移行（31件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -863,6 +869,13 @@ editable install のときだけ出すこと（通常のインストールでは
 **段ごとの進み具合**（#78）: 列を足す移行は控え（ページ数）・整合性・列・撮影時期を、v1 からの移行は
 作り直しと VACUUM の始めと終わりを知らせる（`test_migrate_reports_each_step_of_adding_columns`・
 `test_migrate_reports_the_rebuild_and_vacuum_of_a_v1_database`）。
+
+**v8 → v9**（#90）: `Person(name)` の一意索引を張り、顔を1件も失わない
+（`test_a_version_8_database_gains_the_unique_name_index_and_keeps_its_faces`）。
+**同名の人物がいれば、控えも取らず何も書かずに止める**（版は8のまま・重なった名前と id を伝える。
+`test_a_database_with_duplicated_names_is_not_migrated_and_nothing_is_written`）。
+**v1 の再構築経路でも、顔を捨てる前に止める**（`test_a_legacy_database_with_duplicated_names_stops_before_dropping_its_faces`）。
+重なりの一覧は名前順・id 順（`test_duplicate_person_names_lists_each_name_with_its_ids`）。
 
 ### `test_embedding_measurement.py` — 特徴量モデルの比較と他人誤認率（29件＋`models` 1件）
 

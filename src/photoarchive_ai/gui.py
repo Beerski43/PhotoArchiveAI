@@ -2275,7 +2275,12 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
-        person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        try:
+            person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        except db.DuplicatePersonName as error:
+            # 名前は重複不可（#90）。同名の2人目を作ると、どちらに割り当てたのか見分けられない
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return
         self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
@@ -2295,9 +2300,13 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
-        db.update_person(
-            self.connection, person["id"], name, relation, memo, birth_date=birth_date
-        )
+        try:
+            db.update_person(
+                self.connection, person["id"], name, relation, memo, birth_date=birth_date
+            )
+        except db.DuplicatePersonName as error:
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return
         # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
         self._reload_person_list(select_person_id=person["id"])
 

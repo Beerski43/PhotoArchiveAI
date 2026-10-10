@@ -365,6 +365,8 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   しない（対抗馬としては使う）。
 - `Face.assign_rule`: 自動割り当てを付けた規則の版（`matcher.MATCH_RULE`）。
   **判定の規則を変えたら版を上げる。** `select` が古い判定の残りを知らせる。
+- `Person.name`: **重複不可**（v9・#90。一意索引 `idx_person_name`・完全一致）。同名がある DB は
+  `migrate` が控えを取る前に止める。**勝手に改名・統合しない**
 - `ScanRoot`: **走査した root**（v7・#24）。`scan` が root を走査し終えるたびに書く。
   **root を `Media.path` から推定しない**（共通の親になり、他家の写真まで入る）。
   設定に root が無いとき `scan` / `select` / GUI はこれを使う
