@@ -209,3 +209,52 @@ def test_restore_leaves_a_jpeg_that_is_not_the_same_photo(tmp_path: Path, capsys
     assert "HEIC と同じ写真に見えない: 1 件" in capsys.readouterr().out
     assert (source / "IMG_0001.jpg").read_bytes() == before
     assert heic.exists()
+
+
+def test_restore_does_not_touch_the_file_while_the_database_is_locked(scanned):
+    """DB に書けないときは、ファイルに触る前に止まる（PR #80 のレビュー指摘4）。
+
+    以前はファイルを置き換えてから DB を書いており、書けないとファイルだけが
+    変わって止まった。再実行は「DB と違う」として触らず、次の scan が割り当てを消した。
+    """
+    import sqlite3
+
+    source, jpeg, database, connection, person_id, face_id = scanned
+    before = jpeg.read_bytes()
+    restore = _restore_module()
+    locker = sqlite3.connect(str(database), timeout=0)
+    locker.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            restore.main(["--db", str(database), "--apply", "--no-backup", "--timeout", "0"])
+    finally:
+        locker.rollback()
+        locker.close()
+
+    assert jpeg.read_bytes() == before
+    assert restore.main(["--db", str(database), "--apply", "--no-backup"]) == 0
+    scan_directory(str(source), connection, workers=1)
+
+    assert _media(connection, jpeg)["shooting_date"] == "2020-01-02T03:04:05"
+    assert [row["id"] for row in db.list_faces(connection, person_id=person_id)] == [face_id]
+
+
+def test_restore_finishes_a_file_left_half_done(scanned, capsys):
+    """ファイルだけ書き換わって DB が古いままの1件を、再実行で揃える。
+
+    置き換えと commit のあいだで落ちたときの回収。EXIF を除いたバイト列が
+    DB のハッシュと一致すれば、ファイルには触らず DB だけを合わせる。
+    """
+    source, jpeg, database, connection, person_id, face_id = scanned
+    with Image.open(jpeg.with_suffix(".HEIC")) as image:
+        exif = image.info["exif"]
+    jpeg.write_bytes(insert_exif(jpeg.read_bytes(), exif))
+    half_done = jpeg.read_bytes()
+
+    assert _restore_module().main(["--db", str(database), "--apply", "--no-backup"]) == 0
+    scan_directory(str(source), connection, workers=1)
+
+    assert "DB だけ合わせる: 1 件" in capsys.readouterr().out
+    assert jpeg.read_bytes() == half_done
+    assert _media(connection, jpeg)["shooting_date"] == "2020-01-02T03:04:05"
+    assert [row["id"] for row in db.list_faces(connection, person_id=person_id)] == [face_id]

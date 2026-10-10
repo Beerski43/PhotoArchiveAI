@@ -678,7 +678,7 @@
 | `test_same_image_is_false_when_a_file_cannot_be_read` | 読めないファイル |
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 
-### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（9件）
+### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（11件）
 
 | テスト | 内容 |
 |---|---|
@@ -691,6 +691,8 @@
 | `test_without_updating_the_database_the_scan_would_discard_the_assignment` | 対照: DB を合わせないと scan が割り当てを消す（修復が DB を書く理由） |
 | `test_restore_leaves_a_file_changed_since_the_scan` | scan の後に変わったファイルは触らない |
 | `test_restore_leaves_a_jpeg_that_is_not_the_same_photo` | 同名でも別の写真なら撮影日時を付けない |
+| `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
+| `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
 ### `test_cli_commands.py` — サブコマンドの配線（28件）
 
