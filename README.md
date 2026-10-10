@@ -165,7 +165,7 @@ photoarchive convert-heic
 photoarchive convert-heic --source /path/to/photo
 ```
 
-変換先は元ファイルと同じディレクトリで、拡張子だけを `.jpg` にした同名ファイルです。変換先に同名JPEGがあり、内容が同じ写真の場合は変換をスキップします。異なる写真の場合は `photo_1.jpg`、`photo_2.jpg` のように空いている連番を付けます。元のHEIC/HEIFファイルは変更しません。
+変換先は元ファイルと同じディレクトリで、拡張子だけを `.jpg` にした同名ファイルです。撮影日時などの EXIF は JPEG に引き継ぎます。変換先に同名JPEGがあり、内容が同じ写真の場合は変換をスキップします（寸法が同じで、縮小した画素の差が十分に小さいものを同じ写真とみなします。JPEG は保存のたびに画素が少しずれるため、完全一致では見ません）。異なる写真の場合は `photo_1.jpg`、`photo_2.jpg` のように空いている連番を付けます。元のHEIC/HEIFファイルは変更しません。
 
 変換先へ書き込めない場合は、続行するか確認を求めます。`y` または `yes` を入力すると次のファイルへ進み、それ以外を入力すると処理を停止します。
 
@@ -401,6 +401,8 @@ PhotoArchiveAI/
     run_regression.sh          回帰テスト
     summarize_pytest.py        回帰テストの集計行を作る
     archive_worklog.py         作業履歴の切り出し
+    measure_heic_duplicates.py convert-heic の「同じ写真」の閾値を実データで測る
+    restore_heic_exif.py       撮影日時を落とした変換済み JPEG に EXIF を戻す（一度きりの修復）
   config/
     app_settings.sample.yml    アプリ設定のサンプル
     rule.sample.yml            抽出ルールのサンプル
