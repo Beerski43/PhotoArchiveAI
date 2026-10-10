@@ -9,6 +9,8 @@ include_video: true
 remove_duplicate: true
 # 同じ場面の連写・似た写真を、並びの先頭1枚にまとめる（省略すると true）。
 remove_similar: true
+# 自動割り当ての顔も家族として数える（false なら GUI の手本だけ。省略すると true）。
+include_auto_assigned: true
 # 連写とみなす撮影の間隔（秒）と、見た目の近さ（0〜64・小さいほど厳しい）。省略すると下の値。
 # similar_seconds: 10
 # similar_distance: 16

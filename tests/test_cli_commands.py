@@ -676,3 +676,32 @@ def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
     assert message.startswith("Copying stopped:")
     assert f"0001_2020_m{media_id}.jpg" in message
     assert (output / f"0001_2020_m{media_id}.jpg").is_dir()
+
+
+@pytest.mark.parametrize("include_auto, warned", [(True, True), (False, False)])
+def test_select_warns_about_old_automatic_assignments_only_when_it_uses_them(
+    tmp_path, capsys, include_auto, warned
+):
+    """#89。自動割り当てを使わない select に、その規則が古いという知らせは要らない。"""
+    root = tmp_path / "photos"
+    write_image(root / "a.jpg")
+    database = tmp_path / "photoarchive.db"
+    connection = db.ensure_database(str(database))
+    media_id = db.save_media(connection, {
+        "path": str(root / "a.jpg"), "filename": "a.jpg", "type": "image",
+        "file_hash": "h", "file_size": 1, "created_time": "2020-01-01T00:00:00",
+    })
+    db.add_face(
+        connection, media_id=media_id, bbox=(0, 10, 10, 0),
+        embedding=[0.0] * db.EMBEDDING_DIM, embed_version=db.embedding_model.ACTIVE.version,
+        person_id=db.add_person(connection, "Alice"), assign_source=db.ASSIGN_AUTO,
+    )
+    connection.commit()
+    connection.close()
+    rule = tmp_path / "rule.yml"
+    rule.write_text(f"include_auto_assigned: {str(include_auto).lower()}\n", encoding="utf-8")
+
+    run_cli(["select", "--db", str(database), "--rule", str(rule),
+             "--source", str(root), "--output", str(tmp_path / "out")], tmp_path)
+
+    assert ("自動割り当て 1 件" in capsys.readouterr().out) is warned

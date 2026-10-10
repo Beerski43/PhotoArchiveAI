@@ -11,6 +11,7 @@ from photoarchive_ai.selection import (
     _build_duplicate_groups,
     _get_media_year,
     copy_selected_media,
+    RULE_FLAGS,
     load_rule,
     select_media,
     stale_assignment_notice,
@@ -195,6 +196,86 @@ def test_family_only_keeps_a_photo_whose_only_family_face_is_blurred_and_turned_
     _add(connection, "stranger.jpg", faces=[_face(None)])
 
     assert _paths(select_media(connection, {"family_only": True})) == ["crisp.jpg", "worst.jpg"]
+
+
+def test_family_only_counts_automatic_assignments_unless_the_rule_says_otherwise(connection):
+    """**#89。** 既定（省略・true）は自動割り当ても家族。false なら手本だけ。"""
+    _add(connection, "manual.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "auto.jpg", faces=[_face("${PERSON_4}", source=db.ASSIGN_AUTO)])
+
+    both = ["auto.jpg", "manual.jpg"]
+    assert sorted(_paths(select_media(connection, {"family_only": True}))) == both
+    assert sorted(_paths(select_media(
+        connection, {"family_only": True, "include_auto_assigned": True}
+    ))) == both
+    assert _paths(select_media(
+        connection, {"family_only": True, "include_auto_assigned": False}
+    )) == ["manual.jpg"]
+
+
+def test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo(connection):
+    """false のとき、自動割り当ての顔は点にも入らない（他人と同じ扱い）。"""
+    _add(connection, "blurred-manual.jpg", faces=[
+        _face("${PERSON_4}", sharpness=25.0, aligned=False, smile=0.0),
+        _face("${PERSON_5}", source=db.ASSIGN_AUTO),
+    ])
+    _add(connection, "crisp-manual.jpg", faces=[_face("${PERSON_4}", smile=0.0)])
+
+    selected = select_media(connection, {"include_auto_assigned": False})
+
+    assert _paths(selected) == ["crisp-manual.jpg", "blurred-manual.jpg"]
+    assert selected[1]["family_score"] == 0.0
+
+
+def test_without_automatic_assignments_select_does_not_measure_automatic_faces(connection):
+    """使わない顔は測らない（測るのは1件 約17ms・数千件ある）。"""
+    media_id = _add(connection, "a.jpg")
+    person_id = db.add_person(connection, "${PERSON_4}")
+    face_ids = {
+        source: db.add_face(
+            connection, media_id=media_id, bbox=(0, 10, 10, 0),
+            embedding=[0.0] * db.EMBEDDING_DIM, embed_version=db.embedding_model.ACTIVE.version,
+            person_id=person_id, assign_source=source, thumbnail=_crisp_jpeg(),
+        )
+        for source in (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
+    }
+    connection.commit()
+
+    select_media(connection, {"include_auto_assigned": False})
+
+    assert db.get_face(connection, face_ids[db.ASSIGN_MANUAL])["sharpness"] is not None
+    assert db.get_face(connection, face_ids[db.ASSIGN_AUTO])["sharpness"] is None
+
+
+@pytest.mark.parametrize("key", list(RULE_FLAGS))
+@pytest.mark.parametrize("value", ['"false"', "0", "off-ish"])
+def test_load_rule_refuses_a_flag_that_is_not_true_or_false(tmp_path: Path, key, value):
+    """引用符付きの "false" は文字列で、そのまま使うと真になる。読むときに止める。
+
+    PR #91 のレビュー指摘1: 検査が `include_auto_assigned` だけで、
+    ``family_only: "false"`` は黙って家族だけに絞っていた。
+    """
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text(f"{key}: {value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=key):
+        load_rule(str(rule_path))
+
+
+def test_select_media_refuses_a_quoted_false_instead_of_reading_it_as_true(connection):
+    """`load_rule` を通らずに渡されたルールでも、文字列を真として読まない。"""
+    _add(connection, "family.jpg", faces=[_face("${PERSON_4}")])
+    _add(connection, "nobody.jpg")
+
+    with pytest.raises(ValueError, match="family_only"):
+        select_media(connection, {"family_only": "false"})
+
+
+def test_load_rule_reads_include_auto_assigned_false(tmp_path: Path):
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text("include_auto_assigned: false\n", encoding="utf-8")
+
+    assert load_rule(str(rule_path))["include_auto_assigned"] is False
 
 
 def test_a_blurred_family_photo_comes_after_a_crisp_one(connection):
