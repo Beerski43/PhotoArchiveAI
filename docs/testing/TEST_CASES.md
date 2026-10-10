@@ -688,11 +688,13 @@
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 
-### `test_config.py` — 設定の探索（17件）
+### `test_config.py` — 設定の探索（22件）
 
 **設定は YAML だけを読む**（#27）。古い `app_settings.json` は読まずに WARNING で変換を
 促し、CLI は「DB のパスが要る」ではなくそのことを言う。環境変数が JSON を指していても
 読まない。YAML と JSON が両方あれば YAML を読んで黙る。注釈と日本語のパスが読めること。
+GUI も古い JSON のことを言い、止める文は WARNING の案内を繰り返さない。タブ字下げの JSON を
+改名しただけならタブを名指しする。`select --help` が JSON を受け付けると言わない（PR #74 のレビュー）。
 環境変数 → カレントディレクトリ → リポジトリ直下 の順に探すこと、優先順位、
 壊れたファイルでもコマンドが止まらないこと。リポジトリ直下の候補を
 editable install のときだけ出すこと（通常のインストールでは `REPO_ROOT` が

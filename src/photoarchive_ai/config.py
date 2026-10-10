@@ -100,13 +100,27 @@ def find_legacy_settings_path() -> Optional[Path]:
     return None
 
 
+#: 「拡張子を変えるだけ」が成り立つ条件。**YAML はタブを字下げに使えない**
+#: （PR #74 のレビュー指摘2）。
+TAB_NOTE = "空白で字下げしていれば拡張子を変えるだけでも動きます。タブで字下げしていると読めません"
+
+
 def legacy_settings_message(path: Path) -> str:
     """古い JSON の設定を見つけたときの案内。CLI と GUI で同じ文を出す。"""
     return (
         f"古い形式の設定ファイル {path} は読みません（#27 で YAML に変わりました）。"
         f" 同じ中身を {path.with_suffix('.yml')} に YAML で書いてください"
-        "（JSON の中身はそのまま YAML として読めるので、拡張子を変えるだけでも動きます）。"
+        f"（JSON の中身は YAML として読めるので、{TAB_NOTE}）。"
     )
+
+
+def legacy_settings_stop_message(path: Path) -> str:
+    """古い JSON のせいで止めるときの一文。**案内の本文は繰り返さない。**
+
+    ``load_settings`` が同じ案内を WARNING で先に出している。止めるほうでも全文を
+    出すと、端末に同じ長い文が2回並ぶ（PR #74 のレビュー指摘3）。
+    """
+    return f"設定ファイルが YAML になっていないため止めました（{path}。案内は上に出しています）。"
 
 
 def _read_yaml(path: Path) -> Any:
@@ -137,7 +151,11 @@ def load_settings() -> Dict[str, Any]:
     try:
         settings = _read_yaml(path)
     except (OSError, yaml.YAMLError) as error:
-        logger.warning("設定ファイルを読めない (%s): %s", path, error)
+        hint = ""
+        if isinstance(error, yaml.YAMLError) and "\\t" in str(error):
+            # JSON の拡張子だけを変えた設定でいちばん起きる。原因を名指しする。
+            hint = "（タブで字下げしています。YAML では空白で字下げしてください）"
+        logger.warning("設定ファイルを読めない (%s)%s: %s", path, hint, error)
         return {}
     if not isinstance(settings, dict):
         logger.warning("設定ファイルの中身が辞書ではない (%s)", path)
