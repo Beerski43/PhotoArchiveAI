@@ -7,13 +7,14 @@
 - HEIC/HEIF は走査しない（`convert-heic` で JPEG にしてから）
 - 既存の HEIC の行は消す（利用者の決定・引き継がない）。**2割の安全弁に数えない**
   （HEIC は `${PERSON_2}携帯` の root の 33% を占め、数えると必ず中断する）
-- JPEG の無い HEIC は写真ごと入らなくなるので、知らせる
+- **scan は HEIC をファイル名も含めて一切見ない**（利用者の決定・PR #76 のレビュー）。
+  変換は README の手順どおり `convert-heic` を先に流す
 """
 
 import pytest
 
 from photoarchive_ai import db
-from photoarchive_ai.scanner import scan_directories, scan_directory, unconverted_heic
+from photoarchive_ai.scanner import ScanAborted, prune_missing_media, scan_directory
 from tests.helpers import write_image
 
 
@@ -62,10 +63,9 @@ def test_a_heic_next_to_its_jpeg_is_not_registered(tmp_path, connection):
     write_image(root / "IMG_0001.JPG")
     (root / "IMG_0001.HEIC").write_bytes(b"not decoded")
 
-    summary = scan_directory(str(root), connection, workers=1)
+    scan_directory(str(root), connection, workers=1)
 
     assert _paths(connection) == [str(root / "IMG_0001.JPG")]
-    assert summary["unconverted_heic"] == []
 
 
 def test_existing_heic_rows_are_removed_without_tripping_the_safety_valve(tmp_path, connection):
@@ -101,8 +101,6 @@ def test_the_safety_valve_still_counts_real_files_that_vanished(tmp_path, connec
     for path in gone:
         path.unlink()
 
-    from photoarchive_ai.scanner import ScanAborted
-
     with pytest.raises(ScanAborted):
         scan_directory(str(root), connection, workers=1)
     assert str(keep) in _paths(connection)
@@ -119,45 +117,33 @@ def test_no_prune_keeps_the_heic_rows(tmp_path, connection):
     assert str(root / "IMG_0001.HEIC") in _paths(connection)
 
 
-def test_a_heic_without_a_jpeg_is_reported(tmp_path, connection):
+def test_a_folder_of_only_heic_is_treated_as_having_no_media(tmp_path, connection):
+    """scan は HEIC を見ないので、HEIC だけのフォルダは「メディアが1件も無い」で止まる。
+
+    PR #76 のレビュー指摘2 は「convert-heic を促す文言にしたい」だったが、利用者は
+    scan に HEIC を一切見させないと決めた（変換を促すのは README の手順の役目）。
+    """
+    root = tmp_path / "2023"
+    root.mkdir()
+    (root / "IMG_0001.HEIC").write_bytes(b"x")
+
+    with pytest.raises(ScanAborted, match="1件もありません"):
+        scan_directory(str(root), connection, workers=1)
+
+
+def test_heic_rows_are_not_counted_by_the_missing_file_check_on_its_own(tmp_path, connection):
+    """`prune_missing_media` 単体でも、HEIC の行を「消えたファイル」の母数と分子に入れない。
+
+    `scan_directory` は先に `prune_excluded_types` が消すので、この絞り込みを外しても
+    通しのテストは落ちない（PR #76 のレビュー指摘4）。単体で呼ぶ経路をここで固定する。
+    1件の JPEG と1件の HEIC の行で、HEIC を数えると 50% が「消えた」になり中断する。
+    """
     root = tmp_path / "phone"
-    write_image(root / "IMG_0001.JPG")
-    (root / "IMG_0001.heic").write_bytes(b"x")
-    (root / "sub" / "IMG_6464.HEIC").parent.mkdir()
-    (root / "sub" / "IMG_6464.HEIC").write_bytes(b"x")
+    jpeg = write_image(root / "IMG_0001.JPG")
+    scan_directory(str(root), connection, workers=1)
+    _register_heic_row(connection, root / "IMG_0002.HEIC")
 
-    summary = scan_directories([str(root)], connection, workers=1)
+    removed = prune_missing_media(connection, root, {str(jpeg)})
 
-    assert summary["unconverted_heic"] == [str(root / "sub" / "IMG_6464.HEIC")]
-
-
-def test_a_jpeg_in_another_folder_does_not_count_as_converted(tmp_path):
-    heic = tmp_path / "a" / "IMG_1.HEIC"
-    jpeg = tmp_path / "b" / "IMG_1.jpg"
-
-    assert unconverted_heic([heic], [jpeg]) == [heic]
-    assert unconverted_heic([heic], [tmp_path / "a" / "img_1.JPEG"]) == []
-
-
-def test_the_scan_command_tells_how_to_convert_the_remaining_heic(tmp_path, capsys):
-    import os
-    import sys
-
-    from photoarchive_ai import cli
-
-    root = tmp_path / "phone"
-    write_image(root / "IMG_0001.JPG")
-    (root / "IMG_6464.HEIC").write_bytes(b"x")
-    database = tmp_path / "photoarchive.db"
-    original_argv, original_cwd = sys.argv, os.getcwd()
-    try:
-        os.chdir(tmp_path)
-        sys.argv = ["photoarchive", "scan", "--db", str(database), "--source", str(root), "--workers", "1"]
-        cli.main()
-    finally:
-        sys.argv = original_argv
-        os.chdir(original_cwd)
-
-    out = capsys.readouterr().out
-    assert "convert-heic" in out
-    assert "IMG_6464.HEIC" in out
+    assert removed == 0
+    assert str(root / "IMG_0002.HEIC") in _paths(connection)

@@ -153,7 +153,7 @@ photoarchive init-db
 
 ### 3. HEIC/HEIFのJPEG変換
 
-HEIC/HEIF画像を含む場合は、**スキャン前にJPEGへ変換してください。** `scan` は HEIC/HEIF を読みません（同じ写真が JPEG と二重に登録され、同じ顔に二度割り当てることになるため。#26）。以前の `scan` で登録された HEIC の行は、次の `scan` で消えます。JPEG に変換されていない HEIC が残っていれば、`scan` が件数を出して知らせます。
+HEIC/HEIF画像を含む場合は、**スキャン前にJPEGへ変換してください。** `scan` は HEIC/HEIF を読みません（同じ写真が JPEG と二重に登録され、同じ顔に二度割り当てることになるため。#26）。以前の `scan` で登録された HEIC の行は、次の `scan` で消えます。**`scan` は HEIC をファイル名も含めて一切見ない**ので、変換し忘れた HEIC があっても知らせません。新しく写真を足したら、先に `photoarchive convert-heic` を流してください。
 
 ```bash
 photoarchive convert-heic

@@ -729,7 +729,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_select_copies_relative_to_the_root_that_holds_each_photo` | `select` は含む root からの相対。同じ名前は連番 |
 | `test_select_copies_a_photo_outside_every_root_by_its_name` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
 
-### `test_heic_excluded.py` — scan 以降から HEIC を外す（7件。#26）
+### `test_heic_excluded.py` — scan 以降から HEIC を外す（6件。#26）
 
 | テスト | 内容 |
 |---|---|
@@ -737,8 +737,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、root の大半でも2割の安全弁で止まらない**（実データの `${PERSON_2}携帯` は 33%） |
 | `test_the_safety_valve_still_counts_real_files_that_vanished` | 消えた JPEG は今までどおり安全弁で止まる |
 | `test_no_prune_keeps_the_heic_rows` | `--no-prune` なら消さない |
-| `test_a_heic_without_a_jpeg_is_reported` / `test_a_jpeg_in_another_folder_does_not_count_as_converted` | 同じフォルダに同名の JPEG が無い HEIC を知らせる（大文字小文字は問わない） |
-| `test_the_scan_command_tells_how_to_convert_the_remaining_heic` | `scan` が `convert-heic` を促す |
+| `test_a_folder_of_only_heic_is_treated_as_having_no_media` | **scan は HEIC を一切見ない。** HEIC だけのフォルダは「メディアが1件も無い」で止まる（PR #76 のレビューで利用者が決めた） |
+| `test_heic_rows_are_not_counted_by_the_missing_file_check_on_its_own` | `prune_missing_media` 単体でも HEIC の行を安全弁に数えない（PR #76 のレビュー指摘4） |
 
 ### `test_cli_progress.py` — 進捗表示（7件）
 
