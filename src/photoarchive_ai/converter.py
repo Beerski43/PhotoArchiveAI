@@ -1,7 +1,7 @@
-import hashlib
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -10,18 +10,36 @@ HEIC_EXTENSIONS = {".heic", ".heif"}
 register_heif_opener()
 
 
-def _image_fingerprint(path: Path) -> str:
+# 同じ写真とみなす、縮小画素の差の平均（0〜255）の上限（#79）。
+# JPEG は非可逆なので、同じ写真から作っても画素は完全には一致しない。
+# 実データでは同じ写真が最大 0.14、連写の別写真が最小 2.37 だった
+# （scripts/measure_heic_duplicates.py で測り直せる）。
+SAME_IMAGE_MAX_DIFF = 1.0
+_COMPARE_SIZE = (64, 64)
+
+
+def _image_fingerprint(path: Path) -> tuple[tuple[int, int], np.ndarray]:
     with Image.open(path) as image:
-        image = image.convert("RGB")
-        image.thumbnail((256, 256), Image.Resampling.BILINEAR)
-        return hashlib.sha256(image.tobytes()).hexdigest()
+        size = image.size
+        small = image.convert("RGB").resize(_COMPARE_SIZE, Image.Resampling.BILINEAR)
+        return size, np.asarray(small, dtype=np.int16)
+
+
+def image_difference(first: Path, second: Path) -> Optional[float]:
+    """縮小画素の差の平均。寸法が違えば None（別の写真）。"""
+    first_size, first_pixels = _image_fingerprint(first)
+    second_size, second_pixels = _image_fingerprint(second)
+    if first_size != second_size:
+        return None
+    return float(np.abs(first_pixels - second_pixels).mean())
 
 
 def _same_image(first: Path, second: Path) -> bool:
     try:
-        return _image_fingerprint(first) == _image_fingerprint(second)
+        difference = image_difference(first, second)
     except Exception:
         return False
+    return difference is not None and difference <= SAME_IMAGE_MAX_DIFF
 
 
 def _next_output_path(source: Path) -> Optional[Path]:
