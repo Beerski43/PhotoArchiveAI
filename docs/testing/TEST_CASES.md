@@ -238,7 +238,7 @@
 | `test_the_gui_still_exposes_the_same_functions` | **`gui.parse_date` が同一物であること**（写しではない） |
 | `test_the_sql_side_keeps_the_same_judgement` | **SQL 側の写しと答えがそろう**（表示と並び順が食い違わない） |
 
-### `test_folder_dates.py` — フォルダ名から撮影時期を起こす（32件。#65）
+### `test_folder_dates.py` — フォルダ名から撮影時期を起こす（37件。#65）
 
 | テスト | 内容 |
 |---|---|
@@ -257,6 +257,10 @@
 | `test_the_screen_marks_an_age_computed_from_the_folder` ほか2件 | 画面で推測と分かる（`(2歳?)`・`撮影時期: …（フォルダ名から推測）`・推測の件数） |
 | `test_select_counts_the_year_from_the_folder_before_the_file_time` ほか1件 | `select` は EXIF → フォルダ名 → ファイル日時（撮影日時が空のときだけ） |
 | `test_the_measurement_counts_mismatches_per_folder` | 照合スクリプト（`scripts/measure_folder_dates.py`）の集計 |
+| `test_select_date_range_includes_a_folder_range_that_ends_on_the_end_day` ほか1件 | **日付だけの `end` はその日の終わりまで**（0時と読んで 12月31日に終わる区間と写真が落ちた。PR #72 のレビュー指摘1） |
+| `test_select_reads_unquoted_yaml_dates` | YAML の引用符の無い日付で `TypeError` にならない（指摘3。develop からの不具合） |
+| `test_a_leap_day_birthday_gets_the_same_age_window_as_the_screen` | 2月29日生まれの年齢の窓が画面と一致する（指摘4） |
+| `test_refreshing_folder_dates_leaves_the_commit_to_the_caller` | 移行の取引の途中で確定しない（指摘5） |
 
 ### `test_fetch_models.py` — モデルの取得（9件）
 

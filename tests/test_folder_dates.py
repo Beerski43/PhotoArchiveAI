@@ -411,3 +411,80 @@ def test_the_measurement_counts_mismatches_per_folder():
     assert result["checked"]["year"][True] == 1
     assert result["mismatched"] == {"/p/2012/1210": ["2012-11-01"]}
     assert result["target"] == {"month": 1, "none": 1}
+
+
+# ---------------------------------------------------------------------------
+# PR #72 のレビュー対応
+# ---------------------------------------------------------------------------
+
+
+def test_select_date_range_includes_a_folder_range_that_ends_on_the_end_day():
+    """**指摘1。** `end` の日に終わる区間が、まるごと範囲内なのに外れていた。
+
+    `end: "2023-12-31"` を0時と読んでいたため、`2023/`（1年）と `2023/2312/`
+    （12月）が `select` から落ちた（仕様書 §12.1 の例そのもの）。
+    """
+    rule = {"date": {"start": "2014-01-01", "end": "2023-12-31"}}
+    for start, end in (("2023-01-01", "2023-12-31"), ("2023-12-01", "2023-12-31")):
+        media = {"shooting_date": None, "created_time": "2020-01-01T00:00:00",
+                 "folder_date_from": start, "folder_date_to": end}
+        assert _passes_date_filter(media, rule), (start, end)
+
+
+def test_select_date_end_includes_the_whole_last_day():
+    """**指摘1（EXIF 側）。** 12月31日の昼に撮った写真も外れていた。時刻つきの `end` は時刻で比べる。"""
+    media = {"shooting_date": "2023-12-31T10:00:00", "created_time": "2020-01-01T00:00:00"}
+    assert _passes_date_filter(media, {"date": {"end": "2023-12-31"}})
+    assert not _passes_date_filter(media, {"date": {"end": "2023-12-31T09:00:00"}})
+
+
+def test_select_reads_unquoted_yaml_dates(tmp_path):
+    """**指摘3。** YAML は引用符の無い日付を `datetime.date` で返し、`TypeError` で落ちていた。"""
+    from photoarchive_ai.selection import load_rule
+
+    path = tmp_path / "rule.yaml"
+    path.write_text("date:\n  start: 2014-01-01\n  end: 2023-12-31\n", encoding="utf-8")
+    rule = load_rule(str(path))
+    inside = {"shooting_date": "2023-12-31T10:00:00", "created_time": "2020-01-01T00:00:00"}
+    outside = {"shooting_date": "2013-12-31T10:00:00", "created_time": "2020-01-01T00:00:00"}
+    assert _passes_date_filter(inside, rule)
+    assert not _passes_date_filter(outside, rule)
+
+
+def test_a_leap_day_birthday_gets_the_same_age_window_as_the_screen(connection):
+    """**指摘4。** 2月29日生まれの窓の端を2月28日に寄せていたので、閏年でない年の
+    2月28日の写真が画面（`age_at`）では0歳、絞り込みでは1歳だった。EXIF でも同じ。
+    """
+    birth = "2012-02-29"
+    on_28th = _face(connection, _media(connection, "/p/x/a.jpg", "2013-02-28T12:00:00"))
+    on_1st = _face(connection, _media(connection, "/p/x/b.jpg", "2013-03-01T12:00:00"))
+    connection.commit()
+    assert age_at(birth, taken_at("2013-02-28")) == 0
+    assert age_at(birth, taken_at("2013-03-01")) == 1
+
+    def ids(low, high):
+        return {
+            row["id"]
+            for row in db.list_faces(
+                connection, min_age=low, max_age=high, birth_date=birth,
+                include_unknown_age=False,
+            )
+        }
+
+    assert ids(0, 0) == {on_28th}
+    assert ids(1, 1) == {on_1st}
+
+
+def test_refreshing_folder_dates_leaves_the_commit_to_the_caller(tmp_path):
+    """**指摘5。** 移行の取引の途中で確定しないこと（版を刻むまでが1つの取引）。"""
+    path = tmp_path / "t.db"
+    connection = db.ensure_database(str(path))
+    _media(connection, "/p/2012/1210/a.jpg")
+    connection.execute("UPDATE Media SET folder_date_from = NULL, folder_date_to = NULL")
+    connection.commit()
+
+    assert db.refresh_folder_dates(connection) == 1
+    connection.rollback()
+    row = connection.execute("SELECT folder_date_from FROM Media").fetchone()
+    assert row[0] is None, "rollback で取り消せる＝自分で commit していない"
+    connection.close()
