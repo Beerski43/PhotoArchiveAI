@@ -734,7 +734,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | テスト | 内容 |
 |---|---|
 | `test_a_heic_next_to_its_jpeg_is_not_registered` | HEIC は登録しない（JPEG だけ） |
-| `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、根の大半でも2割の安全弁で止まらない**（実データの `${PERSON_2}携帯` は 33%） |
+| `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、root の大半でも2割の安全弁で止まらない**（実データの `${PERSON_2}携帯` は 33%） |
 | `test_the_safety_valve_still_counts_real_files_that_vanished` | 消えた JPEG は今までどおり安全弁で止まる |
 | `test_no_prune_keeps_the_heic_rows` | `--no-prune` なら消さない |
 | `test_a_heic_without_a_jpeg_is_reported` / `test_a_jpeg_in_another_folder_does_not_count_as_converted` | 同じフォルダに同名の JPEG が無い HEIC を知らせる（大文字小文字は問わない） |

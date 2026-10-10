@@ -436,7 +436,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - **HEIC/HEIF を `scanner.IMAGE_EXTENSIONS` に戻さない**（#26）。`convert-heic` の後に
   同じ写真が JPEG と二重に入り、同じ顔に二度割り当てることになる。対象外になった
   拡張子の行は `prune_excluded_types` が消し、**2割の安全弁には数えない**（数えると
-  HEIC が 33% を占める `${PERSON_2}携帯` の根で必ず中断する）
+  HEIC が 33% を占める `${PERSON_2}携帯` の root で必ず中断する）
 - **`face.get_latest_error()` は大域変数。** 1ファイルの処理を始めるときに
   `clear_latest_error()` で消さないと、前のファイルのエラーが次に付く。
   1つのワーカーが続けて何件も処理するので、並列でも同じことが起きる。

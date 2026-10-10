@@ -345,7 +345,7 @@ def prune_excluded_types(connection, root: Path) -> int:
     """**走査の対象外になった拡張子**の行を削除する（#26 の HEIC）。
 
     「実体が消えた」とは別に扱い、**2割の安全弁に数えない。** 数えると、HEIC が
-    根の 33% を占める実データ（`${PERSON_2}携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
+    root の 33% を占める実データ（`${PERSON_2}携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
     `--force-prune` を付けるしかなくなる。対象外の拡張子は未マウントの兆候ではない。
     """
     rows = connection.execute("SELECT id, path FROM Media").fetchall()

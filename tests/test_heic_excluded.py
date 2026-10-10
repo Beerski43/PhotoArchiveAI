@@ -6,7 +6,7 @@
 
 - HEIC/HEIF は走査しない（`convert-heic` で JPEG にしてから）
 - 既存の HEIC の行は消す（利用者の決定・引き継がない）。**2割の安全弁に数えない**
-  （HEIC は `${PERSON_2}携帯` の根の 33% を占め、数えると必ず中断する）
+  （HEIC は `${PERSON_2}携帯` の root の 33% を占め、数えると必ず中断する）
 - JPEG の無い HEIC は写真ごと入らなくなるので、知らせる
 """
 
@@ -69,7 +69,7 @@ def test_a_heic_next_to_its_jpeg_is_not_registered(tmp_path, connection):
 
 
 def test_existing_heic_rows_are_removed_without_tripping_the_safety_valve(tmp_path, connection):
-    """**HEIC が根の大半を占めても中断しない。** 対象外の拡張子は未マウントの兆候ではない。
+    """**HEIC が root の大半を占めても中断しない。** 対象外の拡張子は未マウントの兆候ではない。
 
     ここで安全弁に数えると、`--force-prune`（安全弁ごと外す）を付けるしかなくなる。
     """
