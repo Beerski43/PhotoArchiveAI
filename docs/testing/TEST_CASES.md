@@ -38,7 +38,7 @@
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
 | `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
-| `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces` が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
+| `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces`（いまの `taken_for_faces`）が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
 | `test_db.py::test_bulk_face_ids_can_be_narrowed_by_the_month_range` | **`db.face_ids` が撮影年月の引数を受け取らず、年月で絞った状態で行事の「まとめて…」を押すと `TypeError` で落ちた**（月の絞り込みを足したときの通し忘れ） |
@@ -237,6 +237,26 @@
 | `test_the_age_is_not_guessed_when_something_is_missing`（4件） | 片方でも欠けたら計算しない |
 | `test_the_gui_still_exposes_the_same_functions` | **`gui.parse_date` が同一物であること**（写しではない） |
 | `test_the_sql_side_keeps_the_same_judgement` | **SQL 側の写しと答えがそろう**（表示と並び順が食い違わない） |
+
+### `test_folder_dates.py` — フォルダ名から撮影時期を起こす（32件。#65）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_folder_name_is_read_to_the_month_at_most`（15件） | 読み方の規約。**`YYMM` を `MMDD` と読まない**・`DD=00`・**ファイル名を読まない**（Issue 本文の誤読2例）・親の区間に収まる読み方だけ・日付の無いサブフォルダは年だけ |
+| `test_a_range_never_leaves_its_calendar_year` | 区間が1つの暦年に収まる（**年齢の絞り込みの SQL の前提**） |
+| `test_the_age_is_known_only_when_both_ends_agree` | 区間の途中に誕生日があれば年齢を出さない。終わりまでに生まれていなければ誕生前 |
+| `test_exif_wins_over_the_folder_and_broken_exif_falls_back_to_it` | EXIF が先。壊れた EXIF はフォルダ名へ落ちる |
+| `test_save_media_writes_the_folder_range_without_touching_the_exif_column` | **推測を `shooting_date` に混ぜない** |
+| `test_refresh_replaces_ranges_left_by_an_older_reading` | 読み方を変えても古い区間が残らない |
+| `test_a_version_5_database_gains_the_folder_dates_and_keeps_its_faces` | **v5 → v6 で顔が減らない**。列は移行の中でパスから埋まる |
+| `test_the_age_filter_sees_the_same_age_as_the_screen` | **年齢の絞り込み（SQL）と画面（`dates.age_at`）の年齢が一致する**（誕生月・閏日・誕生前・年まで） |
+| `test_born_by_drops_only_photos_certainly_taken_before_the_birth` | 誕生前の除外は区間の終わりで見る |
+| `test_the_month_filter_takes_a_folder_range_only_when_it_fits_whole` | 撮影年月の絞り込みは区間がまるごと入るときだけ |
+| `test_the_teacher_age_ignores_the_folder_range` | **手本の年齢には推測を使わない**（使うと正しい自動割り当てが 125 件外れた。利用者が決定） |
+| `test_match_drops_a_person_only_when_the_whole_range_is_before_the_birth` | `match` の誕生前の除外 |
+| `test_the_screen_marks_an_age_computed_from_the_folder` ほか2件 | 画面で推測と分かる（`(2歳?)`・`撮影時期: …（フォルダ名から推測）`・推測の件数） |
+| `test_select_counts_the_year_from_the_folder_before_the_file_time` ほか1件 | `select` は EXIF → フォルダ名 → ファイル日時（撮影日時が空のときだけ） |
+| `test_the_measurement_counts_mismatches_per_folder` | 照合スクリプト（`scripts/measure_folder_dates.py`）の集計 |
 
 ### `test_fetch_models.py` — モデルの取得（9件）
 
@@ -681,6 +701,8 @@ editable install のときだけ出すこと（通常のインストールでは
 **v2 → v3**: `Person.birth_date` を足すだけで、**顔・解析結果・検出済みの状態が
 1件も減らないこと**。v1 の再構築経路へ流すと落ちることを確認済み。
 案内の文面が「破棄します」にならないこと（消えると読めると実行をためらう）。
+
+**v5 → v6** は `test_folder_dates.py` にある（列を足してパスから埋める。顔は減らない）。
 
 **v3 → v4**: `Person.display_order` を足すだけ。**実データが通る唯一の経路**なので、
 顔・手本・誕生日が減らないことと、移行直後の並び（全員未設定＝名前順、追加は末尾）を
