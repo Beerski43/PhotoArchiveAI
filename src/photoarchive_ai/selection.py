@@ -1,4 +1,5 @@
 import os
+import shutil
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -215,8 +216,8 @@ def select_media(
     return filtered
 
 
-def _link_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:
-    """リンクの名前。``<順位>_<年>_m<Media.id><元の拡張子>``（#83）。
+def _output_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:
+    """出力の名前。``<順位>_<年>_m<Media.id><元の拡張子>``（#83）。
 
     名前を見れば `select` の並びと年が分かり、名前順に並べると `select` の順になる。
     **元のファイル名は引き継がない。** ID が入るので、別の root にある同じ名前の
@@ -226,43 +227,58 @@ def _link_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) 
     return f"{rank:0{width}d}_{year if year is not None else 'unknown'}_m{media.get('id')}{source_path.suffix}"
 
 
-def _remove_previous_links(output_root: Path) -> None:
-    """前回の出力（出力先の**直下にあるシンボリックリンク**）を消す。
+def _remove_previous_output(output_root: Path) -> None:
+    """前回の出力（出力先の**直下にあるファイル**）を消す。
 
     出力は平らなので、残すと前回の結果と区別が付かない。**出力先は `select`
-    専用**で、このツールが張ったかどうかは見ない（PR #85 の判断 (a)。利用者が
-    決めた）。**通常のファイルとサブフォルダには触らない**（コピーで出力して
-    いた頃の写真を消さない）。リンク先が消えた壊れたリンクも消す。
+    専用**で、このツールが置いたかどうかは見ない（利用者が決めた・PR #85）。
+    シンボリックリンクも消す（リンクで出力していた頃の残り）。**サブフォルダには
+    触らない。**
     """
     for entry in output_root.iterdir():
-        if entry.is_symlink():
+        if entry.is_symlink() or entry.is_file():
             entry.unlink()
 
 
-def link_selected_media(
+def _check_output_is_not_an_input(
+    output_root: Path, root_paths: Sequence[Path], sources: Sequence[Path]
+) -> None:
+    """出力先が root やその中なら止める。**直下のファイルを消すので、元写真が消える。**"""
+    output = output_root.resolve()
+    for root in root_paths:
+        if output == root or root in output.parents:
+            raise ValueError(
+                f"出力先が写真の root の中にあります。直下のファイルを消すので使えません: {output}"
+            )
+    for source in sources:
+        if source.parent == output:
+            raise ValueError(f"出力先に元の写真があります。直下のファイルを消すので使えません: {source}")
+
+
+def copy_selected_media(
     selected_media: List[Dict[str, Any]],
     output_dir: str,
     source_roots: Union[str, Sequence[str]],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> int:
-    """選んだメディアへのシンボリックリンクを、出力先の**直下**に張る（#83）。
+    """選んだメディアを、出力先の**直下**へ平らにコピーする（#83）。
 
-    名前は `_link_name`、リンク先は元ファイルの絶対パス。**元ファイルは読まない・
-    変えない。** 張る前に前回のリンクを消す（`_remove_previous_links`）。
-    順位は渡された並びの 1 からで、``path`` の無い項目は飛ばすが**順位は詰めない**
-    （番号が `select` の並びと一致する）。相対パスで登録されたメディアは先頭の
-    root から解く。
+    名前は `_output_name`。コピーする前に、前回の出力（直下のファイル）を消す
+    （`_remove_previous_output`）。順位は渡された並びの 1 からで、``path`` の無い
+    項目は飛ばすが**順位は詰めない**（番号が `select` の並びと一致する）。
+    相対パスで登録されたメディアは先頭の root から解く。
 
-    同じ名前の実体のファイル（かフォルダ）があれば、上書きせずに
-    ``FileExistsError`` で止まる。**名前を先に全部決め、消したり張ったりする前に
-    調べる。** 途中で止まると、前回の結果も今回の結果も揃っていない出力が残る
-    （PR #85 のレビュー指摘1）。
+    **消す前に、止まる理由を全部調べる**（PR #85 のレビュー指摘1）。途中で止まると、
+    前回の結果も今回の結果も揃っていない出力が残る。
+
+    - 出力先が root やその中なら止める（`_check_output_is_not_an_input`）
+    - 元のファイルが無ければ止める
+    - 同じ名前のサブフォルダがあれば止める（ファイルは前回の出力として消す）
     """
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots]
     output_root = Path(output_dir)
-    output_root.mkdir(parents=True, exist_ok=True)
     total = len(selected_media)
     width = max(4, len(str(total)))
     entries: List[Tuple[int, Path, Path]] = []
@@ -274,19 +290,27 @@ def link_selected_media(
         if not source_path.is_absolute() and root_paths:
             source_path = root_paths[0] / source_path
         source_path = source_path.resolve()
-        entries.append((rank, output_root / _link_name(rank, width, media, source_path), source_path))
+        entries.append((rank, output_root / _output_name(rank, width, media, source_path), source_path))
 
-    clashes = [link.name for _, link, _ in entries if link.exists() and not link.is_symlink()]
-    if clashes:
-        more = f" ほか {len(clashes) - 1} 件" if len(clashes) > 1 else ""
-        raise FileExistsError(
-            f"出力先に同じ名前のファイルがあります（何も消さず、リンクも張っていません）: "
-            f"{clashes[0]}{more}"
-        )
+    _check_output_is_not_an_input(output_root, root_paths, [source for _, _, source in entries])
+    missing = [str(source) for _, _, source in entries if not source.is_file()]
+    if missing:
+        more = f" ほか {len(missing) - 1} 件" if len(missing) > 1 else ""
+        raise FileNotFoundError(f"元のファイルがありません（何も消していません）: {missing[0]}{more}")
+    if output_root.exists():
+        clashes = [
+            target.name for _, target, _ in entries if target.is_dir() and not target.is_symlink()
+        ]
+        if clashes:
+            more = f" ほか {len(clashes) - 1} 件" if len(clashes) > 1 else ""
+            raise FileExistsError(
+                f"出力先に同じ名前のフォルダがあります（何も消していません）: {clashes[0]}{more}"
+            )
 
-    _remove_previous_links(output_root)
-    for rank, link, source_path in entries:
-        link.symlink_to(source_path)
+    output_root.mkdir(parents=True, exist_ok=True)
+    _remove_previous_output(output_root)
+    for rank, target, source_path in entries:
+        shutil.copy2(source_path, target)
         if progress_callback is not None:
-            progress_callback(rank, total, link.name)
+            progress_callback(rank, total, target.name)
     return len(entries)

@@ -651,7 +651,7 @@ def test_a_duplicated_person_name_stops_instead_of_guessing(tmp_path):
 
 
 def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
-    """出力先に同じ名前の実体のファイルがあれば、1行で止まる（PR #85 のレビュー指摘1）。"""
+    """出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1）。"""
     root = tmp_path / "photos"
     write_image(root / "a.jpg")
     database = tmp_path / "photoarchive.db"
@@ -666,13 +666,13 @@ def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
     rule.write_text("include_video: true\n", encoding="utf-8")
     output = tmp_path / "out"
     output.mkdir()
-    (output / f"0001_2020_m{media_id}.jpg").write_text("mine", encoding="utf-8")
+    (output / f"0001_2020_m{media_id}.jpg").mkdir()
 
     with pytest.raises(SystemExit) as raised:
         run_cli(["select", "--db", str(database), "--rule", str(rule),
                  "--source", str(root), "--output", str(output)], tmp_path)
 
     message = str(raised.value)
-    assert message.startswith("Linking stopped:")
+    assert message.startswith("Copying stopped:")
     assert f"0001_2020_m{media_id}.jpg" in message
-    assert (output / f"0001_2020_m{media_id}.jpg").read_text(encoding="utf-8") == "mine"
+    assert (output / f"0001_2020_m{media_id}.jpg").is_dir()

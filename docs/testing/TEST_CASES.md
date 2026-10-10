@@ -71,7 +71,7 @@
 | `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
 | `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて除外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
 | `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
-| `test_source_roots.py::test_select_links_a_photo_outside_every_root` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（#83 でリンクの出力に替えたあとも、root の外を通す。`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
+| `test_source_roots.py::test_select_copies_a_photo_outside_every_root` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（#83 で直下に平らに出力する形に替えたあとも、root の外を通す。`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
 ---
@@ -602,7 +602,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とリンクの出力（31件）
+### `test_selection.py` — 抽出とコピー（36件）
 
 | テスト | 内容 |
 |---|---|
@@ -630,12 +630,15 @@
 | `test_duplicate_groups_fall_back_to_the_path_when_there_is_no_hash` | ハッシュが無いときはパスで分ける |
 | `test_media_year_prefers_the_shooting_date_and_falls_back_to_created_time` | 年の決め方 |
 | `test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates` | 読めない日付は範囲外 |
-| `test_links_sit_directly_under_the_output_and_point_at_the_original` | 出力先の直下に、元ファイルの絶対パスへのリンク。元ファイルは変えない（#83） |
-| `test_link_names_follow_the_selected_order_and_mark_unknown_years` | 名前は `<順位>_<年>_m<ID><拡張子>`。年が無ければ `unknown` |
-| `test_rank_is_padded_to_the_number_of_links` | 順位の桁は件数に合わせる（4桁以上）。名前順が並び順になる |
-| `test_rerun_removes_previous_links_but_keeps_real_files` | **再実行で直下のリンクを全部消す**（壊れたもの・利用者が置いたものも。出力先は `select` 専用）。**通常のファイルとサブフォルダは残す** |
-| `test_a_real_file_with_the_same_name_is_not_overwritten` | 同じ名前の実体のファイルは上書きせずに止まる。**止まったとき、前回のリンクを消していない**（PR #85 のレビュー指摘1） |
-| `test_link_skips_entries_without_a_path_but_keeps_their_rank` | パスが無い行を飛ばすが、順位は詰めない |
+| `test_copies_sit_directly_under_the_output` | 出力先の直下に平らにコピーする（リンクではない）。元ファイルは変えない（#83） |
+| `test_output_names_follow_the_selected_order_and_mark_unknown_years` | 名前は `<順位>_<年>_m<ID><拡張子>`。年が無ければ `unknown` |
+| `test_rank_is_padded_to_the_number_of_selected_media` | 順位の桁は件数に合わせる（4桁以上）。名前順が並び順になる |
+| `test_rerun_removes_every_file_directly_under_the_output_but_keeps_folders` | **再実行で直下のファイルを全部消す**（利用者が置いたもの・リンクも。出力先は `select` 専用）。**サブフォルダは残す** |
+| `test_a_missing_original_stops_before_removing_the_previous_output` | 元のファイルが無ければ、**前回の出力を消す前に**止まる（PR #85 のレビュー指摘1） |
+| `test_a_folder_with_the_same_name_stops_before_removing_anything` | 出力する名前と同じフォルダがあれば、何も消さずに止まる |
+| `test_an_output_inside_a_root_is_refused_before_removing_the_originals` | **出力先が root やその中なら止まる。** 直下のファイルを全部消すので、元写真が消える（2件） |
+| `test_an_output_holding_an_original_outside_every_root_is_refused` | root の外でも、選んだ写真が出力先の直下にあれば止まる |
+| `test_copy_skips_entries_without_a_path_but_keeps_their_rank` | パスが無い行を飛ばすが、順位は詰めない |
 
 ### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）
 
@@ -718,7 +721,7 @@
 | `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
-| `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先で名前がぶつかったら、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
+| `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
 
 ### `test_config.py` — 設定の探索（25件）
 
@@ -752,9 +755,9 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_version_6_database_gains_the_root_table_and_keeps_its_faces` | **v6 → v7 で顔が減らない。root は推定しない** |
 | `test_with_several_roots_the_folder_is_prefixed_with_the_root_name` / `test_with_one_root_the_folder_is_shown_as_before` | GUI の表示。root が複数なら root の名前を付ける |
 | `test_the_window_falls_back_to_the_roots_recorded_in_the_database` | 設定に root が無ければ GUI も記録を使う |
-| `test_select_links_same_named_photos_from_different_roots` | 別の root の同じ名前も、両方リンクされる（#83） |
+| `test_select_copies_same_named_photos_from_different_roots` | 別の root の同じ名前も、両方コピーされる（#83） |
 | `test_select_resolves_a_relative_path_from_the_first_root` | 相対パスのメディアは先頭の root から解く |
-| `test_select_links_a_photo_outside_every_root` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
+| `test_select_copies_a_photo_outside_every_root` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
 
 ### `test_heic_excluded.py` — scan 以降から HEIC を外す（6件。#26）
 
@@ -972,8 +975,8 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 ### `test_system.py` — 通し（2件、`system` マーカー）
 
 `init-db` → `scan` → GUIでの割り当て → `match` → `select` を一通り流す。
-2回目のスキャンが差分になることも確認する。`select` は出力先の直下にリンクを1つ張り、
-2回流しても前回のリンクが残らない（#83）。
+2回目のスキャンが差分になることも確認する。`select` は出力先の直下に1つコピーし、
+2回流しても前回の出力が残らない（#83）。
 
 ### `test_face_real.py` — 実物のモデル（2件、`models` マーカー）
 

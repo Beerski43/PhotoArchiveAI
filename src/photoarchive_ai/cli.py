@@ -34,7 +34,7 @@ from .migration import (
 from .progress import ProgressDisplay
 from .scanner import ScanAborted, normalize_source_roots, scan_directories
 from .selection import (
-    link_selected_media,
+    copy_selected_media,
     load_rule,
     select_media,
     stale_assignment_notice,
@@ -245,10 +245,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_log_level(evaluate_parser)
 
-    select_parser = subparsers.add_parser("select", help="Select media by rule and symlink them into output.")
+    select_parser = subparsers.add_parser("select", help="Select media by rule and copy them into output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
-    select_parser.add_argument("--output", help="Output directory, used only by select. Symlinks are placed directly under it; every symlink already there is removed first.")
+    select_parser.add_argument("--output", help="Output directory, used only by select. Files are copied directly under it; every file already there is removed first (subfolders are kept).")
     select_parser.add_argument(
         "--source",
         action="append",
@@ -658,17 +658,17 @@ def main() -> None:
                 )
                 _reset_progress_state()
                 try:
-                    linked = link_selected_media(
+                    copied = copy_selected_media(
                         selected,
                         output_root,
                         source_roots,
                         progress_callback=lambda current, total, detail: _emit_progress(
-                            current, total, detail, prefix="Linking"
+                            current, total, detail, prefix="Copying"
                         ),
                     )
-                except OSError as error:
-                    raise SystemExit(f"Linking stopped: {error}") from error
-            print(f"Linked {linked} files in {output_root}.")
+                except (OSError, ValueError) as error:
+                    raise SystemExit(f"Copying stopped: {error}") from error
+            print(f"Copied {copied} files to {output_root}.")
             return
     except SchemaVersionError as error:
         raise SystemExit(str(error)) from error
