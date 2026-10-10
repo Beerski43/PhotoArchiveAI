@@ -1,13 +1,14 @@
 import json
 import os
 import shutil
-from datetime import datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
 
 from . import appearance, db, scoring
+from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 
 
@@ -21,9 +22,18 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
     return json.loads(text)
 
 
-def _parse_date(value: Optional[str]) -> Optional[datetime]:
+def _parse_date(value: Any) -> Optional[datetime]:
+    """規則やメディアの日時を ``datetime`` にする。
+
+    **YAML は引用符の無い `2023-12-31` を `datetime.date` で返す**ので、文字列以外も
+    受ける（`datetime` は `date` の子なので先に見る。PR #72 のレビュー指摘3）。
+    """
     if value is None:
         return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
     try:
         return datetime.fromisoformat(value)
     except ValueError:
@@ -33,29 +43,70 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
             return None
 
 
-def _get_media_year(media: Dict[str, Any]) -> Optional[int]:
-    date_value = media.get("shooting_date") or media.get("created_time")
-    if not date_value:
+def _media_period(media: Dict[str, Any]) -> Optional[Tuple[datetime, datetime]]:
+    """その写真の撮影時期を ``(最も早い, 最も遅い)`` で返す。分からなければ ``None``。
+
+    引く順は **EXIF の撮影日時 → フォルダ名から起こした区間（#65）→ ファイル日時**。
+
+    **ファイル日時へ落ちるのは、撮影日時が空のときだけ。** 壊れた値
+    （`0000-00-00T00:00:00`）が入っている写真は、フォルダ名から起こせなければ
+    「日付が読めない」として扱う（仕様書 §12.1 の `date` の行。ファイル日時は
+    コピーで変わるので、壊れた EXIF の代わりにはしない）。
+    **読めるかどうかは `dates.taken_at` に預ける**（CLAUDE.md §8）。
+    """
+    taken = taken_at(
+        media.get("shooting_date"), media.get("folder_date_from"), media.get("folder_date_to")
+    )
+    if taken is not None and not taken.inferred:
+        # 時刻まで持っているので、日付の範囲の指定と時刻で比べる。
+        moment = _parse_date(media.get("shooting_date")) or datetime.combine(
+            taken.earliest, time.min
+        )
+        return moment, moment
+    if taken is not None:
+        return (
+            datetime.combine(taken.earliest, time.min),
+            datetime.combine(taken.latest, time.max),
+        )
+    if media.get("shooting_date") or parse_date(media.get("created_time")) is None:
         return None
-    dt = _parse_date(date_value)
-    return dt.year if dt else None
+    moment = _parse_date(media.get("created_time"))
+    return None if moment is None else (moment, moment)
+
+
+def _get_media_year(media: Dict[str, Any]) -> Optional[int]:
+    """年ごとの件数（``count_per_year``）を数える年。**フォルダ名の区間は1つの年に収まる。**"""
+    period = _media_period(media)
+    return None if period is None else period[0].year
+
+
+def _rule_end(value: Any) -> Optional[datetime]:
+    """規則の ``date.end``。**日付だけなら、その日の終わりまでを含める。**
+
+    0時として読むと、`end: "2023-12-31"` で 12月31日に終わるフォルダ名の区間
+    （`2023/` 直下・`2023/2312/`）も、12月31日の昼に撮った写真も外れる
+    （PR #72 のレビュー指摘1）。
+    """
+    parsed = _parse_date(value)
+    if parsed is not None and len(str(value)) == 10:
+        parsed = datetime.combine(parsed.date(), time.max)
+    return parsed
 
 
 def _passes_date_filter(media: Dict[str, Any], rule: Dict[str, Any]) -> bool:
+    """撮影時期が指定の範囲に入るか。**フォルダ名から起こした区間は、まるごと入るときだけ通す。**"""
     date_rule = rule.get("date") or {}
     if not date_rule:
         return True
     start = _parse_date(date_rule.get("start"))
-    end = _parse_date(date_rule.get("end"))
-    media_date = media.get("shooting_date") or media.get("created_time")
-    if not media_date:
+    end = _rule_end(date_rule.get("end"))
+    period = _media_period(media)
+    if period is None:
         return False
-    media_dt = _parse_date(media_date)
-    if media_dt is None:
+    earliest, latest = period
+    if start and earliest < start:
         return False
-    if start and media_dt < start:
-        return False
-    if end and media_dt > end:
+    if end and latest > end:
         return False
     return True
 

@@ -466,4 +466,9 @@ def scan_directory(
             db_connection, root, present_paths, force=force_prune
         )
 
+    # **読み方を変えたときに古い区間を残さない。** 差分スキャンは変わっていない
+    # ファイルを書き直さないので、ここで全件をパスから起こし直す（NFS は読まない）。
+    db.refresh_folder_dates(db_connection)
+    db_connection.commit()
+
     return summary
