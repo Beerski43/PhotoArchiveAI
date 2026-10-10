@@ -46,7 +46,8 @@
 - `scanner.IMAGE_EXTENSIONS` から `heic` / `heif` を外し、`face.py` の HEIF デコーダ登録もやめた
 - 既存の HEIC の行は**対象外の拡張子として**消す（`scanner.prune_excluded_types`）。
   安全弁の母数にも分子にも入れない
-- 同名の JPEG が無い HEIC は `scan` が知らせる（実データでは 3 件。`IMG_6463〜6465.HEIC`）
+- **`scan` は HEIC をファイル名も含めて一切見ない**（PR #76 のレビューで利用者が決めた）。同名の JPEG が無い
+  HEIC は 2026-10-10 時点で 3 件（`IMG_6463〜6465.HEIC`）。知らせないので、先に `convert-heic` を流す
 - **マージ後に利用者がすること**: 先に `photoarchive convert-heic`（JPEG の無い3件）→ `scan`
   （2026-10-10 時点で HEIC の行 1,761 件と顔 941 件が消える）
 

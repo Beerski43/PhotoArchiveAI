@@ -403,16 +403,6 @@ def _run_scan(args, settings) -> None:
         print(
             f"走査の対象外になった拡張子（HEIC など）の行を {summary['excluded']} 件削除しました。"
         )
-    unconverted = summary.get("unconverted_heic") or []
-    if unconverted:
-        print(
-            f"注意: JPEG に変換されていない HEIC/HEIF が {len(unconverted)} 件あります（走査しません）。"
-            " photoarchive convert-heic で変換してから、もう一度 scan してください。"
-        )
-        for path in unconverted[:5]:
-            print(f"  {path}")
-        if len(unconverted) > 5:
-            print(f"  ほか {len(unconverted) - 5} 件（ログに1件目を出しています）")
 
 
 def _run_match(args, db_path: str) -> None:

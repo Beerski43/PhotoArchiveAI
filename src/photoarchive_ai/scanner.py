@@ -31,8 +31,6 @@ logger = logging.getLogger("photoarchive.scanner")
 #: 両方を入れると、変換後に同じ写真が二重に登録され、同じ顔が二度検出される
 #: （ハッシュが違うので重複排除も効かない）。
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
-#: 走査しないが、JPEG に変換されていないものを知らせるために見る拡張子。
-HEIC_EXTENSIONS = {"heic", "heif"}
 VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 COMMIT_INTERVAL = 50
@@ -98,34 +96,11 @@ def extract_exif_datetime(path: Path) -> Optional[str]:
     return None
 
 
-def _walk(root: Path) -> Tuple[List[Path], List[Path]]:
-    """走査するメディアと、HEIC/HEIF を**1回の走査で**拾う（NFS を二度歩かない）。"""
-    media: List[Path] = []
-    heic: List[Path] = []
-    for path in root.rglob("*"):
-        suffix = path.suffix.lower().lstrip(".")
-        if suffix in HEIC_EXTENSIONS:
-            if path.is_file():
-                heic.append(path)
-        elif suffix in IMAGE_EXTENSIONS or suffix in VIDEO_EXTENSIONS:
-            if path.is_file():
-                media.append(path)
-    return sorted(media), sorted(heic)
-
-
-def unconverted_heic(heic_files: List[Path], media_files: List[Path]) -> List[Path]:
-    """同じフォルダに同じ名前の JPEG が無い HEIC/HEIF。
-
-    走査の対象外なので、**変換しないままだと写真ごとアーカイブに入らない。**
-    `convert-heic` は同じ名前の `.jpg` を書く（中身が違う同名があれば `_1` を付ける
-    ので、その場合はここで「無い」と数える。知らせるだけで害は無い）。
-    """
-    stems = {
-        (path.parent, path.stem.lower())
-        for path in media_files
-        if path.suffix.lower().lstrip(".") in {"jpg", "jpeg"}
-    }
-    return [path for path in heic_files if (path.parent, path.stem.lower()) not in stems]
+def iter_media_files(root: Path) -> List[Path]:
+    """走査するメディア。**HEIC/HEIF はファイル名も見ない**（#26。利用者の決定）。"""
+    return sorted(
+        path for path in root.rglob("*") if path.is_file() and is_media_file(path)
+    )
 
 
 def _mtime_matches(stored_created_time: Optional[str], mtime: float) -> bool:
@@ -424,7 +399,7 @@ def scan_directory(
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
 
-    media_files, heic_files = _walk(root)
+    media_files = iter_media_files(root)
     if not media_files:
         raise ScanAborted(
             f"対象ディレクトリにメディアファイルが1件もありません: {root}"
@@ -480,17 +455,8 @@ def scan_directory(
         "errors": 0,
         "pruned": 0,
         "excluded": 0,
-        "unconverted_heic": [str(path) for path in unconverted_heic(heic_files, media_files)],
         "media_ids": [],
     }
-    if summary["unconverted_heic"]:
-        logger.warning(
-            "JPEG に変換されていない HEIC/HEIF が %d 件あります（走査しません）。"
-            " photoarchive convert-heic で変換してから scan してください。例: %s",
-            len(summary["unconverted_heic"]),
-            summary["unconverted_heic"][0],
-        )
-
     def handle(result: Dict[str, Any], position: int) -> None:
         record = records.get(result["path"])
         media_id = _store_result(db_connection, result, record)
@@ -611,7 +577,6 @@ def scan_directories(
         "errors": 0,
         "pruned": 0,
         "excluded": 0,
-        "unconverted_heic": [],
         "media_ids": [],
         "roots": [],
     }
@@ -620,6 +585,5 @@ def scan_directories(
         for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned", "excluded"):
             total[key] += summary[key]
         total["media_ids"].extend(summary["media_ids"])
-        total["unconverted_heic"].extend(summary["unconverted_heic"])
         total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})
     return total
