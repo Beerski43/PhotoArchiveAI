@@ -16,7 +16,14 @@ PR 本文に貼られることがある。
     python scripts/check_private_terms.py --fix         # 追跡中のファイルの中身を一覧どおりに置き換える
     python scripts/check_private_terms.py --filter-repo-expressions OUT  # git filter-repo の式を書き出す
 
-一覧が無い環境では、検査できないことを知らせて 0 で終わる（ほかの人の手元や CI で止めないため）。
+一覧は**本体の checkout** の ``config/private_terms.yml`` から引く。git のワークツリー
+（``.claude/worktrees/`` など）には git に入らないファイルが無いので、ワークツリーの直下を
+見ると一覧が見つからず、検査が丸ごと飛んでいた（PR #82 のレビュー指摘1）。
+
+一覧が無いとき:
+- **hook から呼ばれたとき（``--staged`` / ``--message``）は止める**（1 で終わる）。hook を
+  有効にした人は検査を望んでいるので、一覧が見えないのは設定の不備（利用者の決定・PR #82）
+- 回帰テストと手での実行は、知らせて 0 で終わる（一覧を持たない人の手元を止めない）
 """
 
 from __future__ import annotations
@@ -32,7 +39,26 @@ from typing import Iterable, Iterator, List, Optional, Sequence, Tuple
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TERMS = REPO_ROOT / "config" / "private_terms.yml"
+TERMS_IN_CHECKOUT = Path("config") / "private_terms.yml"
+#: `git commit -v` が差分の前に置く線。git はこの線から下をメッセージに含めない。
+SCISSORS = "------------------------ >8 ------------------------"
+#: エディタで書くときに git が入れる案内。これがあればコメント行は git が捨てる。
+EDITOR_TEMPLATE = "Please enter the commit message for your changes."
+
+
+def default_terms(cwd: Path) -> Path:
+    """一覧の既定の場所。**本体の checkout**（``--git-common-dir`` の親）の下。
+
+    ワークツリーでも本体でも同じ場所になる。git が使えなければ ``cwd`` の下。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=cwd, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return cwd / TERMS_IN_CHECKOUT
+    return Path(out).parent / TERMS_IN_CHECKOUT
 
 
 @dataclass(frozen=True)
@@ -46,16 +72,51 @@ class Term:
         return re.compile(re.escape(self.text), re.IGNORECASE if self.ignore_case else 0)
 
 
+class TermsError(Exception):
+    """一覧が読めない。**メッセージに語を入れない**（位置だけ）。"""
+
+
 def load_terms(path: Path) -> List[Term]:
-    """一覧を読む。**長い語から順に並べる**（短い語が長い語の一部を先に置き換えないように）。"""
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    """一覧を読む。**長い語から順に並べる**（短い語が長い語の一部を先に置き換えないように）。
+
+    壊れた YAML のエラーは問題の行を抜粋して出すので、そのまま投げると**語が端末に出る**
+    （PR #82 のレビュー指摘3）。位置だけを出す。
+    """
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as error:
+        mark = getattr(error, "problem_mark", None)
+        where = f" の {mark.line + 1} 行目" if mark is not None else ""
+        raise TermsError(f"{path.name}{where}が YAML として読めません") from None
     terms = []
-    for entry in data.get("terms") or []:
-        text = str(entry["text"])
+    for number, entry in enumerate((data.get("terms") or []) if isinstance(data, dict) else [], start=1):
+        try:
+            text = str(entry["text"])
+            value = str(entry["replace"])
+        except (KeyError, TypeError):
+            raise TermsError(f"{path.name} の {number} 件目に text と replace がありません") from None
         if not text:
-            raise ValueError("空の語は書けません")
-        terms.append(Term(text, str(entry["replace"]), bool(entry.get("ignore_case", False))))
+            raise TermsError(f"{path.name} の {number} 件目の語が空です")
+        terms.append(Term(text, value, bool(entry.get("ignore_case", False))))
     return sorted(terms, key=lambda term: len(term.text), reverse=True)
+
+
+def message_body(text: str, comment: str = "#") -> str:
+    """commit-msg が受け取ったファイルのうち、**コミットに残る部分**（PR #82 のレビュー指摘2）。
+
+    - はさみ線（`git commit -v`）から下は差分なので落とす。差分の削除行に語があると、
+      語を消すためのコミットが止まっていた
+    - エディタで書いたとき（git の案内がある）は、git が捨てるコメント行も落とす。
+      ``-m`` のときは落とさない（``#77 ...`` で始まる1行目を見逃さないため）
+    """
+    lines = []
+    for line in text.splitlines():
+        if line.lstrip(comment).strip() == SCISSORS:
+            break
+        lines.append(line)
+    if any(line.startswith(comment) and EDITOR_TEMPLATE in line for line in lines):
+        lines = [line for line in lines if not line.startswith(comment)]
+    return "\n".join(lines)
 
 
 def find(text: str, terms: Sequence[Term]) -> Iterator[Tuple[int, Term]]:
@@ -99,6 +160,14 @@ def _decode(data: bytes) -> Optional[str]:
         return None
 
 
+def _comment_char() -> str:
+    try:
+        value = _git("config", "core.commentChar").decode("utf-8").strip()
+    except subprocess.CalledProcessError:
+        return "#"
+    return value if value and value != "auto" else "#"
+
+
 # -- 検査 --------------------------------------------------------------------
 
 
@@ -123,7 +192,7 @@ def _safe(name: str, terms: Sequence[Term]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--terms", type=Path, default=DEFAULT_TERMS, help="語の一覧（既定 config/private_terms.yml）")
+    parser.add_argument("--terms", type=Path, help="語の一覧（既定は本体の checkout の config/private_terms.yml）")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--staged", action="store_true", help="コミットしようとしている中身を見る")
     mode.add_argument("--message", type=Path, help="コミットメッセージのファイルを見る")
@@ -131,10 +200,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     mode.add_argument("--filter-repo-expressions", type=Path, help="git filter-repo --replace-text の式を書き出す")
     args = parser.parse_args(argv)
 
-    if not args.terms.exists():
-        print(f"公開しない語の一覧がありません（{args.terms.name}）。検査を飛ばします。")
+    terms_path = args.terms or default_terms(REPO_ROOT)
+    from_hook = bool(args.staged or args.message)
+    if not terms_path.exists():
+        if from_hook:
+            print(
+                f"公開しない語の一覧が見つかりません: {terms_path}\n"
+                "hook が有効なのに検査できないので、コミットを止めます。本体の checkout の"
+                " config/private_terms.yml に一覧を置いてください（形は config/private_terms.sample.yml）。"
+            )
+            return 1
+        print(f"公開しない語の一覧がありません（{terms_path.name}）。検査を飛ばします。")
         return 0
-    terms = load_terms(args.terms)
+    try:
+        terms = load_terms(terms_path)
+    except TermsError as error:
+        print(f"公開しない語の一覧が読めません: {error}")
+        return 1
 
     if args.filter_repo_expressions:
         lines = []
@@ -167,7 +249,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.message:
-        text = args.message.read_text(encoding="utf-8")
+        text = message_body(args.message.read_text(encoding="utf-8"), _comment_char())
         found = [f"コミットメッセージ:{number}: 公開しない語（→ {term.replace}）" for number, term in find(text, terms)]
     elif args.staged:
         found = check(staged_files(), lambda name: _git("show", f":{name}"), terms)

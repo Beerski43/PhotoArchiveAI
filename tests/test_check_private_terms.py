@@ -137,7 +137,70 @@ def test_without_a_term_list_the_check_is_skipped(checker, tmp_path, capsys):
 def test_the_repository_holds_no_private_terms():
     """このリポジトリ自体に、手元の一覧の語が入っていないこと（一覧がある環境だけ）。"""
     module = _load()
-    if not module.DEFAULT_TERMS.exists():
+    if not module.default_terms(module.REPO_ROOT).exists():
         pytest.skip("公開しない語の一覧が無い環境")
 
     assert module.main([]) == 0
+
+
+def test_a_worktree_commit_is_checked_against_the_main_list(checker, tmp_path):
+    """ワークツリーからのコミットも、本体の checkout の一覧で止める（PR #82 のレビュー指摘1）。
+
+    一覧は git に入らないのでワークツリーには無い。以前はワークツリーの直下を見て
+    「一覧が無い」として検査を飛ばし、コミットが通っていた。
+    """
+    module, repo, terms = checker
+    (repo / "config").mkdir()
+    (repo / "config" / "private_terms.yml").write_text(terms.read_text(encoding="utf-8"), encoding="utf-8")
+    _add(repo, "README.md", "clean\n")
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo, check=True)
+    module.REPO_ROOT = worktree
+    _add(worktree, "a.md", "山田太郎\n")
+
+    assert module.default_terms(worktree) == repo / "config" / "private_terms.yml"
+    assert module.main(["--staged"]) == 1
+
+
+def test_a_hook_stops_when_the_list_is_missing(checker, tmp_path, capsys):
+    """hook から呼ばれたときだけ、一覧が無ければ止める（利用者の決定・PR #82 の判断 (a)）。"""
+    module, repo, _ = checker
+    missing = tmp_path / "missing.yml"
+    message = tmp_path / "MSG"
+    message.write_text("#77 clean\n", encoding="utf-8")
+
+    assert module.main(["--terms", str(missing), "--staged"]) == 1
+    assert module.main(["--terms", str(missing), "--message", str(message)]) == 1
+    assert "コミットを止めます" in capsys.readouterr().out
+    assert module.main(["--terms", str(missing)]) == 0  # 回帰テスト・手での実行は飛ばす
+
+
+def test_the_diff_below_the_scissors_is_not_part_of_the_message(checker, tmp_path):
+    """`git commit -v` の差分（はさみ線の下）は見ない。語を消すコミットを止めない（指摘2）。"""
+    module, _, terms = checker
+    message = tmp_path / "MSG"
+    scissors = "# ------------------------ >8 ------------------------"
+    message.write_text(
+        "#77 消す\n# Please enter the commit message for your changes. Lines starting\n"
+        f"# On branch 山田\n{scissors}\n-山田太郎\n+${{PERSON_1}}\n",
+        encoding="utf-8",
+    )
+    assert module.main(["--terms", str(terms), "--message", str(message)]) == 0
+
+    # -m で渡した1行目（# で始まる）は落とさない
+    message.write_text(f"#77 山田太郎を消す\n{scissors}\n", encoding="utf-8")
+    assert module.main(["--terms", str(terms), "--message", str(message)]) == 1
+
+
+def test_a_broken_list_does_not_print_its_terms(checker, tmp_path, capsys):
+    """壊れた YAML のエラーに語を出さない。位置だけを出して止める（指摘3）。"""
+    module, _, _ = checker
+    broken = tmp_path / "broken.yml"
+    broken.write_text('terms:\n  - {text: "山田太郎", replace: "${PERSON_1}"\n', encoding="utf-8")
+
+    assert module.main(["--terms", str(broken)]) == 1
+
+    out = capsys.readouterr().out
+    assert "読めません" in out and "行目" in out
+    assert "山田" not in out
