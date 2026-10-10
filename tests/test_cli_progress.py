@@ -100,20 +100,33 @@ def test_a_step_without_counts_hides_them():
     assert render_terminal(stream.getvalue())[0] == "VACUUM を実行しています: [--------------------]   0%"
 
 
-def test_kept_lines_are_cut_to_the_terminal_width():
+def test_kept_lines_are_not_cut_and_leave_no_old_lines():
+    """残す行は切らない。折り返しても、そのあとの書き直しで古い行は残らない。
+
+    控えのパスや「触らなかったファイル」のパスは、ほかに記録が無い（PR #81 のレビュー指摘1）。
+    """
     stream, display = _terminal(width=40)
-    display.update(1, 2, "a.jpg", prefix="Restoring")
+    display.update(1, 4, "a.jpg", prefix="Restoring")
     display.keep(f"  触らない: JPEG がすでに EXIF を持つ: {LONG_NAME}")
+    for current in (2, 3):
+        display.update(current, 4, LONG_NAME, prefix="Restoring")
 
     screen = render_terminal(stream.getvalue(), width=40)
 
-    assert len(screen) == 3
-    assert all(display_width(line) < 40 for line in screen)
-    assert screen[0].endswith("...")
+    assert LONG_NAME in "".join(screen)
+    # 書き直す2行は幅で切られ、末尾に1組だけ残る
+    assert screen[-2:] == [
+        fit("Restoring: [###############-----]  75% (3/4)", 39),
+        fit(LONG_NAME, 39),
+    ]
+    assert sum(line.startswith("Restoring:") for line in screen) == 1
 
 
 def test_fit_counts_wide_characters_as_two_columns():
     assert display_width("穂高") == 4
+    # 曖昧幅は全角で描く端末があるので2桁（PR #81 のレビュー指摘2）。ASCII は1桁のまま
+    assert display_width("①※×…") == 8
+    assert display_width("IMG_0001.jpg") == 12
     assert fit("穂高ハイキング", 9) == "穂高ハ..."
     assert display_width(fit("穂高ハイキング", 9)) <= 9
     assert fit("de\ntail", 20) == "de tail"

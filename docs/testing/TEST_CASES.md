@@ -776,8 +776,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_finished_step_leaves_only_its_bar` | 段が終わるとバーの行だけ残り、次の段はその下 |
 | `test_counting_without_a_total_shows_how_many_were_found` | 総数の分からない段は件数を出す |
 | `test_a_step_without_counts_hides_them` | 始めと終わりしか分からない段に `(0/1)` を出さない |
-| `test_kept_lines_are_cut_to_the_terminal_width` | 残す行も端末の幅で切る |
-| `test_fit_counts_wide_characters_as_two_columns` | 全角は2桁で数え、改行は空白にする |
+| `test_kept_lines_are_not_cut_and_leave_no_old_lines` | **残す行は切らない**（控えのパスなど、ほかに記録が無い。PR #81 のレビュー指摘1）。折り返しても古い行は残らない |
+| `test_fit_counts_wide_characters_as_two_columns` | 全角と曖昧幅（`①` `※` など）は2桁で数え、改行は空白にする |
 | `test_without_a_terminal_no_escape_codes_are_written` | 端末でなければエスケープを書かない |
 | `test_emit_progress_keeps_the_error_it_is_given` | CLI の呼び出し口は、渡されたエラーを1度だけ残す |
 | `test_resetting_forgets_the_previous_error` | 次のコマンドでは同じエラーをもう一度残す |
