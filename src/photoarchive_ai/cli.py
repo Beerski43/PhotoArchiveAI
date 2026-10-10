@@ -586,10 +586,10 @@ def main() -> None:
 
             converted = skipped = 0
             try:
-                for source_root in source_roots:
+                for root in source_roots:
                     _reset_progress_state()
                     done, already = convert_heic_files(
-                        source_root,
+                        root,
                         progress_callback=lambda current, total, detail: _emit_progress(
                             current, total, detail, prefix="Converting"
                         ),

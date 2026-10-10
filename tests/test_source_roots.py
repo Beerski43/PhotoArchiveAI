@@ -291,7 +291,7 @@ def test_with_one_root_the_folder_is_shown_as_before(tmp_path):
 
     assert photo_label(photo / "2021", [str(photo)]) == "2021"
     assert photo_label(photo / "2021", str(photo)) == "2021"
-    assert photo_label(photo, [str(photo)]) == "（source_root 直下）"
+    assert photo_label(photo, [str(photo)]) == "（root 直下）"
 
 
 def photo_label(folder, roots):
@@ -313,7 +313,7 @@ def test_the_window_falls_back_to_the_roots_recorded_in_the_database(tmp_path):
 
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        assert window.source_root == [str(tmp_path / "Photo"), str(tmp_path / "phone")]
+        assert window.source_roots == [str(tmp_path / "Photo"), str(tmp_path / "phone")]
     finally:
         window.connection.close()
 

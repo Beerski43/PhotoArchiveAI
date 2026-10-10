@@ -134,7 +134,7 @@ source_roots:
   - ${NFS_ROOT}/share/photo/person2Temp/${PERSON_2}携帯
 ```
 
-**共通の親（`${NFS_ROOT}`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つ）もそのまま読みます。
+**共通の親（`${NFS_ROOT}`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つだけのキー）は読みません。残っていれば警告を出すので、`source_roots:` に書き直してください。
 
 **設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身は YAML として読めるので、**空白で字下げしていれば** `mv config/app_settings.json config/app_settings.yml` でも移れます（タブで字下げしていると読めません）（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
 

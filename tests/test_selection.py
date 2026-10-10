@@ -114,13 +114,13 @@ def test_select_media_filters_by_rule(tmp_path: Path):
     assert selected[0]["path"] == media_record_photo["path"]
 
     output_dir = tmp_path / "output"
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    (source_root / "2025").mkdir()
-    source_file = source_root / media_record_photo["path"]
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "2025").mkdir()
+    source_file = root / media_record_photo["path"]
     source_file.write_text("dummy")
 
-    copied = copy_selected_media(selected, str(output_dir), str(source_root))
+    copied = copy_selected_media(selected, str(output_dir), str(root))
     assert copied == 1
     expected_output_file = output_dir / "2025" / source_file.name
     assert expected_output_file.exists()
@@ -382,30 +382,30 @@ def test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates(conne
     assert sorted(media["path"] for media in selected) == ["by-created.jpg", "dated.jpg"]
 
 
-def test_copy_keeps_the_layout_below_the_source_root(tmp_path: Path):
-    source_root = tmp_path / "src"
-    (source_root / "2019" / "trip").mkdir(parents=True)
-    (source_root / "2019" / "trip" / "photo.jpg").write_text("a", encoding="utf-8")
+def test_copy_keeps_the_layout_below_the_root(tmp_path: Path):
+    root = tmp_path / "src"
+    (root / "2019" / "trip").mkdir(parents=True)
+    (root / "2019" / "trip" / "photo.jpg").write_text("a", encoding="utf-8")
     output = tmp_path / "out"
 
     copied = copy_selected_media(
-        [{"path": "2019/trip/photo.jpg"}], str(output), str(source_root)
+        [{"path": "2019/trip/photo.jpg"}], str(output), str(root)
     )
 
     assert copied == 1
     assert (output / "2019" / "trip" / "photo.jpg").exists()
 
 
-def test_copy_flattens_media_that_lives_outside_the_source_root(tmp_path: Path):
-    source_root = tmp_path / "src"
-    source_root.mkdir()
+def test_copy_flattens_media_that_lives_outside_the_root(tmp_path: Path):
+    root = tmp_path / "src"
+    root.mkdir()
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     (outside / "stray.jpg").write_text("a", encoding="utf-8")
     output = tmp_path / "out"
 
     copied = copy_selected_media(
-        [{"path": str(outside / "stray.jpg")}], str(output), str(source_root)
+        [{"path": str(outside / "stray.jpg")}], str(output), str(root)
     )
 
     assert copied == 1
@@ -413,15 +413,15 @@ def test_copy_flattens_media_that_lives_outside_the_source_root(tmp_path: Path):
 
 
 def test_copy_skips_entries_without_a_path_and_reports_progress(tmp_path: Path):
-    source_root = tmp_path / "src"
-    source_root.mkdir()
-    (source_root / "photo.jpg").write_text("a", encoding="utf-8")
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "photo.jpg").write_text("a", encoding="utf-8")
     seen = []
 
     copied = copy_selected_media(
         [{"path": None}, {"path": "photo.jpg"}],
         str(tmp_path / "out"),
-        str(source_root),
+        str(root),
         progress_callback=lambda *args: seen.append(args),
     )
 
@@ -430,16 +430,16 @@ def test_copy_skips_entries_without_a_path_and_reports_progress(tmp_path: Path):
 
 
 def test_copy_makes_room_when_the_name_is_taken(tmp_path: Path):
-    source_root = tmp_path / "src"
-    (source_root / "a").mkdir(parents=True)
-    (source_root / "b").mkdir()
-    (source_root / "a" / "photo.jpg").write_text("a", encoding="utf-8")
-    (source_root / "b" / "photo.jpg").write_text("b", encoding="utf-8")
+    root = tmp_path / "src"
+    (root / "a").mkdir(parents=True)
+    (root / "b").mkdir()
+    (root / "a" / "photo.jpg").write_text("a", encoding="utf-8")
+    (root / "b" / "photo.jpg").write_text("b", encoding="utf-8")
     output = tmp_path / "out"
 
     copied = copy_selected_media(
-        [{"path": str(source_root / "a" / "photo.jpg")},
-         {"path": str(source_root / "b" / "photo.jpg")}],
+        [{"path": str(root / "a" / "photo.jpg")},
+         {"path": str(root / "b" / "photo.jpg")}],
         str(output),
         str(tmp_path / "unrelated"),
     )
