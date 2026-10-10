@@ -67,6 +67,14 @@ def insert_exif(data: bytes, exif: bytes) -> bytes:
     return data[:at] + segment + data[at:]
 
 
+def strip_exif(data: bytes) -> bytes:
+    """`insert_exif` の逆。最初の EXIF（APP1）を取り除いたバイト列。無ければそのまま。"""
+    for marker, start, end in _jpeg_segments(data):
+        if marker == _APP1 and data[start + 4 : start + 10] == _EXIF_HEADER:
+            return data[:start] + data[end:]
+    return data
+
+
 # 同じ写真とみなす、縮小画素の差の平均（0〜255）の上限（#79）。
 # JPEG は非可逆なので、同じ写真から作っても画素は完全には一致しない。
 # 実データでは同じ写真が最大 0.14、連写の別写真が最小 2.37 だった
