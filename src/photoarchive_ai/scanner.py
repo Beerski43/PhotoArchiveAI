@@ -18,7 +18,7 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from PIL import ExifTags, Image
 
@@ -27,7 +27,12 @@ from .logging_setup import setup_logging
 
 logger = logging.getLogger("photoarchive.scanner")
 
-IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "heic", "heif"}
+#: **HEIC/HEIF は入れない**（#26）。`convert-heic` で JPEG にしてから走査する。
+#: 両方を入れると、変換後に同じ写真が二重に登録され、同じ顔が二度検出される
+#: （ハッシュが違うので重複排除も効かない）。
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
+#: 走査しないが、JPEG に変換されていないものを知らせるために見る拡張子。
+HEIC_EXTENSIONS = {"heic", "heif"}
 VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 COMMIT_INTERVAL = 50
@@ -93,10 +98,34 @@ def extract_exif_datetime(path: Path) -> Optional[str]:
     return None
 
 
-def iter_media_files(root: Path) -> Generator[Path, None, None]:
+def _walk(root: Path) -> Tuple[List[Path], List[Path]]:
+    """走査するメディアと、HEIC/HEIF を**1回の走査で**拾う（NFS を二度歩かない）。"""
+    media: List[Path] = []
+    heic: List[Path] = []
     for path in root.rglob("*"):
-        if path.is_file() and is_media_file(path):
-            yield path
+        suffix = path.suffix.lower().lstrip(".")
+        if suffix in HEIC_EXTENSIONS:
+            if path.is_file():
+                heic.append(path)
+        elif suffix in IMAGE_EXTENSIONS or suffix in VIDEO_EXTENSIONS:
+            if path.is_file():
+                media.append(path)
+    return sorted(media), sorted(heic)
+
+
+def unconverted_heic(heic_files: List[Path], media_files: List[Path]) -> List[Path]:
+    """同じフォルダに同じ名前の JPEG が無い HEIC/HEIF。
+
+    走査の対象外なので、**変換しないままだと写真ごとアーカイブに入らない。**
+    `convert-heic` は同じ名前の `.jpg` を書く（中身が違う同名があれば `_1` を付ける
+    ので、その場合はここで「無い」と数える。知らせるだけで害は無い）。
+    """
+    stems = {
+        (path.parent, path.stem.lower())
+        for path in media_files
+        if path.suffix.lower().lstrip(".") in {"jpg", "jpeg"}
+    }
+    return [path for path in heic_files if (path.parent, path.stem.lower()) not in stems]
 
 
 def _mtime_matches(stored_created_time: Optional[str], mtime: float) -> bool:
@@ -307,6 +336,29 @@ def _store_result(connection, result: Dict[str, Any], record: Optional[Dict[str,
 # ---------------------------------------------------------------------------
 
 
+def _in_scope(rows, root: Path):
+    prefix = str(root) + "/"
+    return [row for row in rows if row["path"] == str(root) or row["path"].startswith(prefix)]
+
+
+def prune_excluded_types(connection, root: Path) -> int:
+    """**走査の対象外になった拡張子**の行を削除する（#26 の HEIC）。
+
+    「実体が消えた」とは別に扱い、**2割の安全弁に数えない。** 数えると、HEIC が
+    根の 33% を占める実データ（`な携帯`・2026-10-10）で必ず中断し、安全弁ごと外す
+    `--force-prune` を付けるしかなくなる。対象外の拡張子は未マウントの兆候ではない。
+    """
+    rows = connection.execute("SELECT id, path FROM Media").fetchall()
+    excluded = [row["id"] for row in _in_scope(rows, root) if not is_media_file(Path(row["path"]))]
+    if not excluded:
+        return 0
+    logger.warning(
+        "走査の対象外になった拡張子の行を %d 件削除します（HEIC は convert-heic で JPEG にしてから scan）。",
+        len(excluded),
+    )
+    return db.delete_media(connection, excluded)
+
+
 def prune_missing_media(
     connection,
     root: Path,
@@ -318,9 +370,9 @@ def prune_missing_media(
     ソースが未マウントだった場合に全消しにならないよう、削除が2割を超えたら
     中断する。
     """
-    prefix = str(root) + "/"
     rows = connection.execute("SELECT id, path FROM Media").fetchall()
-    in_scope = [row for row in rows if row["path"] == str(root) or row["path"].startswith(prefix)]
+    # 対象外の拡張子は `prune_excluded_types` の受け持ち。ここの母数にも分子にも入れない。
+    in_scope = [row for row in _in_scope(rows, root) if is_media_file(Path(row["path"]))]
     if not in_scope:
         return 0
     missing = [row["id"] for row in in_scope if row["path"] not in present_paths]
@@ -372,7 +424,7 @@ def scan_directory(
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
 
-    media_files = sorted(iter_media_files(root))
+    media_files, heic_files = _walk(root)
     if not media_files:
         raise ScanAborted(
             f"対象ディレクトリにメディアファイルが1件もありません: {root}"
@@ -427,8 +479,17 @@ def scan_directory(
         "faces": 0,
         "errors": 0,
         "pruned": 0,
+        "excluded": 0,
+        "unconverted_heic": [str(path) for path in unconverted_heic(heic_files, media_files)],
         "media_ids": [],
     }
+    if summary["unconverted_heic"]:
+        logger.warning(
+            "JPEG に変換されていない HEIC/HEIF が %d 件あります（走査しません）。"
+            " photoarchive convert-heic で変換してから scan してください。例: %s",
+            len(summary["unconverted_heic"]),
+            summary["unconverted_heic"][0],
+        )
 
     def handle(result: Dict[str, Any], position: int) -> None:
         record = records.get(result["path"])
@@ -463,6 +524,7 @@ def scan_directory(
         progress_callback(0, 0, "no media to scan")
 
     if prune:
+        summary["excluded"] = prune_excluded_types(db_connection, root)
         summary["pruned"] = prune_missing_media(
             db_connection, root, present_paths, force=force_prune
         )
@@ -548,13 +610,16 @@ def scan_directories(
         "faces": 0,
         "errors": 0,
         "pruned": 0,
+        "excluded": 0,
+        "unconverted_heic": [],
         "media_ids": [],
         "roots": [],
     }
     for root in roots:
         summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
-        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned"):
+        for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned", "excluded"):
             total[key] += summary[key]
         total["media_ids"].extend(summary["media_ids"])
+        total["unconverted_heic"].extend(summary["unconverted_heic"])
         total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})
     return total

@@ -729,6 +729,17 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_select_copies_relative_to_the_root_that_holds_each_photo` | `select` は含む root からの相対。同じ名前は連番 |
 | `test_select_copies_a_photo_outside_every_root_by_its_name` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
 
+### `test_heic_excluded.py` — scan 以降から HEIC を外す（7件。#26）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_heic_next_to_its_jpeg_is_not_registered` | HEIC は登録しない（JPEG だけ） |
+| `test_existing_heic_rows_are_removed_without_tripping_the_safety_valve` | **既存の HEIC の行は消え、根の大半でも2割の安全弁で止まらない**（実データの `な携帯` は 33%） |
+| `test_the_safety_valve_still_counts_real_files_that_vanished` | 消えた JPEG は今までどおり安全弁で止まる |
+| `test_no_prune_keeps_the_heic_rows` | `--no-prune` なら消さない |
+| `test_a_heic_without_a_jpeg_is_reported` / `test_a_jpeg_in_another_folder_does_not_count_as_converted` | 同じフォルダに同名の JPEG が無い HEIC を知らせる（大文字小文字は問わない） |
+| `test_the_scan_command_tells_how_to_convert_the_remaining_heic` | `scan` が `convert-heic` を促す |
+
 ### `test_cli_progress.py` — 進捗表示（7件）
 
 2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。

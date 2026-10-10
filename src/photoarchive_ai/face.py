@@ -37,12 +37,10 @@ from PIL import Image
 
 from . import embedding
 
-try:  # HEIC/HEIF を Pillow で開けるようにする
-    from pillow_heif import register_heif_opener
-
-    register_heif_opener()
-except Exception:  # pragma: no cover - 依存が無い環境でも検出処理は続行する
-    pass
+# **HEIC/HEIF のデコーダは登録しない**（#26）。HEIC は `convert-heic` で JPEG に
+# してから `scan` する（`scanner.IMAGE_EXTENSIONS` に入っていない）。両方を読むと、
+# 変換後に同じ写真が二重に登録され、同じ顔に二度割り当てることになる（実データで
+# HEIC 1,761 件のうち 1,758 件に同名の JPEG があり、手動割り当ても二重だった）。
 
 logger = logging.getLogger("photoarchive.face")
 
