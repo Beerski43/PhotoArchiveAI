@@ -710,6 +710,11 @@ def format_match_summary(
         lines.append(
             f"（うち、誕生日で候補が1人も残らなかった顔: {summary['no_candidate']:,} 件）"
         )
+    if summary.get("unusable_teachers"):
+        lines.append(
+            f"5点整列ができなかった手本 {summary['unusable_teachers']:,} 件は、"
+            "割り当ての根拠にしていません（2位の対抗馬としては使います）。"
+        )
     per_person = summary.get("per_person") or {}
     if per_person:
         lines.append("")

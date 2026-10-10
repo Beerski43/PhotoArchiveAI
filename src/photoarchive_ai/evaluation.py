@@ -37,6 +37,8 @@ from .matcher import (
     _distances,
     _persons_alive_at,
     _persons_not_rejected,
+    teacher_limits,
+    teacher_usable,
 )
 
 #: 既定で試す閾値。**0.45 が現在の既定値**（`embedding.ACTIVE.threshold`）。
@@ -99,6 +101,7 @@ def evaluate_match(
 
     summary: Dict[str, Any] = {
         "teachers": total,
+        "unusable_teachers": 0,
         "evaluated": 0,
         "skipped": 0,
         "skipped_per_person": {},
@@ -124,6 +127,11 @@ def evaluate_match(
 
     person_ids = faces.person_ids
     media_ids = faces.media_ids
+    # **`match` と同じく、整列できなかった手本を根拠にしない。** 未計測の手本は
+    # その場で測るが、**DB には書かない**（このモジュールの約束）。
+    usable = teacher_usable(connection, faces, write=False)
+    summary["unusable_teachers"] = int((~usable).sum())
+    limits_by_threshold = {value: teacher_limits(faces, value) for value in thresholds}
     rows_by_threshold = {row["threshold"]: row for row in summary["thresholds"]}
     # **`match` と同じ規則で絞る。** 揃えないと実測値が嘘になる（この
     # モジュールの冒頭の約束）。誕生日で候補を外すのは `match` の判断の一部で、
@@ -173,15 +181,22 @@ def evaluate_match(
             if denied is not None:
                 alive = alive & denied
             for threshold in thresholds:
+                # 年齢ごとの上限は閾値ごとに違う（閾値より緩めないので）。
+                limits = limits_by_threshold[threshold]
                 if alive.all():
                     best_person, best_distance = _best_match(
-                        row, person_ids, threshold, margin
+                        row, person_ids, threshold, margin, usable, limits
                     )
                 elif not alive.any():
                     best_person, best_distance = None, float("inf")
                 else:
                     best_person, best_distance = _best_match(
-                        row[alive], person_ids[alive], threshold, margin
+                        row[alive],
+                        person_ids[alive],
+                        threshold,
+                        margin,
+                        usable[alive],
+                        limits[alive],
                     )
                 if best_person is None:
                     outcome = MISSED
@@ -310,6 +325,11 @@ def format_report(summary: Dict[str, Any]) -> str:
     lines.append(
         f"マージン {summary['margin']}、同じ写真に写る同一人物の手本は{same_media}"
     )
+    if summary.get("unusable_teachers"):
+        lines.append(
+            f"5点整列ができなかった手本 {summary['unusable_teachers']} 件は、"
+            "割り当ての根拠にしない（match と同じ規則。2位の対抗馬としては使う）"
+        )
     if summary["skipped"]:
         detail = "、".join(
             f"{names.get(person_id, f'#{person_id}')} {count}件"

@@ -119,3 +119,119 @@ def aggregate_media_scores(
     smile = max(score[0] for score in face_scores)
     quality = max(score[1] for score in face_scores)
     return smile, quality
+
+
+# ---------------------------------------------------------------------------
+# 家族写真としての良さ（`select` の並び。#66 と同じブランチで、利用者の要望）
+# ---------------------------------------------------------------------------
+#
+# 利用者「せっかく本人が映ってる写真を select で選んでくれてても、ぼやけてたら
+# 意味ないでしょ？」「select でも家族の写真としてスコアの高いものを選んでほしい」。
+#
+# **写真のスコアは家族の顔だけから作る。** 以前は写真の笑顔・画質を「写っている
+# 顔の最良値」で持っていたので、隣の他人がくっきり笑っていれば、ボケた家族の
+# 写真が上位に来た。
+#
+# 重く見るものは利用者が選んだ（2026-10-09）: **ボケていない・正面・笑顔**。
+# 家族が何人も写っている写真は優先する。**ただしボケた家族の顔は人数に数えない。**
+#
+# 目盛りは実データの手本 10,701 件を目で見て決めた（鮮明さ・向きの帯ごとに
+# サムネイルを並べた。docs/history/details/2026-10-09-age-threshold-measured.md）。
+
+#: 鮮明さ（`appearance.sharpness_of`）がこれ以下なら 0。**はっきりボケている。**
+SHARPNESS_BLURRY = 30.0
+#: これ以上なら 1。**くっきりしている。** 赤ちゃんの肌はなめらかで、ピントが
+#: 合っていても値が低めに出る（75〜110 の帯はピントの合った赤ちゃんが多い）ので、
+#: 上限を高くしすぎない。間は対数で結ぶ。
+SHARPNESS_CRISP = 150.0
+#: 向き（`appearance.yaw_from_points`）がこれ以下なら正面（1）。
+YAW_FRONTAL = 0.1
+#: これ以上なら横顔（0）。0.45 を超えるとほぼ横顔だった。
+YAW_PROFILE = 0.6
+#: 重み。**笑顔はいちばん軽い。** `estimate_smile_score` は実データの家族の顔で
+#: 73% が 100、19% が 0 に張り付いており、見分ける力が弱い。
+WEIGHT_SHARPNESS = 0.40
+WEIGHT_FRONTAL = 0.35
+WEIGHT_SMILE = 0.25
+#: 「はっきり写った家族」と数える鮮明さ（0〜1）の下限。30→0・150→1 の対数目盛りで
+#: 約 57。整列できない顔（横顔・見切れ）も数えない。
+CLEAR_SHARPNESS = 0.4
+#: はっきり写った家族が1人増えるごとの加点。
+MEMBER_BONUS = 10.0
+#: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
+UNKNOWN = 0.5
+
+
+def sharpness_level(sharpness: Optional[float]) -> float:
+    """鮮明さを 0〜1 に直す（対数目盛り）。未計測は `UNKNOWN`。"""
+    if sharpness is None:
+        return UNKNOWN
+    if sharpness <= SHARPNESS_BLURRY:
+        return 0.0
+    if sharpness >= SHARPNESS_CRISP:
+        return 1.0
+    return float(
+        np.log(sharpness / SHARPNESS_BLURRY) / np.log(SHARPNESS_CRISP / SHARPNESS_BLURRY)
+    )
+
+
+def frontal_level(aligned: Optional[int], yaw: Optional[float]) -> float:
+    """正面らしさを 0〜1 に直す。**整列できない顔は 0**（横顔・見切れ）。未計測は `UNKNOWN`。"""
+    if aligned is None:
+        return UNKNOWN
+    if not aligned or yaw is None:
+        return 0.0
+    if yaw <= YAW_FRONTAL:
+        return 1.0
+    if yaw >= YAW_PROFILE:
+        return 0.0
+    return 1.0 - (yaw - YAW_FRONTAL) / (YAW_PROFILE - YAW_FRONTAL)
+
+
+def family_face_score(
+    aligned: Optional[int],
+    yaw: Optional[float],
+    sharpness: Optional[float],
+    smile: Optional[float],
+) -> float:
+    """家族の顔1つの良さ（0〜100）。"""
+    smile_level = UNKNOWN if smile is None else max(0.0, min(1.0, smile / 100.0))
+    return 100.0 * (
+        WEIGHT_SHARPNESS * sharpness_level(sharpness)
+        + WEIGHT_FRONTAL * frontal_level(aligned, yaw)
+        + WEIGHT_SMILE * smile_level
+    )
+
+
+def is_clear_face(aligned: Optional[int], sharpness: Optional[float]) -> bool:
+    """「はっきり写った家族」として人数に数えるか。**未計測は数えない。**"""
+    return bool(aligned) and sharpness is not None and (
+        sharpness_level(sharpness) >= CLEAR_SHARPNESS
+    )
+
+
+def family_photo_score(faces) -> float:
+    """写真1枚の家族写真としての良さ。``faces`` はその写真の**家族の顔だけ**。
+
+    いちばん良い家族の顔の点に、はっきり写った家族の人数ぶん（2人目から）
+    `MEMBER_BONUS` を足す。家族の顔が無ければ 0。
+
+    各要素は ``person_id`` / ``aligned`` / ``yaw`` / ``sharpness`` / ``smile_score``
+    を持つ辞書（`db.family_faces` の行）。
+    """
+    if not faces:
+        return 0.0
+    best = max(
+        family_face_score(face["aligned"], face["yaw"], face["sharpness"], face["smile_score"])
+        for face in faces
+    )
+    members = {face["person_id"] for face in faces if is_clear_face(face["aligned"], face["sharpness"])}
+    return best + MEMBER_BONUS * max(0, len(members) - 1)
+
+
+def family_photo_scores(rows) -> dict:
+    """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。"""
+    by_media: dict = {}
+    for row in rows:
+        by_media.setdefault(row["media_id"], []).append(row)
+    return {media_id: family_photo_score(faces) for media_id, faces in by_media.items()}
