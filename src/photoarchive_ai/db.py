@@ -2413,18 +2413,23 @@ def save_media_scores(
 
 
 def family_faces(
-    connection: sqlite3.Connection, media_ids: Optional[Sequence[int]] = None
+    connection: sqlite3.Connection,
+    media_ids: Optional[Sequence[int]] = None,
+    assign_sources: Sequence[str] = (ASSIGN_MANUAL, ASSIGN_AUTO),
 ) -> List[Dict[str, Any]]:
-    """家族の顔（手本と自動割り当て）の、写真の良さを決める列だけを読む。
+    """家族の顔（既定は手本と自動割り当て）の、写真の良さを決める列だけを読む。
 
     **サムネイルも特徴量も読まない**（数万件になるため）。
-    ``media_ids`` を渡すとその写真の顔だけ。
+    ``media_ids`` を渡すとその写真の顔だけ。``assign_sources`` で種別を絞る
+    （`select` の `include_auto_assigned: false` は手本だけ・#89）。
     """
+    sources = list(assign_sources)
     query = (
         "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness, smile_score"
-        " FROM Face WHERE person_id IS NOT NULL AND assign_source IN (?, ?)"
+        " FROM Face WHERE person_id IS NOT NULL"
+        f" AND assign_source IN ({','.join('?' for _ in sources)})"
     )
-    params: List[Any] = [ASSIGN_MANUAL, ASSIGN_AUTO]
+    params: List[Any] = sources
     if media_ids is None:
         return [dict(row) for row in connection.execute(query, params)]
     found: List[Dict[str, Any]] = []

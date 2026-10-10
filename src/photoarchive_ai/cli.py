@@ -35,6 +35,7 @@ from .progress import ProgressDisplay
 from .scanner import ScanAborted, normalize_source_roots, scan_directories
 from .selection import (
     copy_selected_media,
+    include_auto_assigned,
     load_rule,
     select_media,
     stale_assignment_notice,
@@ -646,7 +647,8 @@ def main() -> None:
                 source_roots = _source_roots(args, settings, connection)
                 if not source_roots:
                     raise SystemExit(SOURCE_ROOTS_REQUIRED)
-                notice = stale_assignment_notice(connection)
+                # 自動割り当てを使わないなら、その規則が古くても選び方に効かない（#89）
+                notice = stale_assignment_notice(connection) if include_auto_assigned(rule) else None
                 if notice:
                     print(f"注意: {notice}")
                 selected = select_media(

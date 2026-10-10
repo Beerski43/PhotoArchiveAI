@@ -35,7 +35,29 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
         ("similar_distance", similar.DEFAULT_DISTANCE),
     ):
         _rule_number(rule, key, default)
+    include_auto_assigned(rule)
     return rule
+
+
+def include_auto_assigned(rule: Dict[str, Any]) -> bool:
+    """自動割り当ての顔も家族として数えるか（#89・既定 true）。
+
+    **真偽値だけを受け付ける。** 引用符付きの ``"false"`` は文字列で、そのまま
+    使うと真として扱われ、黙って逆の結果になる。
+    """
+    value = rule.get("include_auto_assigned", True)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"ルールの include_auto_assigned は true か false で書いてください（いまの値: {value!r}）。"
+        )
+    return value
+
+
+def family_sources(rule: Dict[str, Any]) -> Tuple[str, ...]:
+    """家族の顔として数える割り当ての種別。"""
+    if include_auto_assigned(rule):
+        return (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
+    return (db.ASSIGN_MANUAL,)
 
 
 def _parse_date(value: Any) -> Optional[datetime]:
@@ -154,7 +176,9 @@ def stale_assignment_notice(connection) -> Optional[str]:
 
 
 def family_scores(
-    connection, progress_callback: Optional[Callable[[int, int, str], None]] = None
+    connection,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    assign_sources: Sequence[str] = (db.ASSIGN_MANUAL, db.ASSIGN_AUTO),
 ) -> Tuple[Dict[int, float], Dict[int, FrozenSet[int]]]:
     """写真ごとの家族写真としての良さと、写真ごとに写っている家族（人物 ID の集合）。
 
@@ -174,9 +198,12 @@ def family_scores(
     （`match` が書く `family_score` と同じもの）。
 
     見え方が未計測の家族の顔は、先に測る（初回は数分。2回目からは差分だけ）。
+    ``assign_sources`` の種別の顔だけを家族として数え、測るのもそれだけ（#89）。
     """
-    appearance.fill_missing(connection, progress_callback=progress_callback)
-    rows = db.family_faces(connection)
+    appearance.fill_missing(
+        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback
+    )
+    rows = db.family_faces(connection, assign_sources=assign_sources)
     people: Dict[int, set] = {}
     for row in rows:
         people.setdefault(row["media_id"], set()).add(row["person_id"])
@@ -260,7 +287,7 @@ def select_media(
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots or []]
     media_list = get_media_with_analysis(connection)
-    scores, family_of = family_scores(connection, progress_callback)
+    scores, family_of = family_scores(connection, progress_callback, family_sources(rule))
     for media in media_list:
         media["family_score"] = scores.get(media["id"], 0.0)
     filtered = [m for m in media_list if _passes_date_filter(m, rule)]

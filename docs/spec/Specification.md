@@ -2,7 +2,7 @@
 
 Version: 1.14
 Status: Approved
-Last Update: 2026-10-10
+Last Update: 2026-10-11
 
 各章の見出しに **実装済み / 一部実装 / 未実装** を付ける。
 未実装のものは「将来やること」であって、今できることではない。
@@ -2093,6 +2093,7 @@ count_per_year: 40
 include_video: true
 remove_duplicate: true
 remove_similar: true
+include_auto_assigned: true
 ```
 
 | キー | 既定 | 意味 | 状態 |
@@ -2100,6 +2101,7 @@ remove_similar: true
 | `date.start` / `date.end` | 制限なし | 撮影日時（無ければフォルダ名から起こした撮影時期。それも無く撮影日時が空なら作成日時）の範囲。フォルダ名の区間は**まるごと入る**ときだけ通す。**日付だけの `end` はその日の終わりまで含む**。YAML の引用符の無い日付も読む。日付が読めないメディアは範囲外（§8.4.1） | 実装済み |
 | `include_video` | `true` | 動画を含めるか | 実装済み |
 | `family_only` | `false` | 家族の顔（手本か自動割り当て）が写っているメディアだけにする | 実装済み |
+| `include_auto_assigned` | `true` | 自動割り当ての顔も家族として数えるか。`false` なら**手本だけ**で `family_only`・並び（§9.2）・連写の「同じ家族」（§11.2）を決める（自動割り当てしか無い写真は家族の写っていない写真と同じ扱い）。自動割り当ての顔の見え方も測らず、古い規則の知らせも出さない。`true` / `false` 以外（引用符付きの `"false"` など）は読むときに止める（#89） | 実装済み |
 | `remove_duplicate` | `false` | ハッシュが同じメディアを1件にまとめる（§11.1） | 実装済み |
 | `remove_similar` | `true` | 同じ場面の連写・似た写真を並びの先頭1枚にまとめる（§11.2） | 実装済み |
 | `similar_seconds` | `10` | 同じ場面の候補にする撮影日時の間隔（秒・隣どうし）。0 以上の数 | 実装済み |
