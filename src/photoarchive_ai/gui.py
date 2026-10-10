@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import clustering, db, embedding, face, matcher, migration
+from . import clustering, db, embedding, face, matcher, migration, recommend
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -90,6 +90,9 @@ SCOPE_UNASSIGNED = "unassigned"
 SCOPE_AUTO = "auto"
 SCOPE_REJECTED = "rejected"
 SCOPE_PERSON = "person"
+#: 人物を選び、種別を「未割当」にしたとき（#69）。**左の一覧の項目ではない**
+#: （`_view_key` が作る）。並びの既定と、意味を持たない並びを決めるのに使う。
+SCOPE_PERSON_UNASSIGNED = "person_unassigned"
 
 #: 一覧の項目が持つ「表示」と「説明」。
 #:
@@ -119,12 +122,22 @@ VIEW_SCOPES = (
     ),
 )
 
-#: 並び順の選択肢。``(表示名, db の並び)``。
+#: 並び順の選択肢。``(表示名, 並び)``。
+#:
+#: **向きは対にして隣に置く**（#69 のコメント「高い順という選択があるなら
+#: 低い順もあるべき」）。値を持たない顔はどちらの向きでも最後。
+#: 「似た順」は db では並べられない（手本との距離が要る。`recommend`）。
 ORDER_CHOICES = (
     ("撮影日時の新しい順", db.ORDER_SHOT_DESC),
+    ("撮影日時の古い順", db.ORDER_SHOT_ASC),
     ("年齢の若い順", db.ORDER_AGE),
+    ("年齢の高い順", db.ORDER_AGE_DESC),
     ("自動の確信度が低い順", db.ORDER_SCORE_ASC),
+    ("自動の確信度が高い順", db.ORDER_SCORE_DESC),
     ("画質の高い順", db.ORDER_QUALITY),
+    ("画質の低い順", db.ORDER_QUALITY_ASC),
+    ("この人物に似た順", recommend.ORDER_SIMILAR),
+    ("この人物に似ていない順", recommend.ORDER_DISSIMILAR),
 )
 
 #: 表示ごとの既定の並び。**その表示で何をするかで決まる。**
@@ -134,11 +147,14 @@ ORDER_CHOICES = (
 #: - 自動割当: 確信度の低い順。**誤りに早く当たる**
 #: - 人物: 年齢の若い順。**成長の順に並ぶ**ので、年齢の入れ間違いや
 #:   別人の混入に気づきやすい（#53）
+#: - 人物の未割当: この人物に似た順。**本人を目で探さずに済む**（#69。
+#:   2026-10-08 の測定で、本人の 94.0% が1ページ目に入った）
 DEFAULT_ORDER = {
     SCOPE_UNASSIGNED: db.ORDER_SHOT_DESC,
     SCOPE_AUTO: db.ORDER_SCORE_ASC,
     SCOPE_REJECTED: db.ORDER_SHOT_DESC,
     SCOPE_PERSON: db.ORDER_AGE,
+    SCOPE_PERSON_UNASSIGNED: recommend.ORDER_SIMILAR,
 }
 
 #: 表示ごとに**意味を持たない並び**と、その理由。押せなくして理由を出す。
@@ -147,14 +163,34 @@ DEFAULT_ORDER = {
 #: 未割当と除外済みの顔は人物が決まっていないので年齢を出せず、確信度も
 #: 持たない（実データの未割当 31,275 件で、年齢は 2 件・確信度は 0 件）。
 #: 選べると **id 順のまま何も変わらず**、並べ替えが壊れているように見える。
+_NO_PERSON_TO_COMPARE = (
+    "似ているかを比べる人物がいません。左で人物を選んでください"
+    "（未割当の顔は、人物を選んで種別を「未割当」にすると似た順に並びます）"
+)
 ORDER_UNUSABLE = {
     SCOPE_UNASSIGNED: {
         db.ORDER_AGE: "未割当の顔は人物が決まっていないので、年齢を出せません",
+        db.ORDER_AGE_DESC: "未割当の顔は人物が決まっていないので、年齢を出せません",
         db.ORDER_SCORE_ASC: "未割当の顔は自動割り当ての確信度を持ちません",
+        db.ORDER_SCORE_DESC: "未割当の顔は自動割り当ての確信度を持ちません",
+        recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
+        recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
+    },
+    SCOPE_AUTO: {
+        recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
+        recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
     },
     SCOPE_REJECTED: {
         db.ORDER_AGE: "除外した顔は人物を持たないので、年齢を出せません",
+        db.ORDER_AGE_DESC: "除外した顔は人物を持たないので、年齢を出せません",
         db.ORDER_SCORE_ASC: "除外した顔は自動割り当ての確信度を持ちません",
+        db.ORDER_SCORE_DESC: "除外した顔は自動割り当ての確信度を持ちません",
+        recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
+        recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
+    },
+    SCOPE_PERSON_UNASSIGNED: {
+        db.ORDER_SCORE_ASC: "未割当の顔は自動割り当ての確信度を持ちません",
+        db.ORDER_SCORE_DESC: "未割当の顔は自動割り当ての確信度を持ちません",
     },
 }
 
@@ -937,6 +973,15 @@ SOURCE_FILTERS = (
     ("自動のみ", db.ASSIGN_AUTO),
 )
 
+#: 手本の無い人物で「似た順」を選んだときに、ページの表示に添える。
+NO_TEACHERS_NOTICE = "※ この人物には手本が無いので、似た順に並べられません（id 順）"
+
+#: 種別の選択肢に足す「未割当」（#69）。**その人物の候補を探す入口。**
+#: 人物を選んでいるので「この人物に似た順」に並べられる。誕生前の写真と、
+#: この人物ではないと記録した顔は出さない（候補になりえない）。
+#: `SOURCE_FILTERS` の `None`（＝種別で絞らない）と取り違えないよう別に持つ。
+UNASSIGNED_FOR_PERSON_FILTER = "未割当"
+
 #: 種別の選択肢に足す「この人物ではない」。**`assign_source` の値ではない**
 #: （`FaceRejection` 表に持つ否定）ので、`SOURCE_FILTERS` とは別に持つ。
 #: 押し間違いを見直して取り消すための入口。
@@ -1587,6 +1632,11 @@ class MainWindow(QWidget):
         self.event: Optional[tuple] = None
         #: 1〜9 の打鍵で割り当てる人物（左の一覧の並び順）。
         self.assign_actions: List[QAction] = []
+        #: 「この人物に似た順」の距離。**ページ送りのあいだ持ち続ける**（#69）。
+        #: 人物を選び直したら作り直す（`_similarity_for`）。
+        self.similarity: Optional[recommend.PersonSimilarity] = None
+        #: 直前に並べたとき、根拠にした手本の件数。0 なら似た順に並べられていない。
+        self.similarity_teachers: Optional[int] = None
 
         person_panel = self._build_person_panel()
         face_panel = self._build_face_panel()
@@ -1666,7 +1716,9 @@ class MainWindow(QWidget):
             "年齢は**画面に出ている年齢**（確定値か、誕生日から計算した値）で並べる。\n"
             "表示を切り替えると、その表示に向いた順に戻る"
             "（未割当は撮影日時の新しい順、自動割当は確信度の低い順、"
-            "人物は年齢の若い順）。"
+            "人物は年齢の若い順、人物の未割当はこの人物に似た順）。\n"
+            "「この人物に似た順」は、その人物の手本との距離で並べる"
+            "（5点整列ができなかった手本は使わない）。"
         )
         self.order_box.currentIndexChanged.connect(self._reset_page)
 
@@ -1717,6 +1769,7 @@ class MainWindow(QWidget):
         self.source_box = QComboBox()
         for label, _ in SOURCE_FILTERS:
             self.source_box.addItem(label)
+        self.source_box.addItem(UNASSIGNED_FOR_PERSON_FILTER)
         self.source_box.addItem(NOT_THIS_PERSON_FILTER)
         self.source_box.currentIndexChanged.connect(self._source_changed)
 
@@ -2070,16 +2123,27 @@ class MainWindow(QWidget):
         """
         scope = self._current_scope()
         self.person_filter_row.setVisible(scope == SCOPE_PERSON)
+        if scope != getattr(self, "_synced_scope", None):
+            self._synced_scope = scope
+            if scope == SCOPE_PERSON:
+                # 人物を選び直したら種別は「すべて」から見る。
+                blocked = self.source_box.blockSignals(True)
+                try:
+                    self.source_box.setCurrentIndex(0)
+                finally:
+                    self.source_box.blockSignals(blocked)
+        # **並びの既定は「見ているもの」で決める**（種別の「未割当」も含む）。
+        view = self._view_key()
         # **意味を持たない並びは押せなくする**（`ORDER_UNUSABLE`）。
-        unusable = ORDER_UNUSABLE.get(scope, {})
+        unusable = ORDER_UNUSABLE.get(view, {})
         choices = self.order_box.model()
         for index, (_, value) in enumerate(ORDER_CHOICES):
             item = choices.item(index)
             item.setEnabled(value not in unusable)
             item.setToolTip(unusable.get(value, ""))
-        if scope != getattr(self, "_synced_scope", None):
-            self._synced_scope = scope
-            order = DEFAULT_ORDER[scope]
+        if view != getattr(self, "_synced_view", None):
+            self._synced_view = view
+            order = DEFAULT_ORDER[view]
             index = next(
                 (i for i, (_, value) in enumerate(ORDER_CHOICES) if value == order), 0
             )
@@ -2088,13 +2152,6 @@ class MainWindow(QWidget):
                 self.order_box.setCurrentIndex(index)
             finally:
                 self.order_box.blockSignals(blocked)
-            if scope == SCOPE_PERSON:
-                # 人物を選び直したら種別は「すべて」から見る。
-                blocked = self.source_box.blockSignals(True)
-                try:
-                    self.source_box.setCurrentIndex(0)
-                finally:
-                    self.source_box.blockSignals(blocked)
         self._update_face_actions()
 
     def _refresh_details(self) -> None:
@@ -2316,6 +2373,10 @@ class MainWindow(QWidget):
         scope = self._current_scope()
         if self._showing_rejections():
             return (self.action_undo_rejection,)
+        if self._showing_unassigned_for_person():
+            # **割り当て先は「人物に割り当て」（1〜9）から選ぶ。** ここに並ぶのは
+            # 「この人物の候補から外す」と「誰でもない顔」。
+            return (self.action_not_this_person, self.action_reject)
         if scope == SCOPE_PERSON:
             return (
                 self.action_confirm,
@@ -2344,7 +2405,9 @@ class MainWindow(QWidget):
         person = self._current_person()
         if self.assign_actions:
             submenu = menu.addMenu(
-                ASSIGN_MENU_OTHER if person is not None else ASSIGN_MENU
+                ASSIGN_MENU_OTHER
+                if person is not None and not self._showing_unassigned_for_person()
+                else ASSIGN_MENU
             )
             submenu.setToolTipsVisible(True)
             for action in self.assign_actions:
@@ -2402,13 +2465,14 @@ class MainWindow(QWidget):
             CONFIRM_TOOLTIP_READY if has_auto else CONFIRM_TOOLTIP_BLOCKED
         )
 
+        unassigned = self._viewing_unassigned()
         self.action_unassign.setText(
             ACTION_DETACH if scope == SCOPE_PERSON else ACTION_UNASSIGN
         )
-        self.action_unassign.setEnabled(has_selection and scope != SCOPE_UNASSIGNED)
+        self.action_unassign.setEnabled(has_selection and not unassigned)
         self.action_unassign.setToolTip(
             "いま表示しているのは未割当の顔です。戻す先がありません。"
-            if scope == SCOPE_UNASSIGNED
+            if unassigned
             else "選んだ顔を未割当に戻します（除外や自動割当を取り消せます）。"
         )
 
@@ -2418,7 +2482,9 @@ class MainWindow(QWidget):
         )
         self.action_not_this_person.setEnabled(has_selection and has_owner)
         self.action_reject.setEnabled(has_selection)
-        self.action_set_age.setEnabled(has_selection and scope == SCOPE_PERSON)
+        self.action_set_age.setEnabled(
+            has_selection and scope == SCOPE_PERSON and not unassigned
+        )
         self.action_undo_rejection.setEnabled(has_selection)
 
         # 割り当て先の人物に、**選んだ顔の撮影時の年齢**を添える。
@@ -2547,9 +2613,34 @@ class MainWindow(QWidget):
             and self.source_box.currentText() == NOT_THIS_PERSON_FILTER
         )
 
+    def _showing_unassigned_for_person(self) -> bool:
+        """人物を選び、種別を「未割当」にしているか（#69）。"""
+        return (
+            self._current_scope() == SCOPE_PERSON
+            and self.source_box.currentText() == UNASSIGNED_FOR_PERSON_FILTER
+        )
+
+    def _viewing_unassigned(self) -> bool:
+        """一覧の顔が**未割当**か。左の「未割当」と、人物の種別「未割当」の両方。
+
+        **戻す先が無い・除外に確認が要らない**のはどちらも同じなので、
+        操作の可否はこれで決める。
+        """
+        return (
+            self._current_scope() == SCOPE_UNASSIGNED
+            or self._showing_unassigned_for_person()
+        )
+
+    def _view_key(self) -> str:
+        """並びの既定と、意味を持たない並びを引く鍵。"""
+        if self._showing_unassigned_for_person():
+            return SCOPE_PERSON_UNASSIGNED
+        return self._current_scope()
+
     def _source_changed(self) -> None:
-        """種別を変えたとき。**メニューの中身も変わる**（否定の一覧は別物）。"""
-        self._update_face_actions()
+        """種別を変えたとき。**メニューの中身も、並びの既定も変わる**
+        （否定の一覧は別物。「未割当」は似た順で見る）。"""
+        self._sync_view_controls()
         self._reset_page()
 
     def _current_order(self) -> str:
@@ -2567,7 +2658,15 @@ class MainWindow(QWidget):
         scope = self._current_scope()
         person = self._current_person()
         if scope == SCOPE_PERSON and person is not None:
-            if self._showing_rejections():
+            if self._showing_unassigned_for_person():
+                # **この人物の候補になりえない顔は出さない**（#69）。
+                # 誕生前の写真には写れず、「この人物ではない」は人が決めた。
+                filters = {
+                    "unassigned": True,
+                    "born_by": person.get("birth_date"),
+                    "not_rejected_for_person": person["id"],
+                }
+            elif self._showing_rejections():
                 # **この一覧の顔はその人物に割り当たっていない。**
                 # `person_id` で絞ると1件も出ない。
                 filters = {"rejected_for_person": person["id"]}
@@ -2656,7 +2755,8 @@ class MainWindow(QWidget):
         if label == "":
             self.bulk_event_button.setText("まとめて処理（この表示では無し）")
             self.bulk_event_button.setToolTip(
-                "「この人物ではない」の一覧には、まとめて効く操作がありません。"
+                "「この人物ではない」と、人物の「未割当」の一覧には、"
+                "まとめて効く操作がありません。"
             )
         else:
             self.bulk_event_button.setToolTip(
@@ -2671,7 +2771,7 @@ class MainWindow(QWidget):
         **表示を切り替えたらボタンの意味も変える。** 未割当を見ているときは
         「まとめて除外」、それ以外は「まとめて未割当へ戻す」。
         """
-        if self._showing_rejections():
+        if self._showing_rejections() or self._showing_unassigned_for_person():
             return ("", "")
         scope = self._current_scope()
         if scope == SCOPE_REJECTED:
@@ -2727,7 +2827,7 @@ class MainWindow(QWidget):
 
     def _bulk_event_action(self) -> None:
         """行事単位のまとめ処理。**表示中のページではなく行事全体に効く。**"""
-        if self.event is None or self._showing_rejections():
+        if self.event is None or self._bulk_action_labels()[0] == "":
             return
         filters = self._filter_arguments()
         with busy_cursor():
@@ -2787,26 +2887,71 @@ class MainWindow(QWidget):
 
     def reload_faces(self):
         filters = self._filter_arguments()
-        total = db.count_faces(self.connection, **filters)
-        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-        self.page = max(0, min(self.page, pages - 1))
-        records = db.list_faces(
-            self.connection,
-            with_thumbnail=True,
-            limit=PAGE_SIZE,
-            offset=self.page * PAGE_SIZE,
-            order=self._current_order(),
-            **filters,
-        )
+        order = self._current_order()
+        self.similarity_teachers = None
+        if order in recommend.ORDERS and self._current_person() is not None:
+            # **似た順は SQL で並べられない。** 条件に当たる id を全件取り
+            # （サムネイル抜き）、手本との距離で並べてから1ページ分だけ読む。
+            ordered = self._ids_by_similarity(
+                db.face_ids(self.connection, **filters),
+                descending=order == recommend.ORDER_DISSIMILAR,
+            )
+            total = len(ordered)
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            self.page = max(0, min(self.page, pages - 1))
+            start = self.page * PAGE_SIZE
+            records = db.faces_by_ids(
+                self.connection, ordered[start : start + PAGE_SIZE], with_thumbnail=True
+            )
+        else:
+            total = db.count_faces(self.connection, **filters)
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            self.page = max(0, min(self.page, pages - 1))
+            records = db.list_faces(
+                self.connection,
+                with_thumbnail=True,
+                limit=PAGE_SIZE,
+                offset=self.page * PAGE_SIZE,
+                order=order,
+                **filters,
+            )
         _fill_face_list(self.face_list, records, self._age_labels(records))
         # **桁を区切る。** 実データは万単位（未割当 31,275 件）で、
         # 区切らないと桁が読み取れない。
-        self.page_label.setText(f"{self.page + 1} / {pages:,} ページ（全 {total:,} 件）")
+        text = f"{self.page + 1} / {pages:,} ページ（全 {total:,} 件）"
+        if self.similarity_teachers == 0:
+            # **黙って id 順に並べない。** 似た順のつもりで見てしまう。
+            text += f"　{NO_TEACHERS_NOTICE}"
+        self.page_label.setText(text)
         self.prev_button.setEnabled(self.page > 0)
         self.next_button.setEnabled(self.page < pages - 1)
         # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
         # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで合わせる。
         self._update_face_actions()
+
+    def _similarity_for(self, person_id: int) -> "recommend.PersonSimilarity":
+        """選んでいる人物の距離の控え。**人物が変わったら作り直す。**"""
+        if self.similarity is None or self.similarity.person_id != int(person_id):
+            self.similarity = recommend.PersonSimilarity(person_id)
+        return self.similarity
+
+    def _ids_by_similarity(self, face_ids: List[int], descending: bool) -> List[int]:
+        """顔の id を、選んでいる人物の手本に似た順（``descending`` なら似ていない順）に。
+
+        **測っていない顔の分だけ測る**（`recommend.PersonSimilarity`）。初回は
+        実データの未割当で約3秒かかるので、進み具合を出す。
+        """
+        person = self._current_person()
+        similarity = self._similarity_for(person["id"])
+        with busy_cursor():
+            progress = WorkProgress(self, f"{person['name']} に似た顔を探しています", len(face_ids))
+            try:
+                self.similarity_teachers = similarity.update(
+                    self.connection, face_ids, progress=progress
+                )
+            finally:
+                progress.finish()
+        return recommend.rank(face_ids, similarity.distances, descending=descending)
 
     def _age_labels(self, records: List[dict]) -> Dict[int, Optional[str]]:
         """一覧の1件ごとに添える文字。**撮影時の年齢**と、必要なら人物名。
@@ -3059,7 +3204,7 @@ class MainWindow(QWidget):
     def _unassign_selected(self):
         """選んだ顔を未割当へ戻す。**除外の取り消しと割り当ての解除がこれ。**"""
         face_ids = self._selected_face_ids()
-        if not face_ids or self._current_scope() == SCOPE_UNASSIGNED:
+        if not face_ids or self._viewing_unassigned():
             return
         self._run_with_progress(
             "未割当に戻しています",
@@ -3109,7 +3254,7 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if not face_ids:
             return
-        if self._current_scope() != SCOPE_UNASSIGNED:
+        if not self._viewing_unassigned():
             if (
                 QMessageBox.question(
                     self,

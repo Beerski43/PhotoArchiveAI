@@ -76,7 +76,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（35件）
+### `test_db.py` — スキーマと永続化（38件）
 
 | テスト | 内容 |
 |---|---|
@@ -105,6 +105,9 @@
 | `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
 | `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
 | `test_the_age_order_uses_each_face_s_own_person_when_none_is_selected` | 全員ぶんの表示では、顔ごとの人物の誕生日で年齢を出して並べる |
+| `test_every_order_has_its_reverse_and_keeps_missing_values_last` | **並びにはどれも逆向きがあり、値を持たない顔はどちらの向きでも最後**（#69 のコメント） |
+| `test_unassigned_faces_shot_before_the_birth_are_left_out` | 人物の未割当から**誕生前の写真を外す。** 撮影日時が読めない顔・誕生日が読めない場合は外さない |
+| `test_unassigned_faces_marked_not_this_person_are_left_out` | 「この人物ではない」と記録した顔は**その人物の候補にだけ**出さない |
 
 ### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（23件）
 
@@ -426,6 +429,43 @@
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
 | `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
+
+### `test_recommend.py` — 顔を「この人物に似た順」に並べる（11件）
+
+**点はその人物の手本との最小距離**（#69。2026-10-08 の測定と同じ）。
+
+| テスト | 内容 |
+|---|---|
+| `test_rank_puts_faces_without_a_distance_last_in_both_directions` | 距離の無い顔は、似た順でも似ていない順でも最後 |
+| `test_nearest_distance_ignores_the_face_itself` | **自分自身は手本から外す**（確定済みの顔が全部 0 で並ばなくなるのを防ぐ） |
+| `test_nearest_distance_is_infinite_when_only_itself_is_a_teacher` | 比べる相手が自分しか居なければ距離は無い |
+| `test_nearest_distance_works_in_chunks` | 候補 × 手本の行列を塊に割っても答えが変わらない。進み具合を知らせる |
+| `test_similarity_ranks_unassigned_faces_by_the_nearest_teacher` | 平均ではなく**最も近い手本**との距離で並ぶ |
+| `test_teachers_that_could_not_be_aligned_are_not_used` | **整列できない手本は根拠にしない**（顔でないものが上位に来るのを防ぐ） |
+| `test_faces_of_another_embedding_version_are_not_compared` | **版の違う特徴量を比べない。** 特徴量の無い顔と一緒に最後へ回す |
+| `test_similarity_with_no_teachers_says_so` | 手本が0件なら0を返す（画面が「並べられない」と出す） |
+| `test_similarity_only_measures_faces_it_has_not_seen` | **ページを送るたびに計算し直さない** |
+| `test_adding_a_teacher_updates_the_ranking_without_measuring_everything_again` | 手本が増えたら、**増えた手本とだけ**比べて並びを良くする |
+| `test_removing_a_teacher_measures_everything_again` | 手本が減ったら全部測り直す（最小距離が大きくなりうる） |
+
+### `test_gui_recommend.py` — 人物の未割当を似た順に見る画面（12件）
+
+**探す時間を削るための画面**（他人の顔の 99.1% が家族の写真に混ざっていて、まとめて消せない）。
+
+| テスト | 内容 |
+|---|---|
+| `test_unassigned_faces_of_a_person_are_listed_most_similar_first` | 種別「未割当」を選ぶと、**並びを選び直さなくても**似た順に並ぶ |
+| `test_the_reverse_order_lists_the_least_similar_first` | 似ていない順 |
+| `test_faces_that_cannot_be_this_person_are_not_offered` | **誕生前の写真と「この人物ではない」と決めた顔は、どれだけ似ていても出さない** |
+| `test_a_person_without_teachers_says_the_order_is_not_by_similarity` | **手本が0件の人物では、そうと分かる表示を出す**（黙って id 順にしない） |
+| `test_assigning_from_the_list_improves_the_order_right_away` | 割り当てた顔がすぐ手本になり、次の並びに効く |
+| `test_the_similarity_is_kept_while_paging` | ページ送りで計算し直さない |
+| `test_similarity_orders_need_a_person` | 比べる人物が居ない表示では似た順を押せない。人物の未割当では確信度の並びを押せない |
+| `test_a_persons_own_faces_can_be_listed_least_similar_first` | 似ていない順で、割り当ての誤りを探せる（自分自身は手本から外す） |
+| `test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense` | 右クリックは「この人物ではない」と「誰でもない顔」。戻す先は無い |
+| `test_not_this_person_removes_the_face_from_the_candidates` | 「この人物ではない」と押した顔はその人物の候補から消える |
+| `test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation` | 未割当の除外に確認を挟まない（毎件通る操作） |
+| `test_switching_back_from_unassigned_restores_the_persons_order` | 種別を戻すと人物の既定の並び（年齢順）に戻る |
 
 ### `test_gui_match.py` — `match` を画面から流す（8件）
 
