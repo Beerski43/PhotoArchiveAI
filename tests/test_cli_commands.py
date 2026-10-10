@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from photoarchive_ai import cli, db
+from photoarchive_ai import cli, db, scanner
 from tests.helpers import write_heic, write_image
 
 
@@ -73,6 +73,105 @@ def test_migrate_reports_that_a_fresh_database_is_current(tmp_path, capsys):
     assert "photoarchive.db.bak" not in capsys.readouterr().err
 
 
+EMPTY_SCAN_SUMMARY = {
+    "total_files": 0, "processed": 0, "skipped": 0, "faces": 0, "pruned": 0, "errors": 0,
+    "media_ids": [],
+}
+
+
+def _record_scanned_roots(monkeypatch):
+    """`scan_directory` を差し替え、走査された root を順に記録する。"""
+    scanned = []
+
+    def fake_scan(source_dir, connection, **kwargs):
+        scanned.append(source_dir)
+        return dict(EMPTY_SCAN_SUMMARY)
+
+    monkeypatch.setattr(scanner, "scan_directory", fake_scan)
+    return scanned
+
+
+def test_scan_takes_several_sources_in_the_given_order(tmp_path, monkeypatch, capsys):
+    """#24: `--source` は何度でも書け、書いた順に root ごとに走査する。"""
+    first, second = tmp_path / "Photo", tmp_path / "phone"
+    first.mkdir()
+    second.mkdir()
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    scanned = _record_scanned_roots(monkeypatch)
+
+    run_cli(
+        ["scan", "--db", str(database), "--source", str(first), "--source", str(second)], tmp_path
+    )
+
+    assert scanned == [str(first.resolve()), str(second.resolve())]
+    out = capsys.readouterr().out
+    assert str(first.resolve()) in out and str(second.resolve()) in out
+
+
+def test_scan_reads_the_source_roots_from_the_settings(tmp_path, monkeypatch):
+    first, second = tmp_path / "Photo", tmp_path / "phone"
+    first.mkdir()
+    second.mkdir()
+    database = tmp_path / "photoarchive.db"
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/app_settings.yml").write_text(
+        f"database_path: {database}\nsource_roots:\n  - {first}\n  - {second}\n",
+        encoding="utf-8",
+    )
+    scanned = _record_scanned_roots(monkeypatch)
+
+    run_cli(["scan"], tmp_path)
+
+    assert scanned == [str(first.resolve()), str(second.resolve())]
+
+
+def test_scan_refuses_nested_sources_before_touching_anything(tmp_path, monkeypatch):
+    """**親と子を両方 root にしない。** 共通の親で走査すると他家の写真まで入った（2026-10-02）。"""
+    parent = tmp_path / "photo"
+    child = parent / "natsuTemp"
+    child.mkdir(parents=True)
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    scanned = _record_scanned_roots(monkeypatch)
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(
+            ["scan", "--db", str(database), "--source", str(parent), "--source", str(child)],
+            tmp_path,
+        )
+
+    assert "入れ子" in str(raised.value)
+    assert scanned == []
+
+
+def test_scan_falls_back_to_the_roots_recorded_in_the_database(tmp_path, monkeypatch, capsys):
+    """**設定を失っても、DB に記録された root で走査できる**（#24 の動機・2026-10-02）。"""
+    root = tmp_path / "Photo"
+    root.mkdir()
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+    with db.ensure_database(str(database)) as connection:
+        db.record_scan_root(connection, str(root))
+        connection.commit()
+    scanned = _record_scanned_roots(monkeypatch)
+
+    run_cli(["scan", "--db", str(database)], tmp_path)
+
+    assert scanned == [str(root.resolve())]
+    assert "DB に記録された root" in capsys.readouterr().out
+
+
+def test_scan_without_any_source_names_the_setting_to_write(tmp_path, monkeypatch):
+    database = tmp_path / "photoarchive.db"
+    run_cli(["init-db", "--db", str(database)], tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(["scan", "--db", str(database)], tmp_path)
+
+    assert "source_roots" in str(raised.value)
+
+
 def test_scan_arguments_reach_the_scanner(tmp_path, monkeypatch):
     source = tmp_path / "media"
     write_image(source / "a.jpg")
@@ -84,9 +183,9 @@ def test_scan_arguments_reach_the_scanner(tmp_path, monkeypatch):
     def fake_scan(source_dir, connection, **kwargs):
         captured["source"] = source_dir
         captured.update(kwargs)
-        return {"processed": 0, "skipped": 0, "faces": 0, "pruned": 0, "errors": 0}
+        return dict(EMPTY_SCAN_SUMMARY)
 
-    monkeypatch.setattr(cli, "scan_directory", fake_scan)
+    monkeypatch.setattr(scanner, "scan_directory", fake_scan)
     run_cli(
         [
             "scan",
@@ -101,7 +200,7 @@ def test_scan_arguments_reach_the_scanner(tmp_path, monkeypatch):
         tmp_path,
     )
 
-    assert captured["source"] == str(source)
+    assert captured["source"] == str(source.resolve())
     assert captured["workers"] == 3
     assert captured["prune"] is False
     assert captured["force_prune"] is True

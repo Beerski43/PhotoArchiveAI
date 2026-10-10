@@ -13,7 +13,7 @@ from .config import (
     get_database_path,
     get_output_root,
     get_rule_path,
-    get_source_root,
+    get_source_roots,
     legacy_settings_stop_message,
     load_settings,
 )
@@ -31,7 +31,7 @@ from .migration import (
     needs_migration,
     rebuilds_faces,
 )
-from .scanner import ScanAborted, scan_directory
+from .scanner import ScanAborted, normalize_source_roots, scan_directories
 from .selection import (
     copy_selected_media,
     load_rule,
@@ -135,7 +135,11 @@ def _build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser(
         "scan", help="Scan source media, detect faces and store them in the database."
     )
-    scan_parser.add_argument("--source", help="Source directory to scan.")
+    scan_parser.add_argument(
+        "--source",
+        action="append",
+        help="走査するディレクトリ。何度でも書ける。書けば設定の source_roots より優先。",
+    )
     scan_parser.add_argument("--db", help="SQLite database path.")
     scan_parser.add_argument(
         "--workers",
@@ -182,7 +186,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_log_level(reembed_parser)
 
     convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
-    convert_parser.add_argument("--source", help="Directory to convert recursively.")
+    convert_parser.add_argument(
+        "--source", action="append", help="変換するディレクトリ（再帰）。何度でも書ける。"
+    )
 
     match_parser = subparsers.add_parser(
         "match", help="Assign remaining faces automatically using the faces assigned in the GUI."
@@ -258,7 +264,11 @@ def _build_parser() -> argparse.ArgumentParser:
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
     select_parser.add_argument("--output", help="Output directory for selected media.")
-    select_parser.add_argument("--source", help="Source root directory for relative output paths.")
+    select_parser.add_argument(
+        "--source",
+        action="append",
+        help="コピー先の相対パスを作る root。何度でも書ける。",
+    )
 
     return parser
 
@@ -322,19 +332,48 @@ def _run_reembed(args, db_path: str) -> None:
     print("次の手順: photoarchive match で自動の紐づけをやり直してください。")
 
 
+SOURCE_ROOTS_REQUIRED = (
+    "検出元のディレクトリが必要です。--source で指定するか、"
+    "config/app_settings.yml の source_roots に書いてください。"
+)
+
+
+def _source_roots(args, settings, connection=None) -> List[str]:
+    """root を決める。``--source`` → 設定 → **DB に記録された root**（#24）の順。
+
+    最後の段は、設定ファイルを失ったとき（2026-10-02）に DB から戻すためにある。
+    記録は実際に走査した root だけなので、推定（共通の親）のような事故は起きない。
+    使ったときは何で走査するかを表示する。
+    """
+    roots = list(getattr(args, "source", None) or []) or get_source_roots(settings)
+    if roots or connection is None:
+        return roots
+    recorded = db.list_scan_roots(connection)
+    if recorded:
+        print("設定に検出元が無いため、DB に記録された root を使います:")
+        for root in recorded:
+            print(f"  {root}")
+    return recorded
+
+
 def _run_scan(args, settings) -> None:
-    source_root = getattr(args, "source", None) or get_source_root(settings)
-    if not source_root:
-        raise SystemExit("Source root is required either via --source or application settings.")
+    db_path = getattr(args, "db", None) or get_database_path(settings)
+    with ensure_database(db_path) as connection:
+        source_roots = _source_roots(args, settings, connection)
+    if not source_roots:
+        raise SystemExit(SOURCE_ROOTS_REQUIRED)
+    try:
+        normalize_source_roots(source_roots)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     log_file = Path("data/logs") / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = _setup_logging(log_file, args.log_level)
     logger.info("Scan started. Log file: %s", log_file)
     _reset_progress_state()
-    db_path = getattr(args, "db", None) or get_database_path(settings)
     try:
         with ensure_database(db_path) as connection:
-            summary = scan_directory(
-                source_root,
+            summary = scan_directories(
+                source_roots,
                 connection,
                 progress_callback=lambda current, total, detail: _emit_progress(
                     current, total, detail, prefix="Scanning", error=get_latest_error()
@@ -349,6 +388,12 @@ def _run_scan(args, settings) -> None:
             )
     except ScanAborted as error:
         raise SystemExit(f"Scan aborted: {error}") from error
+    if len(summary["roots"]) > 1:
+        for part in summary["roots"]:
+            print(
+                f"  {part['root']}: {part['processed']} scanned, {part['skipped']} skipped, "
+                f"removed {part['pruned']}"
+            )
     print(
         f"Scanned {summary['processed']} media entries "
         f"(skipped {summary['skipped']}, faces {summary['faces']}, "
@@ -529,9 +574,9 @@ def main() -> None:
 
         if args.command == "convert-heic":
             _reset_progress_state()
-            source_root = getattr(args, "source", None) or get_source_root(settings)
-            if not source_root:
-                raise SystemExit("Source root is required via --source or application settings.")
+            source_roots = _source_roots(args, settings)
+            if not source_roots:
+                raise SystemExit(SOURCE_ROOTS_REQUIRED)
 
             def confirm_write_error(path: Path, error: Exception) -> bool:
                 answer = input(
@@ -539,15 +584,20 @@ def main() -> None:
                 )
                 return answer.strip().lower() in {"y", "yes"}
 
+            converted = skipped = 0
             try:
-                converted, skipped = convert_heic_files(
-                    source_root,
-                    progress_callback=lambda current, total, detail: _emit_progress(
-                        current, total, detail, prefix="Converting"
-                    ),
-                    confirm_write_error=confirm_write_error,
-                )
-            except (OSError, PermissionError) as error:
+                for root in source_roots:
+                    _reset_progress_state()
+                    done, already = convert_heic_files(
+                        root,
+                        progress_callback=lambda current, total, detail: _emit_progress(
+                            current, total, detail, prefix="Converting"
+                        ),
+                        confirm_write_error=confirm_write_error,
+                    )
+                    converted += done
+                    skipped += already
+            except (OSError, PermissionError, ValueError) as error:
                 raise SystemExit(f"Conversion stopped: {error}") from error
             print(f"Converted {converted} files; skipped {skipped} existing files.")
             return
@@ -566,11 +616,8 @@ def main() -> None:
 
         if args.command == "select":
             _reset_progress_state()
-            source_root = getattr(args, "source", None) or get_source_root(settings)
             output_root = getattr(args, "output", None) or get_output_root(settings)
             rule_path = getattr(args, "rule", None) or get_rule_path(settings)
-            if not source_root:
-                raise SystemExit("Source root is required via application settings or --source.")
             if not output_root:
                 raise SystemExit("Output path is required via application settings or --output.")
             if not rule_path:
@@ -580,6 +627,9 @@ def main() -> None:
             except (OSError, ValueError) as error:
                 raise SystemExit(str(error)) from error
             with ensure_database(db_path) as connection:
+                source_roots = _source_roots(args, settings, connection)
+                if not source_roots:
+                    raise SystemExit(SOURCE_ROOTS_REQUIRED)
                 notice = stale_assignment_notice(connection)
                 if notice:
                     print(f"注意: {notice}")
@@ -594,7 +644,7 @@ def main() -> None:
                 copied = copy_selected_media(
                     selected,
                     output_root,
-                    source_root,
+                    source_roots,
                     progress_callback=lambda current, total, detail: _emit_progress(
                         current, total, detail, prefix="Copying"
                     ),

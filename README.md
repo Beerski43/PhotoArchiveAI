@@ -14,7 +14,7 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 
 ## 全体のフロー
 
-1. `config/app_settings.sample.yml` をコピーして `config/app_settings.yml` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
+1. `config/app_settings.sample.yml` をコピーして `config/app_settings.yml` を作成し、`database_path` / `source_roots` / `output_root` / `rule_path` を設定します。
 2. `photoarchive init-db` で SQLite データベースを初期化します。（既存のデータベースがある場合は `photoarchive migrate` を実行します。バックアップは自動で作られます）
 3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
 4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
@@ -124,7 +124,17 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 cp config/app_settings.sample.yml config/app_settings.yml
 ```
 
-必要に応じて `database_path` / `source_root` / `output_root` / `rule_path` を編集します。
+必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。
+
+**写真の置き場所（root）が複数あれば、`source_roots` に並べます**（#24）。
+
+```yaml
+source_roots:
+  - /mnt/nfs/nanoPi-NEO2/suzuki/Photo
+  - /mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯
+```
+
+**共通の親（`/mnt/nfs/nanoPi-NEO2`）を書かないでください。** 関係の無いフォルダまで取り込みます。入れ子になった root は止めます。以前の `source_root:`（1つだけのキー）は読みません。残っていれば警告を出すので、`source_roots:` に書き直してください。
 
 **設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身は YAML として読めるので、**空白で字下げしていれば** `mv config/app_settings.json config/app_settings.yml` でも移れます（タブで字下げしていると読めません）（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
 
@@ -149,7 +159,7 @@ HEIC/HEIF画像を含む場合は、スキャン前にJPEGへ変換できます�
 photoarchive convert-heic
 ```
 
-`source_root` 設定のディレクトリ以下を再帰的に処理します。別のディレクトリを指定する場合は、次のように `--source` を使用します。
+`source_roots` のディレクトリ以下を再帰的に処理します。別のディレクトリを指定する場合は、次のように `--source` を使用します（何度でも書けます）。
 
 ```bash
 photoarchive convert-heic --source /path/to/photo
@@ -192,6 +202,10 @@ photoarchive scan --force-rescan
 このオプションで取り込んだメディアは検出器の版を記録しないので、**モデルを設置したあとに通常の `photoarchive scan` を実行すれば自動でやり直されます。**`--force-rescan` は不要です（`--force-rescan` は手動で割り当てた顔も作り直してしまいます）。
 
 実体が見つからないメディアが登録数の2割を超えた場合は、ソースの指定間違いやNFSの未マウントを疑って処理を中断します。意図した削除であれば `--force-prune` を付けて再実行してください。
+
+**root が複数あれば root ごとに走査し、消えた行の削除と2割の判定も root ごとに行います。** 片方の NFS が外れていても、もう片方の写真は消えません。`--source` は何度でも書けます（`--source A --source B`）。
+
+**走査し終えた root はデータベースに記録されます。** 設定ファイルを失っても、`--source` も設定も無い `photoarchive scan` は記録された root で走査します（何を使うかを表示します）。年フォルダだけを `--source` で流しても root としては記録しません。**記録した root を内側に含む親フォルダを `--source` に渡すと、走査する前に止めます**（関係の無い写真を取り込まないため）。指定した root が1つでも無ければ、どの root も走査せずに止めます。
 
 ログは `data/logs/scan_*.log` に出力されます。ログレベルは `--log-level` で `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` を指定できます（既定は `WARNING`）。
 
