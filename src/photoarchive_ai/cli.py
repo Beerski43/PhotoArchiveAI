@@ -399,6 +399,10 @@ def _run_scan(args, settings) -> None:
         f"(skipped {summary['skipped']}, faces {summary['faces']}, "
         f"removed {summary['pruned']}, errors {summary['errors']})."
     )
+    if summary.get("excluded"):
+        print(
+            f"走査の対象外になった拡張子（HEIC など）の行を {summary['excluded']} 件削除しました。"
+        )
 
 
 def _run_match(args, db_path: str) -> None:
