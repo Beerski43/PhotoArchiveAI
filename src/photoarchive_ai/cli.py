@@ -655,6 +655,7 @@ def main() -> None:
                     progress_callback=lambda current, total, detail: _emit_progress(
                         current, total, detail, prefix="Measuring"
                     ),
+                    source_roots=source_roots,
                 )
                 _reset_progress_state()
                 try:

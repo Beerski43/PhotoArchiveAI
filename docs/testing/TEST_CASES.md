@@ -602,7 +602,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（36件）
+### `test_selection.py` — 抽出とコピー（49件）
 
 | テスト | 内容 |
 |---|---|
@@ -639,6 +639,33 @@
 | `test_an_output_inside_a_root_is_refused_before_removing_the_originals` | **出力先が root やその中なら止まる。** 直下のファイルを全部消すので、元写真が消える（2件） |
 | `test_an_output_holding_an_original_outside_every_root_is_refused` | root の外でも、選んだ写真が出力先の直下にあれば止まる |
 | `test_copy_skips_entries_without_a_path_but_keeps_their_rank` | パスが無い行を飛ばすが、順位は詰めない |
+| `test_a_burst_keeps_only_its_best_shot` | **同じ場面の連写は並びの先頭1枚だけ**。1秒後でも別の場面は残る（#86） |
+| `test_the_burst_check_can_be_turned_off` | `remove_similar: false` で束ねない |
+| `test_a_burst_counts_once_against_the_yearly_limit` | 束ねてから年ごとに数える（連写が年の枠を食わない） |
+| `test_shots_further_apart_than_the_rule_says_are_kept` | `similar_seconds` より離れて撮った写真は束ねない |
+| `test_looks_are_saved_and_not_measured_again` | 見た目は `Media.look_hash` に残し、**2回目は元写真を読まない**（NFS） |
+| `test_a_changed_file_loses_its_look` | **中身が変わったら見た目の値を消す**（読み直した行を渡されても）。更新時刻だけなら残す |
+| `test_an_unreadable_photo_is_kept_rather_than_bundled` | 測れなかった写真は束ねずに残す |
+| `test_relative_paths_are_measured_from_the_root` | 相対パスのメディアは root から解いて測る |
+| `test_a_bad_similar_setting_stops_when_the_rule_is_read` | 閾値の書き損じはルールを読む時点で止める（写真を測り始めてから止まらない。6件） |
+
+### `test_similar.py` — 連写・似た写真を束ねる（17件。#86）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_burst_shot_is_close_and_another_scene_is_far` | 連写の次の1枚は既定の距離の内側、別の場面は外側 |
+| `test_the_exif_thumbnail_is_used_without_decoding_the_photo` | **EXIF のサムネイルがあれば先頭だけで測る**（本体を切り落としたファイルでも測れる・元写真をデコードしない） |
+| `test_without_a_thumbnail_the_photo_itself_is_measured` | サムネイルが無ければ元写真を縮小して測る |
+| `test_values_from_the_thumbnail_and_the_photo_are_not_compared` | サムネイル由来と元写真由来は比べない（黒帯で距離がずれる） |
+| `test_an_unreadable_file_gives_no_value` | 壊れた・無いファイルは値なし |
+| `test_values_of_another_version_or_broken_values_are_measured_again` | 版違い・壊れた値は読み捨てる（5件） |
+| `test_a_value_round_trips` | 値の書き方と読み方が対 |
+| `test_the_moment_needs_a_readable_date_with_a_time` | 秒まで読める撮影日時だけ（壊れた EXIF・日付だけは束ねない） |
+| `test_shots_in_the_same_folder_a_few_seconds_apart_form_a_run` | 隣どうしが近ければ連なる |
+| `test_another_folder_or_other_family_members_break_the_run` | 別のフォルダ・写っている家族が違えば切れる |
+| `test_photos_without_a_time_and_videos_are_never_bundled` | 撮影時刻の無い写真と動画は束ねない |
+| `test_scenes_split_a_run_by_looks` | 見た目で場面に分ける。測れなかった写真は1枚で残る |
+| `test_a_version_7_database_gains_the_look_column_and_keeps_its_faces` | **v7 → v8 で顔を1件も失わない**（列を足すだけ） |
 
 ### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）
 

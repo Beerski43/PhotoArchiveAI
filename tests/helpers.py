@@ -1,5 +1,7 @@
 """テスト用の小さなヘルパー。"""
 
+import io
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -148,3 +150,46 @@ def render_terminal(output: str, width: int = 80) -> list:
     while text and not text[-1]:
         text.pop()
     return text
+
+
+# 連写・似た写真（#86）
+
+
+def scene(seed: int, size=(320, 240)) -> Image.Image:
+    """場面の代わり。``seed`` が同じなら同じ絵、違えば別の絵。"""
+    rng = np.random.default_rng(seed)
+    blocks = rng.integers(0, 256, size=(6, 8, 3), dtype=np.uint8)
+    return Image.fromarray(blocks).resize(size, Image.NEAREST)
+
+
+def burst_of(image: Image.Image, seed: int) -> Image.Image:
+    """同じ場面を少しだけ変えたもの（連写の次の1枚）。"""
+    rng = np.random.default_rng(seed)
+    pixels = np.asarray(image, dtype=np.int16) + rng.integers(-6, 7, size=image.size[::-1] + (3,))
+    return Image.fromarray(np.clip(pixels, 0, 255).astype(np.uint8))
+
+
+def exif_with_thumbnail(thumbnail: Image.Image) -> bytes:
+    """IFD1 に JPEG のサムネイルを持つ EXIF（カメラが書く形）。"""
+    buffer = io.BytesIO()
+    thumbnail.save(buffer, "JPEG")
+    data = buffer.getvalue()
+    # TIFF ヘッダ(8) + 空の IFD0(2+4) + 2項目の IFD1(2+12*2+4) + サムネイル
+    ifd0 = 8
+    ifd1 = ifd0 + 6
+    start = ifd1 + 2 + 12 * 2 + 4
+    tiff = b"II*\x00" + struct.pack("<I", ifd0)
+    tiff += struct.pack("<H", 0) + struct.pack("<I", ifd1)
+    tiff += struct.pack("<H", 2)
+    tiff += struct.pack("<HHII", 0x0201, 4, 1, start)
+    tiff += struct.pack("<HHII", 0x0202, 4, 1, len(data))
+    tiff += struct.pack("<I", 0)
+    return b"Exif\x00\x00" + tiff + data
+
+
+def write_photo(path: Path, image: Image.Image, thumbnail: Image.Image = None) -> str:
+    if thumbnail is None:
+        image.save(path, "JPEG", quality=95)
+    else:
+        image.save(path, "JPEG", quality=95, exif=exif_with_thumbnail(thumbnail))
+    return str(path)

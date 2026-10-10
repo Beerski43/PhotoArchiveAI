@@ -9,6 +9,7 @@
 | `db.py` | `SHOOTING_DATE_SORT_KEY`（**SQL 側の写し**。並び順のため） |
 | `scripts/measure_embedding_models.py` | 行事（フォルダ×日）の判定 |
 | `matcher.py` / `evaluation.py` | 誕生前の人物を外す・手本の年齢 |
+| `similar.py` | 連写の候補（撮影日時を秒まで・`taken_moment`） |
 
 **撮影日時が読めない写真は、フォルダ名から撮影時期を起こす**（#65・下の節）。
 EXIF 由来の値とは**混ぜない**: `Media.shooting_date` には書き戻さず、
@@ -29,7 +30,7 @@ from __future__ import annotations
 import calendar
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, Tuple, Union
 
 
@@ -227,6 +228,21 @@ def taken_at(
     if start is None or end is None or end < start:
         return None
     return Taken(start, end, True)
+
+
+def taken_moment(shooting_date: Optional[str]) -> Optional[datetime]:
+    """EXIF の撮影日時を**秒まで**読む。日付だけ・読めない値は ``None``。
+
+    連写を束ねる（`similar.candidate_runs`）のに使う。**読めるかどうかは
+    `parse_date` に預ける**（壊れた値を弾くのはあちらの役目）。フォルダ名から
+    起こした区間は秒を持たないので、ここでは見ない。
+    """
+    if parse_date(shooting_date) is None or len(str(shooting_date)) <= 10:
+        return None
+    try:
+        return datetime.fromisoformat(str(shooting_date))
+    except ValueError:
+        return None
 
 
 def _age_on(born: date, taken: date) -> int:

@@ -258,7 +258,7 @@ def test_a_version_6_database_gains_the_root_table_and_keeps_its_faces(tmp_path)
 
     raw = sqlite3.connect(str(database))
     try:
-        assert raw.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 7
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
         assert raw.execute("SELECT COUNT(*) FROM Face WHERE assign_source = 'manual'").fetchone()[0] == 2
         # **推定しない。** 次の scan が書く
         assert raw.execute("SELECT COUNT(*) FROM ScanRoot").fetchone()[0] == 0

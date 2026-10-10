@@ -340,6 +340,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `gui.py` | 人物登録と顔の割り当て画面 |
 | `cli.py` | サブコマンド定義 |
 | `selection.py` | ルールに基づく抽出とコピー |
+| `similar.py` | **連写・似た写真を束ねる**（#86）。撮影日時・フォルダ・家族で候補を絞り、見た目（dHash）で確かめる。**見た目は EXIF のサムネイル（先頭だけ）から測る** |
 | `converter.py` | HEIC/HEIF → JPEG 変換 |
 | `config.py` | 設定ファイルの探索と読み込み |
 
@@ -367,6 +368,9 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - `ScanRoot`: **走査した root**（v7・#24）。`scan` が root を走査し終えるたびに書く。
   **root を `Media.path` から推定しない**（共通の親になり、他家の写真まで入る）。
   設定に root が無いとき `scan` / `select` / GUI はこれを使う
+- `Media.look_hash`: **写真の見た目の値**（v8・#86）。NULL=未計測。`select` が候補の
+  写真だけを測って書く。**中身から測った値なので、ファイルのハッシュが変わったら
+  `save_media` が消す**（呼び出し側から受け取らない）。サムネイル由来と元写真由来は比べない
 - `Media.folder_date_from` / `folder_date_to`: **フォルダ名から起こした撮影時期**
   （月か年の区間・両端を含む。v6・#65）。**`shooting_date` に書き戻さない。**
   両方を見るときは `dates.taken_at` で `Taken` にする。`scan` と `migrate` が

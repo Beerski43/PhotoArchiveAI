@@ -2,11 +2,11 @@ import os
 import shutil
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
 import yaml
 
-from . import appearance, db, scoring
+from . import appearance, db, scoring, similar
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 
@@ -30,6 +30,11 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
         return {}
     if not isinstance(rule, dict):
         raise ValueError(f"ルールファイル {rule_path} の中身が辞書ではありません。")
+    for key, default in (
+        ("similar_seconds", similar.DEFAULT_SECONDS),
+        ("similar_distance", similar.DEFAULT_DISTANCE),
+    ):
+        _rule_number(rule, key, default)
     return rule
 
 
@@ -150,8 +155,10 @@ def stale_assignment_notice(connection) -> Optional[str]:
 
 def family_scores(
     connection, progress_callback: Optional[Callable[[int, int, str], None]] = None
-) -> Tuple[Dict[int, float], Set[int]]:
-    """写真ごとの家族写真としての良さと、家族の顔が写っている写真の集合。
+) -> Tuple[Dict[int, float], Dict[int, FrozenSet[int]]]:
+    """写真ごとの家族写真としての良さと、写真ごとに写っている家族（人物 ID の集合）。
+
+    家族の写っていない写真は2つ目の辞書に入らない（`family_only` はこれで絞る）。
 
     **いまの割り当てからその場で**計算する。
 
@@ -170,23 +177,97 @@ def family_scores(
     """
     appearance.fill_missing(connection, progress_callback=progress_callback)
     rows = db.family_faces(connection)
-    return scoring.family_photo_scores(rows), {row["media_id"] for row in rows}
+    people: Dict[int, set] = {}
+    for row in rows:
+        people.setdefault(row["media_id"], set()).add(row["person_id"])
+    family_of = {media_id: frozenset(found) for media_id, found in people.items()}
+    return scoring.family_photo_scores(rows), family_of
+
+
+def _source_path(path_value: str, root_paths: Sequence[Path]) -> Path:
+    """メディアの元のファイル。相対パスで登録されたものは先頭の root から解く。"""
+    source_path = Path(path_value)
+    if not source_path.is_absolute() and root_paths:
+        source_path = root_paths[0] / source_path
+    return source_path.resolve()
+
+
+def _rule_number(rule: Dict[str, Any], key: str, default: float) -> float:
+    """ルールの数の値。**読むとき（`load_rule`）に確かめる**ので、写真を測り始めてから止まらない。"""
+    value = rule.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"ルールの {key} は 0 以上の数で書いてください: {value!r}")
+    return value
+
+
+def _remove_similar(
+    connection,
+    ranked: List[Dict[str, Any]],
+    family_of: Dict[int, FrozenSet[int]],
+    rule: Dict[str, Any],
+    root_paths: Sequence[Path],
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> List[Dict[str, Any]]:
+    """連写・似た写真を、場面ごとに並びの先頭1枚へまとめる（#86・`similar`）。
+
+    ``ranked`` は並べ終えた一覧。**見た目は候補の写真だけを測り**、`Media.look_hash` に
+    残す（2回目からは読まない）。測れなかった写真は束ねずに残す。
+    """
+    seconds = _rule_number(rule, "similar_seconds", similar.DEFAULT_SECONDS)
+    max_distance = _rule_number(rule, "similar_distance", similar.DEFAULT_DISTANCE)
+    runs = similar.candidate_runs(ranked, family_of, seconds)
+    looks: Dict[int, Optional[str]] = {}
+    unmeasured: List[Dict[str, Any]] = []
+    for run in runs:
+        for media in run:
+            if similar.decode(media.get("look_hash")) is None:
+                unmeasured.append(media)
+            else:
+                looks[media["id"]] = media["look_hash"]
+    measured: List[Tuple[int, str]] = []
+    for done, media in enumerate(unmeasured, start=1):
+        value = similar.measure(str(_source_path(media["path"], root_paths)))
+        if value is not None:
+            looks[media["id"]] = value
+            measured.append((media["id"], value))
+        if len(measured) >= 500:
+            db.save_look_hashes(connection, measured)
+            measured = []
+        if progress_callback is not None:
+            progress_callback(done, len(unmeasured), os.path.basename(media["path"]))
+    db.save_look_hashes(connection, measured)
+
+    rank = {media["id"]: index for index, media in enumerate(ranked)}
+    dropped = set()
+    for run in runs:
+        for scene in similar.scenes(run, looks, int(max_distance)):
+            best = min(scene, key=lambda media: rank[media["id"]])
+            dropped.update(media["id"] for media in scene if media is not best)
+    return [media for media in ranked if media["id"] not in dropped]
 
 
 def select_media(
     connection,
     rule: Dict[str, Any],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    source_roots: Union[str, Sequence[str], None] = None,
 ) -> List[Dict[str, Any]]:
+    """ルールに従って写真を選び、`select` の並びで返す。
+
+    ``source_roots`` は相対パスで登録されたメディアを解くのに使う（見た目を測るとき）。
+    """
+    if isinstance(source_roots, (str, Path)):
+        source_roots = [source_roots]
+    root_paths = [Path(root).resolve() for root in source_roots or []]
     media_list = get_media_with_analysis(connection)
-    scores, with_family = family_scores(connection, progress_callback)
+    scores, family_of = family_scores(connection, progress_callback)
     for media in media_list:
         media["family_score"] = scores.get(media["id"], 0.0)
     filtered = [m for m in media_list if _passes_date_filter(m, rule)]
     if not rule.get("include_video", True):
         filtered = [m for m in filtered if m.get("type") != "video"]
     if rule.get("family_only"):
-        filtered = [m for m in filtered if m["id"] in with_family]
+        filtered = [m for m in filtered if m["id"] in family_of]
 
     filtered.sort(key=lambda m: (
         -(m.get("family_score") or 0.0),
@@ -201,6 +282,11 @@ def select_media(
             -(m.get("family_score") or 0.0),
             -(m.get("quality_score") or 0.0),
         ))[0] for group in groups.values()]
+
+    if rule.get("remove_similar", True):
+        filtered = _remove_similar(
+            connection, filtered, family_of, rule, root_paths, progress_callback
+        )
 
     count_per_year = rule.get("count_per_year")
     if count_per_year:
@@ -286,10 +372,7 @@ def copy_selected_media(
         path_value = media.get("path")
         if path_value is None:
             continue
-        source_path = Path(path_value)
-        if not source_path.is_absolute() and root_paths:
-            source_path = root_paths[0] / source_path
-        source_path = source_path.resolve()
+        source_path = _source_path(path_value, root_paths)
         entries.append((rank, output_root / _output_name(rank, width, media, source_path), source_path))
 
     _check_output_is_not_an_input(output_root, root_paths, [source for _, _, source in entries])
