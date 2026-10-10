@@ -139,7 +139,10 @@ def test_restore_counts_without_writing_by_default(scanned, capsys):
 
     assert _restore_module().main(["--db", str(database)]) == 0
 
-    assert "戻せる: 1 件" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "戻せる: 1 件" in out
+    # 進み具合を出す（端末でなければ、終わりのバーの行だけ。#78）
+    assert "Checking: [####################] 100% (1/1)" in out
     assert jpeg.read_bytes() == before
     assert _media(connection, jpeg)["shooting_date"] is None
 

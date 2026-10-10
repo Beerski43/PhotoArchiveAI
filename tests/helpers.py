@@ -100,3 +100,51 @@ def write_heic(path: Path, color=(200, 120, 90), size=(120, 120), texture_seed=N
     except Exception as error:  # pragma: no cover - 環境依存
         pytest.skip(f"HEIF の書き出しができない環境: {error}")
     return path
+
+
+def render_terminal(output: str, width: int = 80) -> list:
+    """端末に ``output`` を流したあと、画面に残る行（#78 の進捗表示を確かめるため）。
+
+    進捗表示が使うものだけを解釈する: 改行・行頭へ戻る（``\\r``）・カーソルを上げる
+    （``ESC[nA``）・行末まで消す（``ESC[K``）と、**幅を超えたときの折り返し**。
+    折り返しを写さないと、#78 の不具合（長い行が折り返して古い行が残る）は見えない。
+    全角は2桁で数える（`progress.display_width` と同じ規則）。
+    """
+    import re
+    import unicodedata
+
+    def cell_width(char):
+        return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+    rows = [[]]
+    row = col = 0
+    tokens = re.findall(r"\x1b\[(\d*)([AK])|(\r)|(\n)|(.)", output, flags=re.S)
+    for count, command, carriage, newline, char in tokens:
+        if command == "A":
+            row = max(0, row - int(count or 1))
+        elif command == "K":
+            rows[row] = rows[row][:col]
+        elif carriage:
+            col = 0
+        elif newline:
+            row += 1
+            col = 0
+        elif char:
+            size = cell_width(char)
+            if col + size > width:
+                row += 1
+                col = 0
+            while len(rows) <= row:
+                rows.append([])
+            line = rows[row]
+            while len(line) < col:
+                line.append(" ")
+            line[col : col + 1] = [char] + ([""] if size == 2 else [])
+            col += size
+            continue
+        while len(rows) <= row:
+            rows.append([])
+    text = ["".join(line).rstrip() for line in rows]
+    while text and not text[-1]:
+        text.pop()
+    return text

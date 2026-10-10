@@ -31,6 +31,7 @@ from .migration import (
     needs_migration,
     rebuilds_faces,
 )
+from .progress import ProgressDisplay
 from .scanner import ScanAborted, normalize_source_roots, scan_directories
 from .selection import (
     copy_selected_media,
@@ -51,53 +52,37 @@ def _setup_logging(log_file: Optional[Path] = None, log_level: str = "WARNING") 
     return setup_logging(log_file, log_level)
 
 
-_progress_started = False
-#: 直近に出たエラー。エラーが出ていない回で "none" に塗り潰さないために持つ。
-_last_error = ""
-#: 2行目に出せる長さ。これ以上は切る。
-ERROR_DISPLAY_LIMIT = 120
+#: いま使っている進捗表示。コマンドの入口（`_reset_progress_state`）で作り直す。
+_display = ProgressDisplay()
 
 
 def _reset_progress_state() -> None:
-    """進捗表示を最初から始める。コマンドの入口で呼ぶ。"""
-    global _progress_started, _last_error
-    _progress_started = False
-    _last_error = ""
+    """進捗表示を最初から始める。コマンドの入口と、段の切り替わりで呼ぶ。"""
+    global _display
+    _display.finish()
+    _display = ProgressDisplay()
 
 
 def _emit_progress(
     current: int,
-    total: int,
+    total: Optional[int],
     detail: str,
     prefix: str = "Progress",
     error: str = "",
 ) -> None:
-    """2行の進捗を書き換える。1行目が進捗、2行目が直近のエラー。
+    """バーと最新のメッセージの2行を書き直す（#78。中身は `progress.ProgressDisplay`）。
 
-    2行目は **直近のエラーを保持する**。エラーの出なかった回で
-    ``Error: none`` に戻すと、流れていくログの中でエラーが一瞬しか
-    見えず、何が起きたのか分からなくなる(Issue #25)。
+    ``error`` が空でなく直前と違えば、そのエラーをバーの上に1行で残す。
+    エラーの無い回に ``Error`` の語は出さない。
     """
-    global _progress_started, _last_error
-    bar_width = 20
-    percent = min(100, max(0, int(current * 100 / total))) if total > 0 else 0
-    filled = int(bar_width * current / total) if total > 0 else 0
-    bar = "#" * filled + "-" * (bar_width - filled)
-    progress_detail = str(detail).replace("\r", " ").replace("\n", " ")
-    error_detail = str(error).replace("\r", " ").replace("\n", " ")[:ERROR_DISPLAY_LIMIT]
-    if error_detail:
-        _last_error = error_detail
-    progress_line = f"{prefix}: [{bar}] {percent:3d}% ({current}/{total}) {progress_detail}"
-    error_line = f"Error: {_last_error}" if _last_error else "Error: none"
-    if _progress_started:
-        sys.stdout.write(f"\033[2A\r{progress_line}\033[K\n\r{error_line}\033[K")
-    else:
-        sys.stdout.write(f"{progress_line}\n{error_line}")
-        _progress_started = True
-    sys.stdout.flush()
-    if current >= total:
-        sys.stdout.write("\n")
-        _progress_started = False
+    if error:
+        _display.error(error)
+    _display.update(current, total, detail, prefix=prefix)
+
+
+def _keep_line(message: str) -> None:
+    """進捗の上に1行残す（移行の各段の結果など）。"""
+    _display.keep(message)
 
 
 def _add_log_level(parser: argparse.ArgumentParser) -> None:
@@ -288,11 +273,16 @@ def _run_migrate(args, db_path: str) -> None:
         answer = input("続行しますか? [y/N]: ")
         if answer.strip().lower() not in {"y", "yes"}:
             raise SystemExit("移行を中止しました。")
+    _reset_progress_state()
     migrate_database(
         db_path,
         backup_path=args.backup,
         vacuum=not args.no_vacuum,
-        log=print,
+        log=_keep_line,
+        # 段の名前をバーの行に出す（段が終わると2行目は消えるので、名前が残るように）
+        progress=lambda current, total, step: _display.update(
+            current, total, prefix=step, show_counts=total != 1
+        ),
     )
     if rebuilt:
         print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
@@ -376,8 +366,12 @@ def _run_scan(args, settings) -> None:
                 source_roots,
                 connection,
                 progress_callback=lambda current, total, detail: _emit_progress(
-                    current, total, detail, prefix="Scanning", error=get_latest_error()
+                    current, total, detail, prefix="Scanning"
                 ),
+                listing_callback=lambda current, total, detail: _emit_progress(
+                    current, total, detail, prefix="Listing"
+                ),
+                error_callback=lambda message: _display.error(message),
                 workers=max(1, args.workers),
                 log_file=str(log_file),
                 log_level=args.log_level,

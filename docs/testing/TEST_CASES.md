@@ -56,7 +56,8 @@
 | `test_scanner_incremental.py::test_a_worker_writes_its_errors_to_the_log_file` | `fork` をやめた副作用で、並列時にワーカーのログがファイルへ1行も残らなくなった（既定の経路） |
 | `test_scanner_incremental.py::test_the_workers_are_not_started_by_forking` | **並列スキャンが実データのDBを壊した。** fork した子が親の SQLite 接続を引き継ぎ、`row N missing from index idx_media_hash`（Issue #35） |
 | `test_scanner_incremental.py::test_a_worker_does_not_inherit_what_the_parent_put_in_memory` | 上と同じ原因を、子が親の状態を引き継いでいないかという側から押さえる |
-| `test_cli_progress.py::test_progress_keeps_the_last_error_instead_of_overwriting_it` | `Error: none` が直近のエラーを塗り潰した（Issue #25） |
+| `test_cli_progress.py::test_an_error_stays_above_the_bar` | `Error: none` が直近のエラーを塗り潰した（Issue #25）。#78 からはエラーをバーの上に残す |
+| `test_cli_progress.py::test_long_names_do_not_leave_old_lines_behind` | 長いファイル名でバーの行が折り返し、書き直すたびに `Error: none` が1行ずつ残った（Issue #78） |
 | `test_cli_commands.py::test_convert_heic_does_not_need_a_database` | DB を使わないコマンドが DB パスを要求して落ちた |
 | `test_scanner_incremental.py::test_faces_stored_without_embeddings_are_picked_up_once_the_model_returns` | `--allow-missing-embeddings` で入れた顔が、モデル設置後も回収されなかった |
 | `test_pytest_summary.py::test_the_counts_survive_the_colours_pytest_adds_on_a_terminal` | **回帰テストの集計行が、端末で実行すると必ず `0 passed / 0 failed` になっていた**（しかも成功に見えた） |
@@ -760,11 +761,29 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_folder_of_only_heic_is_treated_as_having_no_media` | **scan は HEIC を一切見ない。** HEIC だけのフォルダは「メディアが1件も無い」で止まる（PR #76 のレビューで利用者が決めた） |
 | `test_heic_rows_are_not_counted_by_the_missing_file_check_on_its_own` | `prune_missing_media` 単体でも HEIC の行を安全弁に数えない（PR #76 のレビュー指摘4） |
 
-### `test_cli_progress.py` — 進捗表示（7件）
+### `test_cli_progress.py` — 進捗表示（13件）
 
-2行の書き換え、直近のエラーの保持、長いエラーの切り詰め、改行の潰し。
+**画面に何が残るか**を、端末の写し（`tests/helpers.py` の `render_terminal`。カーソル移動・行の消去・
+**幅での折り返し**を解釈する）で確かめる。出力の文字列を見るだけでは、折り返しで古い行が残る
+不具合（#78）は見えない。
 
-### `test_migration.py` — スキーマの移行（25件）
+| テスト | 内容 |
+|---|---|
+| `test_long_names_do_not_leave_old_lines_behind` | **長い日本語のファイル名で何度書き直しても、画面はバーと最新の1行だけ**（#78） |
+| `test_no_error_word_when_nothing_went_wrong` | エラーが無いときに `Error` の語を出さない（#78） |
+| `test_an_error_stays_above_the_bar` | エラーはバーの上に1行で残り、書き直しで消えない（#25 の後継） |
+| `test_the_same_error_is_kept_once` | 同じエラーは1行だけ残す |
+| `test_a_finished_step_leaves_only_its_bar` | 段が終わるとバーの行だけ残り、次の段はその下 |
+| `test_counting_without_a_total_shows_how_many_were_found` | 総数の分からない段は件数を出す |
+| `test_a_step_without_counts_hides_them` | 始めと終わりしか分からない段に `(0/1)` を出さない |
+| `test_kept_lines_are_cut_to_the_terminal_width` | 残す行も端末の幅で切る |
+| `test_fit_counts_wide_characters_as_two_columns` | 全角は2桁で数え、改行は空白にする |
+| `test_without_a_terminal_no_escape_codes_are_written` | 端末でなければエスケープを書かない |
+| `test_emit_progress_keeps_the_error_it_is_given` | CLI の呼び出し口は、渡されたエラーを1度だけ残す |
+| `test_resetting_forgets_the_previous_error` | 次のコマンドでは同じエラーをもう一度残す |
+| `test_scan_reports_listing_progress_and_file_errors` | `scan` が一覧づくりの進み具合とファイルごとのエラーを知らせる（#78） |
+
+### `test_migration.py` — スキーマの移行（27件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -795,6 +814,10 @@ editable install のときだけ出すこと（通常のインストールでは
 指定（親ディレクトリが無くても作る）と既定の日時付きの名前、
 `vacuum=False` / `make_backup=False`、進捗メッセージ、空のファイルへの
 スキーマ作成、存在しないDBを指したときのエラー。
+
+**段ごとの進み具合**（#78）: 列を足す移行は控え（ページ数）・整合性・列・撮影時期を、v1 からの移行は
+作り直しと VACUUM の始めと終わりを知らせる（`test_migrate_reports_each_step_of_adding_columns`・
+`test_migrate_reports_the_rebuild_and_vacuum_of_a_v1_database`）。
 
 ### `test_embedding_measurement.py` — 特徴量モデルの比較と他人誤認率（29件＋`models` 1件）
 
@@ -943,7 +966,7 @@ import できない。子へは `worker_initializer=install_fake_backends` で�
 | FaceMesh | 既定は全ランドマークが (0.5, 0.5)。`fake_face_mesh` フィクスチャで座標を上書きすると、笑顔スコアの式を検証できる。**既定のままでは式が 0.0 の枝しか通らない** |
 | `dlib` | 顔領域の平均色から決まる128次元ベクトル。同じ色の顔は近く、違う色の顔は遠くなるので、`match` の判定を検証できる |
 | `config.REPO_ROOT` | 空のディレクトリ。開発機の `config/app_settings.yml` をテストから見えなくする |
-| `cli._progress_started` | 各テストの前後でリセット。進捗表示の大域状態がテストの順序に依存した差を作らないようにする |
+| `cli._display` | 各テストの前後で作り直す。進捗表示の大域状態（描いている行数・直前のエラー）がテストの順序に依存した差を作らないようにする |
 | `QMessageBox` | 何もしない。モーダルで止まらないようにする |
 
 `tests/helpers.py` の `write_image()` に色を指定すると「同一人物」「別人」を

@@ -62,6 +62,7 @@ from photoarchive_ai.converter import (  # noqa: E402
     strip_exif,
 )
 from photoarchive_ai.migration import backup_database  # noqa: E402
+from photoarchive_ai.progress import ProgressDisplay  # noqa: E402
 from photoarchive_ai.scanner import _mtime_matches, extract_exif_datetime  # noqa: E402
 
 _ORIENTATION = 0x0112
@@ -203,20 +204,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     connection.row_factory = sqlite3.Row
     reasons: Counter = Counter()
     restored = 0
+    # 1,758 件で NFS から HEIC と JPEG を読み比べるので数十分かかる。何も出さないと
+    # 止まって見える（#78）。触らなかったものはバーの上に残す
+    display = ProgressDisplay()
     try:
-        for media_id, jpeg, row in candidates(connection):
+        targets = list(candidates(connection))
+        for position, (media_id, jpeg, row) in enumerate(targets, start=1):
             try:
                 updated, reason = plan(row, jpeg, sibling_heic(jpeg))
             except Exception as error:
                 updated, reason = None, f"読めない（{type(error).__name__}）"
             reasons[reason] += 1
             if updated is None:
-                print(f"  触らない: {reason}: {jpeg}")
-                continue
-            if args.apply:
+                display.keep(f"  触らない: {reason}: {jpeg}")
+            elif args.apply:
                 write_and_record(connection, media_id, jpeg, updated, replace=reason == RESTORABLE)
                 restored += 1
+            display.update(
+                position, len(targets), jpeg.name, prefix="Restoring" if args.apply else "Checking"
+            )
     finally:
+        display.finish()
         connection.close()
 
     for reason, count in reasons.most_common():

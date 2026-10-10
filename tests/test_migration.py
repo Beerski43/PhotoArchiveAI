@@ -684,3 +684,38 @@ def test_the_face_order_survives_a_version_3_migration(tmp_path):
         assert names == ["父", "あい"], "移行前から居た人物が先、追加は末尾"
     finally:
         connection.close()
+
+
+def test_migrate_reports_each_step_of_adding_columns(tmp_path):
+    """列を足す移行も、段ごとに進み具合を知らせる。控えはページ数で（#78）。"""
+    database = tmp_path / "v2.db"
+    _build_v2_database(database)
+    steps = []
+
+    migrate_database(str(database), progress=lambda *args: steps.append(args))
+
+    names = [step for _, _, step in steps]
+    backup = [(done, total) for done, total, step in steps if step == "控えを作成しています"]
+    assert backup and backup[-1][0] == backup[-1][1] > 0
+    assert (1, 1, "整合性を確かめています") in steps
+    assert (1, 1, "列を足しています") in steps
+    assert (1, 1, "フォルダ名から撮影時期を起こしています") in steps
+    assert names.index("控えを作成しています") < names.index("列を足しています")
+
+
+def test_migrate_reports_the_rebuild_and_vacuum_of_a_v1_database(tmp_path):
+    """v1 からの移行は、作り直しと VACUUM の始めと終わりを知らせる（#78）。
+
+    どちらも1つの SQL 文で数分かかることがあり、何も出さないと止まって見える。
+    """
+    database = tmp_path / "legacy.db"
+    _build_legacy_database(database)
+    steps = []
+    messages = []
+
+    migrate_database(str(database), progress=lambda *args: steps.append(args), log=messages.append)
+
+    for name in ("テーブルを作り直しています", "VACUUM を実行しています"):
+        assert (0, 1, name) in steps and (1, 1, name) in steps
+    # 進捗を出すときは、VACUUM の始まりを記録の行に重ねて出さない
+    assert not any("VACUUM" in message for message in messages)
