@@ -1,0 +1,6 @@
+#!/bin/sh
+# コミットメッセージにも公開しない語を入れさせない（#77）。
+root=$(git rev-parse --show-toplevel)
+python=$root/.venv/bin/python
+[ -x "$python" ] || python=python3
+exec "$python" "$root/scripts/check_private_terms.py" --message "$1"
