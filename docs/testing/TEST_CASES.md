@@ -708,7 +708,7 @@ editable install のときだけ出すこと（通常のインストールでは
 モジュールの位置で判断する**）。同じ場所を2度並べないこと。
 検出元は `source_roots`（配列。1つなら文字列でもよく、古い `source_root` も読む。#24）。
 
-### `test_source_roots.py` — 検出元の根を複数持つ（16件。#24）
+### `test_source_roots.py` — 検出元の根を複数持つ（19件。#24）
 
 | テスト | 内容 |
 |---|---|
@@ -718,7 +718,10 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_nested_roots_are_refused` / `test_the_same_root_written_twice_is_scanned_once` | 入れ子は止める・重複は1回 |
 | `test_a_root_given_through_a_symlink_is_recorded_by_its_real_path` | 記録は実体のパス（`Media.path` とそろえる） |
 | `test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root` | 年フォルダだけの走査は根にしない |
-| `test_an_outer_root_replaces_the_inner_records` / `test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root` | 外側が内側の記録を置き換える。`/mnt/Photo2` は `/mnt/Photo` の内側ではない |
+| `test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything` | **記録済みの根を含む親は走査する前に止める**（PR #75 のレビュー (a)・利用者の決定。以前は記録が親だけに置き換わって戻らなかった） |
+| `test_a_year_folder_inside_a_recorded_root_is_still_scanned` | 止めるのは親だけ。年フォルダは通す |
+| `test_recording_an_outer_root_never_drops_the_inner_records` / `test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root` | 記録は消さない（両方残れば入れ子の検査で止まる）。`/mnt/Photo2` は `/mnt/Photo` の内側ではない |
+| `test_a_root_that_does_not_exist_stops_before_any_root_is_scanned` | **無い根があれば、どの根も走査せずに止める**（PR #75 のレビュー指摘1） |
 | `test_an_aborted_scan_does_not_record_its_root` | 中断した走査は根を書かない |
 | `test_a_version_6_database_gains_the_root_table_and_keeps_its_faces` | **v6 → v7 で顔が減らない。根は推定しない** |
 | `test_with_several_roots_the_folder_is_prefixed_with_the_root_name` / `test_with_one_root_the_folder_is_shown_as_before` | GUI の表示。根が複数なら根の名前を付ける |

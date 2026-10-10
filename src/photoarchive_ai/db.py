@@ -645,8 +645,11 @@ def record_scan_root(connection: sqlite3.Connection, root: str) -> bool:
 
     - **既存の根の内側は書かない。** 年フォルダだけを ``--source`` で流すのは
       根の一部をやり直しただけで、新しい根ではない
-    - 既存の根を内側に含む根を走査したら、内側の記録は外して外側を残す
-      （そのメディアは外側の走査で覆われている）
+    - **記録を消さない。** 既存の根を内側に含む根（親）は ``scan`` が走査の前に止める
+      （``scanner.refuse_parents_of_recorded_roots``）。以前はここで内側の記録を消して
+      親に置き換えており、間違えて親を1回走査しただけで記録が親だけになり、正しい根で
+      走査し直しても戻らなかった（PR #75 のレビュー (a)）。ここまで来たら両方を残す
+      （残れば、記録で走査するときに入れ子の検査で止まる）
     """
     root = str(root)
     now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
@@ -656,9 +659,6 @@ def record_scan_root(connection: sqlite3.Connection, root: str) -> bool:
         return True
     if any(_is_within(root, existing) for existing in recorded):
         return False
-    for existing in recorded:
-        if _is_within(existing, root):
-            connection.execute("DELETE FROM ScanRoot WHERE path = ?", (existing,))
     connection.execute("INSERT INTO ScanRoot (path, last_scanned_at) VALUES (?, ?)", (root, now))
     return True
 

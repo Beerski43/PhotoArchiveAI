@@ -138,11 +138,60 @@ def test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root(tmp_pat
     assert db.list_scan_roots(connection) == [str(root)]
 
 
-def test_an_outer_root_replaces_the_inner_records(connection):
-    assert db.record_scan_root(connection, "/mnt/photo/2021") is True
-    assert db.record_scan_root(connection, "/mnt/photo") is True
+def test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything(tmp_path, connection):
+    """**共通の親を1つだけ渡しても、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
 
-    assert db.list_scan_roots(connection) == ["/mnt/photo"]
+    根を思い出せずに親を渡すと他家の写真まで入る（2026-10-02）。入れ子の検査は同じ指定の
+    中の親と子しか見ないので、記録と突き合わせる。以前は走査したうえで記録が親だけに
+    置き換わり、正しい根で走査し直しても戻らなかった。
+    """
+    parent = tmp_path / "nanoPi"
+    photo = parent / "suzuki" / "Photo"
+    write_image(photo / "a.jpg")
+    write_image(parent / "katayama" / "other.jpg", color=(10, 200, 30))
+    scan_directories([str(photo)], connection, workers=1)
+
+    with pytest.raises(ScanAborted, match="記録済みの根"):
+        scan_directories([str(parent)], connection, workers=1)
+
+    assert _paths(connection) == [str(photo / "a.jpg")]
+    assert db.list_scan_roots(connection) == [str(photo)]
+
+
+def test_a_year_folder_inside_a_recorded_root_is_still_scanned(tmp_path, connection):
+    """止めるのは親だけ。根の内側（年フォルダ）の走査は今までどおり通す。"""
+    root = tmp_path / "Photo"
+    write_image(root / "2021" / "a.jpg")
+    scan_directories([str(root)], connection, workers=1)
+
+    summary = scan_directories([str(root / "2021")], connection, workers=1)
+
+    assert summary["total_files"] == 1
+
+
+def test_recording_an_outer_root_never_drops_the_inner_records(tmp_path, connection):
+    """記録は消さない。両方残れば、記録で走査するときに入れ子の検査で止まる。"""
+    outer = tmp_path / "photo"
+    inner = outer / "2021"
+    inner.mkdir(parents=True)
+    assert db.record_scan_root(connection, str(inner)) is True
+    assert db.record_scan_root(connection, str(outer)) is True
+
+    assert db.list_scan_roots(connection) == [str(outer), str(inner)]
+    with pytest.raises(ValueError, match="入れ子"):
+        normalize_source_roots(db.list_scan_roots(connection))
+
+
+def test_a_root_that_does_not_exist_stops_before_any_root_is_scanned(tmp_path, connection):
+    """後ろの根が無いと、前の根を走査し終えてから落ちていた（PR #75 のレビュー指摘1）。"""
+    root = tmp_path / "Photo"
+    write_image(root / "a.jpg")
+
+    with pytest.raises(ValueError, match="ありません"):
+        scan_directories([str(root), str(tmp_path / "missing")], connection, workers=1)
+
+    assert _paths(connection) == []
+    assert db.list_scan_roots(connection) == []
 
 
 def test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root(connection):
