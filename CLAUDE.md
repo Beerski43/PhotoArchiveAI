@@ -364,9 +364,9 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   しない（対抗馬としては使う）。
 - `Face.assign_rule`: 自動割り当てを付けた規則の版（`matcher.MATCH_RULE`）。
   **判定の規則を変えたら版を上げる。** `select` が古い判定の残りを知らせる。
-- `ScanRoot`: **走査した根**（v7・#24）。`scan` が根を走査し終えるたびに書く。
-  **根を `Media.path` から推定しない**（共通の親になり、他家の写真まで入る）。
-  設定に根が無いとき `scan` / `select` / GUI はこれを使う
+- `ScanRoot`: **走査した root**（v7・#24）。`scan` が root を走査し終えるたびに書く。
+  **root を `Media.path` から推定しない**（共通の親になり、他家の写真まで入る）。
+  設定に root が無いとき `scan` / `select` / GUI はこれを使う
 - `Media.folder_date_from` / `folder_date_to`: **フォルダ名から起こした撮影時期**
   （月か年の区間・両端を含む。v6・#65）。**`shooting_date` に書き戻さない。**
   両方を見るときは `dates.taken_at` で `Taken` にする。`scan` と `migrate` が

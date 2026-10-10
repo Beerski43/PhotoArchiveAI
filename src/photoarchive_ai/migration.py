@@ -10,7 +10,7 @@
   ``assign_rule``）。**足す列は
   `db.ADDABLE_COLUMNS` に1行書くだけでよい**
 - **足りないテーブルは `db.SCHEMA` から作る**（v6 → v7 の ``ScanRoot``）。
-  **中身は推定しない。** 根の記録は次の ``scan`` が書く（#24）
+  **中身は推定しない。** root の記録は次の ``scan`` が書く（#24）
 
 **v1 の経路に v2 のDBを流し込まないこと。** 使えるはずの顔が消える。
 
@@ -250,7 +250,7 @@ def _create_missing_tables(connection: sqlite3.Connection, emit: Callable[[str],
         emit(f"テーブルを追加しました: {', '.join(added)}。")
     if "ScanRoot" in added:
         emit(
-            "走査した根は、次の scan で記録されます（既存のメディアからは推定しません）。"
+            "走査した root は、次の scan で記録されます（既存のメディアからは推定しません）。"
         )
 
 

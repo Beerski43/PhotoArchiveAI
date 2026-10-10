@@ -2,11 +2,11 @@
 
 ``scan`` の責務:
 
-1. 対象ディレクトリ（根。複数可・#24）を再帰的に走査してファイルを ``Media`` に登録する
+1. 対象ディレクトリ（root。複数可・#24）を再帰的に走査してファイルを ``Media`` に登録する
 2. 同じ読み込みのついでに顔を検出し、顔画像・特徴量・スコアを ``Face`` に保存する
 3. 既に顔検出済みのメディアは再検出しない (差分スキャン)
-4. DBにあるのに実体が無くなったメディアの行を削除する（根ごと）
-5. 走査し終えた根を ``ScanRoot`` に記録する（設定を失っても DB から戻せるように）
+4. DBにあるのに実体が無くなったメディアの行を削除する（root ごと）
+5. 走査し終えた root を ``ScanRoot`` に記録する（設定を失っても DB から戻せるように）
 
 人物への紐づけはここでは一切行わない。それは GUI での手動割り当てと
 ``match`` の仕事。
@@ -467,7 +467,7 @@ def scan_directory(
             db_connection, root, present_paths, force=force_prune
         )
 
-    # **走査し終えた根を記録する**（#24）。途中で中断したら書かない（上で例外になる）。
+    # **走査し終えた root を記録する**（#24）。途中で中断したら書かない（上で例外になる）。
     db.record_scan_root(db_connection, str(root))
 
     # **読み方を変えたときに古い区間を残さない。** 差分スキャンは変わっていない
@@ -479,17 +479,17 @@ def scan_directory(
 
 
 def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
-    """根を絶対パスにそろえ、重複を落とす。**入れ子は止める。**
+    """root を絶対パスにそろえ、重複を落とす。**入れ子は止める。**
 
     入れ子を許すと、親の走査が子の写真まで覆ったうえで、子をもう一度走査する。
-    それより**親を根にしてしまうこと自体が事故**（2026-10-02、共通の親で走査すると
+    それより**親を root にしてしまうこと自体が事故**（2026-10-02、共通の親で走査すると
     他家の写真まで入った。#24 のコメント）なので、気づけるように止める。
     """
     normalized: List[Path] = []
     for value in roots:
         path = Path(value).expanduser().resolve()
-        # **どの根も走査する前に確かめる**（PR #75 のレビュー指摘1）。根ごとの走査の中で
-        # 見ると、前の根を（NFS で数十分）走査し終えてから指定ミスに気づくことになる。
+        # **どの root も走査する前に確かめる**（PR #75 のレビュー指摘1）。root ごとの走査の中で
+        # 見ると、前の root を（NFS で数十分）走査し終えてから指定ミスに気づくことになる。
         # 中身の無いマウントポイントは今までどおり `ScanAborted`（ディレクトリはある）。
         if not path.is_dir():
             raise ValueError(
@@ -502,26 +502,26 @@ def normalize_source_roots(roots: Sequence[str]) -> List[Path]:
             if outer != inner and outer in inner.parents:
                 raise ValueError(
                     f"検出元のディレクトリが入れ子になっています: {inner} は {outer} の内側です。"
-                    " 根はどちらか一方にしてください。"
+                    " root はどちらか一方にしてください。"
                 )
     return normalized
 
 
 def refuse_parents_of_recorded_roots(roots: Sequence[Path], recorded: Sequence[str]) -> None:
-    """**記録済みの根を内側に含む根は、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
+    """**記録済みの root を内側に含む root は、走査する前に止める**（PR #75 のレビュー (a)・利用者の決定）。
 
-    親を走査するのは、根を思い出せずに共通の親（`/mnt/nfs/nanoPi-NEO2`）を渡したときで、
+    親を走査するのは、root を思い出せずに共通の親（`/mnt/nfs/nanoPi-NEO2`）を渡したときで、
     他家の写真まで入る（2026-10-02）。入れ子の検査は親と子を同時に渡したときしか
     止められないので、**記録と突き合わせて**単独の親も止める。走査させてから記録を
-    直すのではなく、取り込むこと自体を防ぐ。年フォルダ（根の内側）の走査は今までどおり通す。
+    直すのではなく、取り込むこと自体を防ぐ。年フォルダ（root の内側）の走査は今までどおり通す。
     """
     for root in roots:
         inside = [path for path in recorded if root in Path(path).parents]
         if inside:
             raise ScanAborted(
-                f"{root} は記録済みの根 {', '.join(inside)} を内側に含みます。"
-                " 親のフォルダを根にすると、関係の無い写真まで取り込みます。"
-                " 根は config/app_settings.yml の source_roots に書いた個々のフォルダにしてください。"
+                f"{root} は記録済みの root {', '.join(inside)} を内側に含みます。"
+                " 親のフォルダを root にすると、関係の無い写真まで取り込みます。"
+                " root は config/app_settings.yml の source_roots に書いた個々のフォルダにしてください。"
             )
 
 
@@ -531,11 +531,11 @@ def scan_directories(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     **options: Any,
 ) -> Dict[str, Any]:
-    """複数の根を順に走査する（#24）。集計は足し合わせ、根ごとの内訳も返す。
+    """複数の root を順に走査する（#24）。集計は足し合わせ、root ごとの内訳も返す。
 
-    **消えた行の削除と2割の安全弁は根ごと**（``scan_directory`` が自分の根の配下
-    だけを見る）。片方の根が未マウントでも、もう片方のメディアは削除候補にならない。
-    **1つの根で中断したら、残りの根は走査しない**（``ScanAborted`` をそのまま投げる）。
+    **消えた行の削除と2割の安全弁は root ごと**（``scan_directory`` が自分の root の配下
+    だけを見る）。片方の root が未マウントでも、もう片方のメディアは削除候補にならない。
+    **1つの root で中断したら、残りの root は走査しない**（``ScanAborted`` をそのまま投げる）。
     """
     roots = normalize_source_roots(source_dirs)
     if not roots:

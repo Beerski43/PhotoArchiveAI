@@ -80,7 +80,7 @@ EMPTY_SCAN_SUMMARY = {
 
 
 def _record_scanned_roots(monkeypatch):
-    """`scan_directory` を差し替え、走査された根を順に記録する。"""
+    """`scan_directory` を差し替え、走査された root を順に記録する。"""
     scanned = []
 
     def fake_scan(source_dir, connection, **kwargs):
@@ -92,7 +92,7 @@ def _record_scanned_roots(monkeypatch):
 
 
 def test_scan_takes_several_sources_in_the_given_order(tmp_path, monkeypatch, capsys):
-    """#24: `--source` は何度でも書け、書いた順に根ごとに走査する。"""
+    """#24: `--source` は何度でも書け、書いた順に root ごとに走査する。"""
     first, second = tmp_path / "Photo", tmp_path / "phone"
     first.mkdir()
     second.mkdir()
@@ -127,7 +127,7 @@ def test_scan_reads_the_source_roots_from_the_settings(tmp_path, monkeypatch):
 
 
 def test_scan_refuses_nested_sources_before_touching_anything(tmp_path, monkeypatch):
-    """**親と子を両方根にしない。** 共通の親で走査すると他家の写真まで入った（2026-10-02）。"""
+    """**親と子を両方 root にしない。** 共通の親で走査すると他家の写真まで入った（2026-10-02）。"""
     parent = tmp_path / "photo"
     child = parent / "natsuTemp"
     child.mkdir(parents=True)
@@ -146,7 +146,7 @@ def test_scan_refuses_nested_sources_before_touching_anything(tmp_path, monkeypa
 
 
 def test_scan_falls_back_to_the_roots_recorded_in_the_database(tmp_path, monkeypatch, capsys):
-    """**設定を失っても、DB に記録された根で走査できる**（#24 の動機・2026-10-02）。"""
+    """**設定を失っても、DB に記録された root で走査できる**（#24 の動機・2026-10-02）。"""
     root = tmp_path / "Photo"
     root.mkdir()
     database = tmp_path / "photoarchive.db"
@@ -159,7 +159,7 @@ def test_scan_falls_back_to_the_roots_recorded_in_the_database(tmp_path, monkeyp
     run_cli(["scan", "--db", str(database)], tmp_path)
 
     assert scanned == [str(root.resolve())]
-    assert "DB に記録された根" in capsys.readouterr().out
+    assert "DB に記録された root" in capsys.readouterr().out
 
 
 def test_scan_without_any_source_names_the_setting_to_write(tmp_path, monkeypatch):

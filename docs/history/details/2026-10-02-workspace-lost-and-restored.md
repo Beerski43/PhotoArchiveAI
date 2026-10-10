@@ -71,9 +71,9 @@ durable な場所へ退避した。
 
 **最初、共通接頭辞から `/mnt/nfs/nanoPi-NEO2` と推定して書いた。これは危険だった。**
 
-実データは**2つの根を `source_root` で切り替えて2回スキャン**して作られている。
+実データは**2つの root を `source_root` で切り替えて2回スキャン**して作られている。
 
-| 根 | Media | 顔 | 手本 | 除外 |
+| root | Media | 顔 | 手本 | 除外 |
 |---|---|---|---|---|
 | `/mnt/nfs/nanoPi-NEO2/suzuki/Photo` | 64,974 | 55,805 | 122 | 252 |
 | `/mnt/nfs/nanoPi-NEO2/share/photo/natsuTemp/な携帯` | 5,323 | 2,801 | 4 | 16 |
@@ -88,7 +88,7 @@ durable な場所へ退避した。
 
 ### `mediaFiles/` はアプリの動作に関与しない
 
-`scan` は `Path(source_dir).resolve()` で根を解決し、`rglob("*")` で走査する。
+`scan` は `Path(source_dir).resolve()` で root を解決し、`rglob("*")` で走査する。
 **Python 3.12 の `rglob` はシンボリックリンクのディレクトリへ降りない**（実測）。
 だから **DB の 70,297 件は `mediaFiles/` を一度も通っていない。**
 

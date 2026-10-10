@@ -2,7 +2,7 @@
 # 相対パスはカレントディレクトリから解く（source_roots だけは、GUI の表示では
 # この設定ファイルの置き場所から解く）。
 database_path: data/photoarchive.db
-# 走査する写真の根。複数並べられる。共通の親を書かない（入れ子は止める）
+# 走査する写真の root。複数並べられる。共通の親を書かない（入れ子は止める）
 source_roots:
   - /path/to/media
 output_root: /path/to/output

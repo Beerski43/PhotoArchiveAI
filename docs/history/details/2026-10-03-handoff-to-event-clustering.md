@@ -129,7 +129,7 @@ photoarchive match --db data/photoarchive.db
 - `source_root` は `/mnt/nfs/nanoPi-NEO2/suzuki/Photo`。
   **共通接頭辞の `/mnt/nfs/nanoPi-NEO2` にしてはいけない**（他家の写真 `katayama` と
   `temp` を取り込む）。経緯は Issue #24 のコメント
-- 実データは2つの根を切り替えて2回スキャンして作られている。
+- 実データは2つの root を切り替えて2回スキャンして作られている。
   `mediaFiles/suzukiFamily` と `mediaFiles/photo_natsu` がその記録（**アプリは
   `mediaFiles/` を見ない**）
 - **バックアップの置き場**: `/home/suu/photoarchive-recovery/`（読み取り専用で保持）

@@ -683,11 +683,11 @@
 | `test_init_db_creates_a_usable_database` | `init-db` |
 | `test_migrate_reports_that_a_fresh_database_is_current` | `migrate` は移行済みDBに何もしない |
 | `test_scan_arguments_reach_the_scanner` | `scan` の全オプションが下へ届く |
-| `test_scan_takes_several_sources_in_the_given_order` | **`--source` は何度でも書け、書いた順に根ごとに走査する**（#24） |
+| `test_scan_takes_several_sources_in_the_given_order` | **`--source` は何度でも書け、書いた順に root ごとに走査する**（#24） |
 | `test_scan_reads_the_source_roots_from_the_settings` | 設定の `source_roots`（配列） |
-| `test_scan_refuses_nested_sources_before_touching_anything` | 入れ子の根は何も走査せずに止める |
-| `test_scan_falls_back_to_the_roots_recorded_in_the_database` | **設定を失っても DB に記録された根で走査する**（#24 の動機） |
-| `test_scan_without_any_source_names_the_setting_to_write` | 根がどこにも無ければ `source_roots` を書くよう言う |
+| `test_scan_refuses_nested_sources_before_touching_anything` | 入れ子の root は何も走査せずに止める |
+| `test_scan_falls_back_to_the_roots_recorded_in_the_database` | **設定を失っても DB に記録された root で走査する**（#24 の動機） |
+| `test_scan_without_any_source_names_the_setting_to_write` | root がどこにも無ければ `source_roots` を書くよう言う |
 | `test_match_arguments_reach_the_matcher` | `match` の全オプションが下へ届く |
 | `test_the_database_path_falls_back_to_the_settings_file` | 設定ファイルへのフォールバック |
 | `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
@@ -708,26 +708,26 @@ editable install のときだけ出すこと（通常のインストールでは
 モジュールの位置で判断する**）。同じ場所を2度並べないこと。
 検出元は `source_roots`（配列。1つなら文字列でもよく、古い `source_root` も読む。#24）。
 
-### `test_source_roots.py` — 検出元の根を複数持つ（19件。#24）
+### `test_source_roots.py` — 検出元の root を複数持つ（19件。#24）
 
 | テスト | 内容 |
 |---|---|
-| `test_two_roots_are_both_scanned_and_recorded` | 2つの根を走査し、両方を `ScanRoot` に記録する |
-| `test_a_missing_root_does_not_make_the_other_roots_media_prunable` | **片方の根だけ走査しても、もう片方のメディアは消えない** |
-| `test_the_safety_valve_still_works_per_root` | 2割の安全弁は根ごとに効く |
+| `test_two_roots_are_both_scanned_and_recorded` | 2つの root を走査し、両方を `ScanRoot` に記録する |
+| `test_a_missing_root_does_not_make_the_other_roots_media_prunable` | **片方の root だけ走査しても、もう片方のメディアは消えない** |
+| `test_the_safety_valve_still_works_per_root` | 2割の安全弁は root ごとに効く |
 | `test_nested_roots_are_refused` / `test_the_same_root_written_twice_is_scanned_once` | 入れ子は止める・重複は1回 |
 | `test_a_root_given_through_a_symlink_is_recorded_by_its_real_path` | 記録は実体のパス（`Media.path` とそろえる） |
-| `test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root` | 年フォルダだけの走査は根にしない |
-| `test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything` | **記録済みの根を含む親は走査する前に止める**（PR #75 のレビュー (a)・利用者の決定。以前は記録が親だけに置き換わって戻らなかった） |
+| `test_scanning_a_year_folder_inside_a_root_does_not_record_a_new_root` | 年フォルダだけの走査は root にしない |
+| `test_scanning_a_parent_of_a_recorded_root_stops_before_reading_anything` | **記録済みの root を含む親は走査する前に止める**（PR #75 のレビュー (a)・利用者の決定。以前は記録が親だけに置き換わって戻らなかった） |
 | `test_a_year_folder_inside_a_recorded_root_is_still_scanned` | 止めるのは親だけ。年フォルダは通す |
 | `test_recording_an_outer_root_never_drops_the_inner_records` / `test_a_sibling_with_a_common_prefix_is_not_taken_for_an_inner_root` | 記録は消さない（両方残れば入れ子の検査で止まる）。`/mnt/Photo2` は `/mnt/Photo` の内側ではない |
-| `test_a_root_that_does_not_exist_stops_before_any_root_is_scanned` | **無い根があれば、どの根も走査せずに止める**（PR #75 のレビュー指摘1） |
-| `test_an_aborted_scan_does_not_record_its_root` | 中断した走査は根を書かない |
-| `test_a_version_6_database_gains_the_root_table_and_keeps_its_faces` | **v6 → v7 で顔が減らない。根は推定しない** |
-| `test_with_several_roots_the_folder_is_prefixed_with_the_root_name` / `test_with_one_root_the_folder_is_shown_as_before` | GUI の表示。根が複数なら根の名前を付ける |
-| `test_the_window_falls_back_to_the_roots_recorded_in_the_database` | 設定に根が無ければ GUI も記録を使う |
-| `test_select_copies_relative_to_the_root_that_holds_each_photo` | `select` は含む根からの相対。同じ名前は連番 |
-| `test_select_copies_a_photo_outside_every_root_by_its_name` | **根の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
+| `test_a_root_that_does_not_exist_stops_before_any_root_is_scanned` | **無い root があれば、どの root も走査せずに止める**（PR #75 のレビュー指摘1） |
+| `test_an_aborted_scan_does_not_record_its_root` | 中断した走査は root を書かない |
+| `test_a_version_6_database_gains_the_root_table_and_keeps_its_faces` | **v6 → v7 で顔が減らない。root は推定しない** |
+| `test_with_several_roots_the_folder_is_prefixed_with_the_root_name` / `test_with_one_root_the_folder_is_shown_as_before` | GUI の表示。root が複数なら root の名前を付ける |
+| `test_the_window_falls_back_to_the_roots_recorded_in_the_database` | 設定に root が無ければ GUI も記録を使う |
+| `test_select_copies_relative_to_the_root_that_holds_each_photo` | `select` は含む root からの相対。同じ名前は連番 |
+| `test_select_copies_a_photo_outside_every_root_by_its_name` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
 
 ### `test_cli_progress.py` — 進捗表示（7件）
 

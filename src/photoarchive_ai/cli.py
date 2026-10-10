@@ -267,7 +267,7 @@ def _build_parser() -> argparse.ArgumentParser:
     select_parser.add_argument(
         "--source",
         action="append",
-        help="コピー先の相対パスを作る根。何度でも書ける。",
+        help="コピー先の相対パスを作る root。何度でも書ける。",
     )
 
     return parser
@@ -339,10 +339,10 @@ SOURCE_ROOTS_REQUIRED = (
 
 
 def _source_roots(args, settings, connection=None) -> List[str]:
-    """根を決める。``--source`` → 設定 → **DB に記録された根**（#24）の順。
+    """root を決める。``--source`` → 設定 → **DB に記録された root**（#24）の順。
 
     最後の段は、設定ファイルを失ったとき（2026-10-02）に DB から戻すためにある。
-    記録は実際に走査した根だけなので、推定（共通の親）のような事故は起きない。
+    記録は実際に走査した root だけなので、推定（共通の親）のような事故は起きない。
     使ったときは何で走査するかを表示する。
     """
     roots = list(getattr(args, "source", None) or []) or get_source_roots(settings)
@@ -350,7 +350,7 @@ def _source_roots(args, settings, connection=None) -> List[str]:
         return roots
     recorded = db.list_scan_roots(connection)
     if recorded:
-        print("設定に検出元が無いため、DB に記録された根を使います:")
+        print("設定に検出元が無いため、DB に記録された root を使います:")
         for root in recorded:
             print(f"  {root}")
     return recorded
