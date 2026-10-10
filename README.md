@@ -14,7 +14,7 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 
 ## 全体のフロー
 
-1. `config/app_settings.sample.json` をコピーして `config/app_settings.json` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
+1. `config/app_settings.sample.yml` をコピーして `config/app_settings.yml` を作成し、`database_path` / `source_root` / `output_root` / `rule_path` を設定します。
 2. `photoarchive init-db` で SQLite データベースを初期化します。（既存のデータベースがある場合は `photoarchive migrate` を実行します。バックアップは自動で作られます）
 3. 必要に応じて `photoarchive convert-heic` でHEIC/HEIFをJPEGへ変換します。
 4. `photoarchive scan` で対象ディレクトリをスキャンします。パスの登録と顔の検出をここでまとめて行います。
@@ -22,7 +22,7 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。結果が
    信用できなければ `photoarchive unassign-auto` で取り消せます。
 7. `photoarchive evaluate` で、`match` の取りこぼしと誤りの割合を確かめます（任意）。
-8. `config/rule.json` を編集し、`photoarchive select` でコピー先へ出力します。
+8. `config/rule.yml` を編集し、`photoarchive select` でコピー先へ出力します。
 
 設計・仕様の詳細は [仕様書](docs/spec/Specification.md)、開発の道筋は [実装プラン](docs/plan/ROADMAP.md)、これまでの経緯は [作業履歴](docs/history/WORKLOG.md) にあります。文書の索引は [docs/README.md](docs/README.md)。
 
@@ -84,7 +84,7 @@ python -m pip install -e .
 python -m pip install git+https://github.com/ageitgey/face_recognition_models
 ```
 
-このパッケージは **モデルファイルの置き場所としてのみ** 使用し、Pythonモジュールとしては読み込みません。`face_recognition_models/__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では `ModuleNotFoundError` になるためです。モデルを別の場所に置く場合は、環境変数 `PHOTOARCHIVE_DLIB_MODEL_DIR` か `config/app_settings.json` の `dlib_model_dir` でディレクトリを指定してください。
+このパッケージは **モデルファイルの置き場所としてのみ** 使用し、Pythonモジュールとしては読み込みません。`face_recognition_models/__init__.py` が `pkg_resources` に依存しており、setuptools 81 以降では `ModuleNotFoundError` になるためです。モデルを別の場所に置く場合は、環境変数 `PHOTOARCHIVE_DLIB_MODEL_DIR` か `config/app_settings.yml` の `dlib_model_dir` でディレクトリを指定してください。
 
 ### 顔特徴量のモデル（ArcFace）の取得 — **必須**
 
@@ -121,16 +121,18 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 ### 1. アプリ設定ファイル作成
 
 ```bash
-cp config/app_settings.sample.json config/app_settings.json
+cp config/app_settings.sample.yml config/app_settings.yml
 ```
 
 必要に応じて `database_path` / `source_root` / `output_root` / `rule_path` を編集します。
 
+**設定ファイルは YAML です（JSON は読みません）。** 以前の `config/app_settings.json` が残っているだけだと、YAML への変換を促すメッセージを出して止まります。JSON の中身はそのまま YAML として読めるので、`mv config/app_settings.json config/app_settings.yml` でも移れます（ルールファイルも同じ。`rule_path` も `.yml` に向けてください）。
+
 設定ファイルは次の順に探し、最初に見つかったものを使います。**リポジトリ以外のディレクトリから実行しても設定が効きます。**
 
 1. 環境変数 `PHOTOARCHIVE_CONFIG` が指すファイル
-2. カレントディレクトリの `config/app_settings.json`
-3. リポジトリ直下の `config/app_settings.json`（`pip install -e .` のときだけ）
+2. カレントディレクトリの `config/app_settings.yml`
+3. リポジトリ直下の `config/app_settings.yml`（`pip install -e .` のときだけ）
 
 ### 2. データベース初期化
 
@@ -222,7 +224,7 @@ photoarchive reembed --db data/photoarchive.db
 photoarchive-gui
 ```
 
-`--db` を省くと `config/app_settings.json` の `database_path` を使います。別のデータベースを開く場合は `photoarchive-gui --db data/photoarchive.db` のように指定します。
+`--db` を省くと `config/app_settings.yml` の `database_path` を使います。別のデータベースを開く場合は `photoarchive-gui --db data/photoarchive.db` のように指定します。
 
 人物を登録し、`scan` が検出した顔のサムネイル一覧から、その人物の顔を選んで割り当てます。ここで割り当てた顔が次の `match` の手本になります。
 
@@ -307,25 +309,22 @@ photoarchive evaluate --keep-same-media
 
 ### 8. 抽出ルールに基づく選択とコピー
 
-`config/rule.sample.json` をコピーして `config/rule.json` とし、必要に応じて編集します。
+`config/rule.sample.yml` をコピーして `config/rule.yml` とし、必要に応じて編集します。
 
 ```bash
 photoarchive select
 ```
 
-`rule.json` の例:
+`rule.yml` の例:
 
-```json
-{
-  "date": {
-    "start": "2000-01-01",
-    "end": "2025-12-31"
-  },
-  "family_only": true,
-  "count_per_year": 30,
-  "include_video": true,
-  "remove_duplicate": true
-}
+```yaml
+date:
+  start: 2000-01-01
+  end: 2025-12-31   # その日の終わりまで含む
+family_only: true
+count_per_year: 30
+include_video: true
+remove_duplicate: true
 ```
 
 実行:
@@ -345,7 +344,7 @@ photoarchive select
 例:
 
 ```bash
-photoarchive select --output /path/to/output --source /path/to/media --rule config/rule.json
+photoarchive select --output /path/to/output --source /path/to/media --rule config/rule.yml
 ```
 
 ## テスト
@@ -389,8 +388,8 @@ PhotoArchiveAI/
     summarize_pytest.py        回帰テストの集計行を作る
     archive_worklog.py         作業履歴の切り出し
   config/
-    app_settings.sample.json   アプリ設定のサンプル
-    rule.sample.json           抽出ルールのサンプル
+    app_settings.sample.yml    アプリ設定のサンプル
+    rule.sample.yml            抽出ルールのサンプル
   docs/
     README.md                  文書の索引
     spec/Specification.md      要件・仕様・DB設計・CLIリファレンス

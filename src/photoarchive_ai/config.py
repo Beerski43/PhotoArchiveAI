@@ -1,10 +1,10 @@
 """アプリケーション設定の読み込み。
 
-設定ファイルは JSON。次の順で探し、最初に見つかったものを使う。
+設定ファイルは YAML（#27）。次の順で探し、最初に見つかったものを使う。
 
 1. 環境変数 ``PHOTOARCHIVE_CONFIG`` が指すファイル
-2. カレントディレクトリの ``config/app_settings.json``
-3. リポジトリ直下の ``config/app_settings.json``
+2. カレントディレクトリの ``config/app_settings.yml``
+3. リポジトリ直下の ``config/app_settings.yml``
 
 3 があるのは、リポジトリルート以外から ``photoarchive`` を起動しても
 設定が効くようにするため。以前は 2 だけを見ていたので、別の
@@ -13,18 +13,25 @@
 3 が効くのは ``pip install -e .`` (editable install) のときだけ。
 通常のインストールでは ``site-packages`` の下に置かれるので、
 リポジトリ直下にあたるものが無く、この候補は使わない。
+
+**古い ``config/app_settings.json`` は読まない。** 見つけたら YAML へ変換するよう
+WARNING を出す。黙って空の設定を返すと、``scan`` が「source root が要る」とだけ
+言って止まり、原因（設定ファイルの形式が変わったこと）に辿り着けないため。
 """
 
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 CONFIG_ENV_VAR = "PHOTOARCHIVE_CONFIG"
-CONFIG_RELATIVE_PATH = Path("config/app_settings.json")
+CONFIG_RELATIVE_PATH = Path("config/app_settings.yml")
+#: #27 より前の設定ファイル。**読まない。** 見つけたら変換を促すためだけに持つ。
+LEGACY_CONFIG_RELATIVE_PATH = Path("config/app_settings.json")
 MODULE_PATH = Path(__file__).resolve()
 # editable install なら src/photoarchive_ai/config.py からリポジトリ直下に戻る。
 REPO_ROOT = MODULE_PATH.parents[2]
@@ -77,6 +84,36 @@ def find_settings_path() -> Optional[Path]:
     return None
 
 
+def find_legacy_settings_path() -> Optional[Path]:
+    """YAML が無い場所に残っている古い ``app_settings.json``。無ければ None。
+
+    探す場所は YAML と同じ（カレント → リポジトリ直下）。環境変数で ``.json`` を
+    指している場合もここで拾う（指された先は YAML としては読まない）。
+    """
+    override = os.environ.get(CONFIG_ENV_VAR)
+    if override and Path(override).suffix.lower() == ".json" and Path(override).expanduser().is_file():
+        return Path(override).expanduser()
+    for candidate in candidate_config_paths():
+        legacy = candidate.parent.parent / LEGACY_CONFIG_RELATIVE_PATH
+        if candidate.name == CONFIG_RELATIVE_PATH.name and legacy.is_file():
+            return legacy
+    return None
+
+
+def legacy_settings_message(path: Path) -> str:
+    """古い JSON の設定を見つけたときの案内。CLI と GUI で同じ文を出す。"""
+    return (
+        f"古い形式の設定ファイル {path} は読みません（#27 で YAML に変わりました）。"
+        f" 同じ中身を {path.with_suffix('.yml')} に YAML で書いてください"
+        "（JSON の中身はそのまま YAML として読めるので、拡張子を変えるだけでも動きます）。"
+    )
+
+
+def _read_yaml(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
 def load_settings() -> Dict[str, Any]:
     """設定を読む。見つからない・壊れている場合は空の辞書を返す。
 
@@ -84,16 +121,22 @@ def load_settings() -> Dict[str, Any]:
     ここでは例外にしない。どこを見たかはログに残す。
     """
     path = find_settings_path()
+    if path is not None and path.suffix.lower() == ".json":
+        # 環境変数が古い JSON を指している。YAML として読めてしまうが、読まない。
+        path = None
     if path is None:
+        legacy = find_legacy_settings_path()
+        if legacy is not None:
+            logger.warning(legacy_settings_message(legacy))
+            return {}
         logger.info(
             "設定ファイルが見つからない。探した場所: %s",
             ", ".join(str(candidate) for candidate in candidate_config_paths()),
         )
         return {}
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            settings = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+        settings = _read_yaml(path)
+    except (OSError, yaml.YAMLError) as error:
         logger.warning("設定ファイルを読めない (%s): %s", path, error)
         return {}
     if not isinstance(settings, dict):
