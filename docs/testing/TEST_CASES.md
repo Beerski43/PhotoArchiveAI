@@ -662,7 +662,7 @@
 | `test_relative_paths_are_measured_from_the_root` | 相対パスのメディアは root から解いて測る |
 | `test_a_bad_similar_setting_stops_when_the_rule_is_read` | 閾値の書き損じはルールを読む時点で止める（写真を測り始めてから止まらない。6件） |
 
-### `test_similar.py` — 連写・似た写真を束ねる（21件。#86・#93）
+### `test_similar.py` — 連写・似た写真を束ねる（23件。#86・#93）
 
 | テスト | 内容 |
 |---|---|
@@ -682,6 +682,8 @@
 | `test_scenes_split_a_group_by_looks` | 見た目で場面に分ける。測れなかった写真は1枚で残る |
 | `test_a_photo_close_only_to_a_dropped_photo_is_kept` | **数珠つなぎにしない**。残した写真と遠ければ、外した写真と近くても残す（#93。連結だと挙式と披露宴が1場面になった） |
 | `test_photos_far_apart_in_time_need_to_look_closer` | **時間の離れた2枚は距離 14**（`FAR_DISTANCE`）、連写は 16。ルールの距離が小さければそちら（#93） |
+| `test_a_burst_member_far_from_the_representative_needs_to_look_closer` | 「時間の離れた2枚」は**代表との差**で決まる。8秒おきの連写でも代表から16秒後は14で見る（PR #94 のレビュー指摘1） |
+| `test_a_burst_across_midnight_does_not_bundle_the_other_days_photos` | **0時をまたぐ連写がつないだ別の日の写真どうしは束ねない**（PR #94 のレビュー指摘2） |
 | `test_a_version_7_database_gains_the_look_column_and_keeps_its_faces` | **v7 → v8 で顔を1件も失わない**（列を足すだけ） |
 
 ### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）

@@ -57,7 +57,9 @@ DEFAULT_SECONDS = 10
 #: 10分より離れて撮った2枚は 24 以上（中央 31）。
 DEFAULT_DISTANCE = 16
 
-#: **撮影日時が離れた2枚**（隣との差が ``similar_seconds`` を超える）に使う距離の上限。
+#: **代表と撮影日時が離れた写真**（代表との差が ``similar_seconds`` を超える）に使う距離の上限。
+#: 連写の中でも、代表から ``similar_seconds`` より後ろの写真はこちらで見る（隣との差ではない。
+#: 実データの測定もこの定義で数えた。PR #94 のレビュー指摘1）。
 #:
 #: 同じ行事の中まで候補を広げたとき（#93）に実データで見比べて決めた（2026-10-11）。
 #: 外れた写真と外す原因になった写真の組を全部見たところ、14 以下はすべて同じ場面、
@@ -232,8 +234,10 @@ def scenes(
     A〜B・B〜C が近いだけで遠い A と C が同じ場面になる。実データでは、残した代表から
     距離 18〜26 の写真（挙式と披露宴、衣装の違う写真）まで外れた（2026-10-11）。
 
-    近さの上限は、撮影日時の差が ``seconds`` 以内なら ``max_distance``（連写）、
+    近さの上限は、**代表との**撮影日時の差が ``seconds`` 以内なら ``max_distance``（連写）、
     離れていれば ``FAR_DISTANCE`` と ``max_distance`` の小さいほう。
+    **日付の違う2枚は、連写（差が ``seconds`` 以内）のときだけ比べる。** 候補の組は
+    0時をまたぐ連写で前後の日がつながるが、別の日は別の行事（PR #94 のレビュー指摘2）。
     見た目を測れなかった写真は、どの写真とも束ねない（消さずに残す）。
     """
     far = min(max_distance, FAR_DISTANCE)
@@ -246,6 +250,8 @@ def scenes(
             if gap is None:
                 continue
             apart = abs((_moment(representative) - _moment(media)).total_seconds())
+            if apart > seconds and _moment(representative).date() != _moment(media).date():
+                continue  # 別の日は別の行事。日付をまたいでつなぐのは連写だけ
             if gap <= (max_distance if apart <= seconds else far):
                 home = scene
                 break

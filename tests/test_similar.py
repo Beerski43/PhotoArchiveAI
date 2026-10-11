@@ -214,6 +214,40 @@ def test_photos_far_apart_in_time_need_to_look_closer():
     assert _ids(similar.scenes(apart, looks, max_distance=10, seconds=10)) == [[1], [2, 3]]
 
 
+def test_a_burst_member_far_from_the_representative_needs_to_look_closer():
+    """**「時間の離れた2枚」は代表との差で決まる**（隣との差ではない。PR #94 のレビュー指摘1）。
+
+    8 秒おきの連写でも、代表から 16 秒後の3枚目は距離 14 で見る。定義を変えたら気づけるように。
+    """
+    burst = [
+        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
+        _media(2, "/p/a/2.jpg", "2019-05-03T10:00:08"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:16"),
+    ]
+    looks = {1: _look(0), 2: _look(_ones(8)), 3: _look(_ones(15))}
+    assert _ids(similar.candidate_groups(burst, {}, seconds=10)) == [[1, 2, 3]]
+    assert _ids(similar.scenes(burst, looks, max_distance=16, seconds=10)) == [[1, 2], [3]]
+
+
+def test_a_burst_across_midnight_does_not_bundle_the_other_days_photos():
+    """**0時をまたぐ連写がつないだ別の日の写真どうしは束ねない**（PR #94 のレビュー指摘2）。
+
+    候補の組は連写で前後の日がつながるが、別の日は別の行事（利用者の決定）。
+    """
+    media = {
+        1: _media(1, "/p/a/1.jpg", "2019-12-31T20:00:00"),
+        2: _media(2, "/p/a/2.jpg", "2019-12-31T23:59:58"),
+        3: _media(3, "/p/a/3.jpg", "2020-01-01T00:00:03"),
+        4: _media(4, "/p/a/4.jpg", "2020-01-01T12:00:00"),
+    }
+    assert _ids(similar.candidate_groups(list(media.values()), {}, seconds=10)) == [[1, 2, 3, 4]]
+    far = (1 << 64) - 1
+    # 1 と 4 は距離5（別の日）、連写の 2 と 3 は同じ絵（0時をまたぐ）
+    looks = {1: _look(0), 4: _look(_ones(5)), 2: _look(far), 3: _look(far)}
+    ordered = [media[1], media[4], media[2], media[3]]
+    assert _ids(similar.scenes(ordered, looks, max_distance=16, seconds=10)) == [[1], [4], [2, 3]]
+
+
 # ---------------------------------------------------------------------------
 # 移行（v7 → v8）
 # ---------------------------------------------------------------------------
