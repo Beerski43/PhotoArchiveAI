@@ -176,3 +176,27 @@ def test_the_dialog_does_not_start_on_the_run_button(qt_app):
         child.text() for child in dialog.findChildren(photoarchive_gui.QLabel)
     )
     dialog.close()
+
+
+def test_gui_stops_before_asking_when_person_names_are_duplicated(
+    tmp_path, monkeypatch, silent_message_box
+):
+    """**同名の人物がいると、確認を出す前に止める**（CLI と同じ順。PR #92 のレビュー指摘2）。
+
+    確認に「移行する」と答えさせてから止まると、答えたことが無駄になる。
+    """
+    from tests.test_migration import _build_v8_database
+
+    database = tmp_path / "v8.db"
+    _build_v8_database(database, names=("父", "父"))
+
+    class _MustNotOpen:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("確認を出す前に止まるはず")
+
+    monkeypatch.setattr(photoarchive_gui, "MigrationDialog", _MustNotOpen)
+
+    assert photoarchive_gui.ensure_migrated(str(database)) is False
+    assert len(silent_message_box["critical"]) == 1
+    assert "同じ名前の人物がいるため移行できません: 父" in silent_message_box["critical"][0]
+    assert migration.needs_migration(str(database))

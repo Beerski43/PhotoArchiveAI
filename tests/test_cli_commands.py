@@ -644,6 +644,7 @@ def test_migrate_stops_before_asking_when_person_names_are_duplicated(tmp_path, 
 
     assert "同じ名前の人物がいるため移行できません: 父" in str(error.value)
 
+
 def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
     """出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1）。"""
     root = tmp_path / "photos"

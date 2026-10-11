@@ -381,7 +381,7 @@
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
 
-### `test_gui_migration.py` — 起動時の移行（7件）
+### `test_gui_migration.py` — 起動時の移行（8件）
 
 | テスト | 内容 |
 |---|---|
@@ -392,6 +392,7 @@
 | `test_a_failed_migration_does_not_let_the_window_open` | **失敗を成功のように見せない。** どこまで進んだかも出す |
 | `test_a_database_whose_version_ran_ahead_is_offered_the_migration` | 版だけ進んで列が足りないDBも起動時に拾う |
 | `test_the_dialog_does_not_start_on_the_run_button` | Enter の連打で走り出さない（既定は「終了」） |
+| `test_gui_stops_before_asking_when_person_names_are_duplicated` | **同名の人物がいると、確認を出す前に止める**（CLI と同じ順。PR #92 のレビュー指摘2） |
 
 ### `test_gui_assignment.py` — GUI での割り当て（61件）
 
@@ -834,7 +835,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_clearing_before_a_question_leaves_no_old_bar` | 問いを出す前に2行を消し、答えたあとに古いバーが残らない |
 | `test_convert_heic_says_which_files_could_not_be_read` | `convert-heic` は壊れた HEIC を「読めない」と聞き、最後に一覧で知らせる |
 
-### `test_migration.py` — スキーマの移行（31件）
+### `test_migration.py` — スキーマの移行（32件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -874,6 +875,8 @@ editable install のときだけ出すこと（通常のインストールでは
 （`test_a_version_8_database_gains_the_unique_name_index_and_keeps_its_faces`）。
 **同名の人物がいれば、控えも取らず何も書かずに止める**（版は8のまま・重なった名前と id を伝える。
 `test_a_database_with_duplicated_names_is_not_migrated_and_nothing_is_written`）。
+**止まったときの案内（`sqlite3` の `UPDATE` 文）を実際に流すと移行が通る**。版の古い DB は GUI で開けないので、「GUI で名前を変える」では抜け出せなかった（PR #92 のレビュー指摘1。
+`test_following_the_instructions_in_the_stop_message_lets_the_migration_through`）。
 **v1 の再構築経路でも、顔を捨てる前に止める**（`test_a_legacy_database_with_duplicated_names_stops_before_dropping_its_faces`）。
 重なりの一覧は名前順・id 順（`test_duplicate_person_names_lists_each_name_with_its_ids`）。
 

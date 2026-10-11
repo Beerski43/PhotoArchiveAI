@@ -77,16 +77,34 @@ ANALYSIS_NEW_DDL = (
 
 
 class DuplicatePersonNames(RuntimeError):
-    """同じ名前の人物がいるため、`Person.name` の一意索引を張れない（#90）。"""
+    """同じ名前の人物がいるため、`Person.name` の一意索引を張れない（#90）。
 
-    def __init__(self, duplicates):
+    **抜け出す手順を、実際に打てる形で示す。** 版の古い DB は GUI も CLI も開かない
+    （`db.create_tables`）ので、「GUI で名前を変える」は案内にならない（PR #92 の
+    レビュー指摘1）。アプリの外の `sqlite3` で2人目以降の名前を変えてもらう。
+    **新しい名前は利用者が決める**（勝手に改名しない）。
+    """
+
+    def __init__(self, duplicates, database_path: str = "<データベース>"):
         listed = "、".join(
             f"{item['name']}（id {', '.join(str(i) for i in item['ids'])}）" for item in duplicates
         )
+        commands = [
+            f"  sqlite3 \"{database_path}\" \"UPDATE Person SET name = '<新しい名前>' WHERE id = {person_id}\""
+            for item in duplicates
+            for person_id in item["ids"][1:]
+        ]
         super().__init__(
-            f"同じ名前の人物がいるため移行できません: {listed}。"
-            " GUI で名前を変えるか、片方へ顔を割り当て直して削除してから、もう一度流してください。"
-            "（データベースには何も書いていません）"
+            "\n".join(
+                [
+                    f"同じ名前の人物がいるため移行できません: {listed}。"
+                    "（データベースには何も書いていません）",
+                    "次のように、2人目以降の名前を変えてから、もう一度流してください"
+                    "（<新しい名前> は重ならない名前に置き換える）。",
+                    *commands,
+                    "同じ人なら、移行のあとに GUI で片方へ顔を割り当て直し、もう片方を削除できます。",
+                ]
+            )
         )
         self.duplicates = duplicates
 
@@ -94,7 +112,7 @@ class DuplicatePersonNames(RuntimeError):
 def check_person_names(database_path: str) -> None:
     """同じ名前の人物がいれば `DuplicatePersonNames`。**何も書かない。**
 
-    `migrate` が控えを取る前に呼ぶ。CLI は確認を聞く前にも呼ぶ（聞いてから
+    `migrate` が控えを取る前に呼ぶ。CLI と GUI は確認を聞く前にも呼ぶ（聞いてから
     止まると、答えたことが無駄になる）。
     """
     connection = sqlite3.connect(str(database_path))
@@ -105,7 +123,7 @@ def check_person_names(database_path: str) -> None:
     finally:
         connection.close()
     if duplicates:
-        raise DuplicatePersonNames(duplicates)
+        raise DuplicatePersonNames(duplicates, str(database_path))
 
 
 def _table_names(connection: sqlite3.Connection) -> set:

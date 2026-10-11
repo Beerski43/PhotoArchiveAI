@@ -801,6 +801,45 @@ def test_a_database_with_duplicated_names_is_not_migrated_and_nothing_is_written
     assert not _has_name_index(database)
 
 
+def test_following_the_instructions_in_the_stop_message_lets_the_migration_through(tmp_path):
+    """**止まったときの案内は、実際に打てば抜け出せる**（PR #92 のレビュー指摘1）。
+
+    版の古い DB は GUI も CLI も開かないので、「GUI で名前を変える」では抜け出せなかった。
+    案内に出した `UPDATE` 文を、`<新しい名前>` を埋めてそのまま流す。
+    """
+    database = tmp_path / "v8.db"
+    ids = _build_v8_database(database, names=("父", "母", "父", "父"))
+
+    with pytest.raises(DuplicatePersonNames) as error:
+        migrate_database(str(database), make_backup=False)
+
+    statements = [
+        line.strip().split(" ", 2)[2].strip('"')
+        for line in str(error.value).splitlines()
+        if line.strip().startswith(f'sqlite3 "{database}"')
+    ]
+    # 1人目は残し、2人目以降だけを案内する
+    assert [statement.rsplit(" ", 1)[1] for statement in statements] == [str(ids[2]), str(ids[3])]
+    assert "GUI で名前を変える" not in str(error.value)
+
+    raw = sqlite3.connect(str(database))
+    for number, statement in enumerate(statements, start=2):
+        raw.execute(statement.replace("<新しい名前>", f"父{number}"))
+    raw.commit()
+    raw.close()
+
+    migrate_database(str(database), make_backup=False)
+
+    connection = db.ensure_database(str(database))
+    try:
+        assert sorted(person["name"] for person in db.list_persons(connection)) == [
+            "母", "父", "父2", "父3",
+        ]
+        assert db.count_faces(connection, assign_source=db.ASSIGN_MANUAL) == 4
+    finally:
+        connection.close()
+
+
 def test_a_legacy_database_with_duplicated_names_stops_before_dropping_its_faces(tmp_path):
     """v1 の再構築経路でも先に止める。**顔を捨てたあとで止まらない。**"""
     database = tmp_path / "legacy.db"

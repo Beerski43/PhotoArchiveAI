@@ -808,6 +808,12 @@ def ensure_migrated(database_path: str, parent=None) -> bool:
     """
     if not migration.needs_migration(database_path):
         return True
+    try:
+        # **確認を聞く前に。** 同名の人物がいると移行は止まる（#90）。CLI と同じ順
+        migration.check_person_names(database_path)
+    except migration.DuplicatePersonNames as error:
+        QMessageBox.critical(parent, "移行できませんでした", str(error))
+        return False
 
     dialog = MigrationDialog(parent, summary=migration.describe_for_operator(database_path))
     if dialog.exec() != QDialog.Accepted:
