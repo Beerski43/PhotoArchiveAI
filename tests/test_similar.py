@@ -98,27 +98,55 @@ def _ids(runs):
     return [[media["id"] for media in run] for run in runs]
 
 
-def test_shots_in_the_same_folder_a_few_seconds_apart_form_a_run():
+def test_photos_of_the_same_event_are_candidates_however_far_apart_in_time():
+    """**同じ行事（フォルダ×日）の中なら、時間は問わない**（#93・利用者の決定）。
+
+    #86 は隣と 10 秒以内しか候補にせず、時間の離れた似た写真が両方選ばれていた。
+    """
     media = [
         _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
         _media(2, "/p/a/2.jpg", "2019-05-03T10:00:08"),
-        # 隣どうしが近ければ連なる（最初の1枚からは 16 秒）
-        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:16"),
-        _media(4, "/p/a/4.jpg", "2019-05-03T10:05:00"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T15:30:00"),
+        # 別の日は別の行事
+        _media(4, "/p/a/4.jpg", "2019-05-04T10:00:00"),
     ]
-    assert _ids(similar.candidate_runs(media, {}, seconds=10)) == [[1, 2, 3]]
+    assert _ids(similar.candidate_groups(media, {}, seconds=10)) == [[1, 2, 3]]
 
 
-def test_another_folder_or_other_family_members_break_the_run():
+def test_another_folder_or_other_family_members_are_not_candidates():
     media = [
         _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
         _media(2, "/p/b/2.jpg", "2019-05-03T10:00:01"),
-        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:02"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T12:00:00"),
         _media(4, "/p/a/4.jpg", "2019-05-03T10:00:03"),
     ]
-    family = {1: frozenset({7}), 3: frozenset({7}), 4: frozenset({7, 8})}
-    # 1 と 3 は同じフォルダで2秒差・同じ家族。4 は写っている家族が違う
-    assert _ids(similar.candidate_runs(media, family, seconds=10)) == [[1, 3]]
+    family = {1: frozenset({7}), 2: frozenset({7}), 3: frozenset({7}), 4: frozenset({7, 8})}
+    # 1 と 3 は同じフォルダ・同じ日・同じ家族。2 はフォルダが、4 は写っている家族が違う
+    assert _ids(similar.candidate_groups(media, family, seconds=10)) == [[1, 3]]
+
+
+def test_another_family_in_between_does_not_split_the_candidates():
+    """#86 は家族の違う写真が1枚挟まるだけで連なりが切れていた。"""
+    media = [
+        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
+        _media(2, "/p/a/2.jpg", "2019-05-03T10:00:01"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:02"),
+    ]
+    family = {1: frozenset({7}), 2: frozenset({8}), 3: frozenset({7})}
+    assert _ids(similar.candidate_groups(media, family, seconds=10)) == [[1, 3]]
+
+
+def test_a_burst_across_midnight_is_still_one_candidate():
+    """**日付をまたぐ連写は、撮影日時の近さでつなぐ**（#86 の束を新しい候補から落とさない）。"""
+    media = [
+        _media(1, "/p/a/1.jpg", "2019-12-31T23:59:58"),
+        _media(2, "/p/a/2.jpg", "2020-01-01T00:00:03"),
+        _media(3, "/p/a/3.jpg", "2020-01-01T00:30:00"),
+        _media(4, "/p/a/4.jpg", "2019-12-31T20:00:00"),
+    ]
+    assert _ids(similar.candidate_groups(media, {}, seconds=10)) == [[4, 1, 2, 3]]
+    # 間隔を 0 にすれば、日付で切れる
+    assert _ids(similar.candidate_groups(media, {}, seconds=0)) == [[4, 1], [2, 3]]
 
 
 def test_photos_without_a_time_and_videos_are_never_bundled():
@@ -129,18 +157,95 @@ def test_photos_without_a_time_and_videos_are_never_bundled():
         _media(4, "/p/a/4.mp4", "2019-05-03T10:00:01", type="video"),
         _media(5, "/p/a/5.jpg", None),
     ]
-    assert similar.candidate_runs(media, {}) == []
+    assert similar.candidate_groups(media, {}) == []
 
 
-def test_scenes_split_a_run_by_looks():
-    run = [_media(i, f"/p/a/{i}.jpg", "2019-05-03T10:00:00") for i in (1, 2, 3, 4)]
+def _look(bits):
+    return similar.encode(similar.FROM_EXIF, bits)
+
+
+def _ones(count):
+    """下位 ``count`` ビットが1の値。0 との距離が ``count`` になる。"""
+    return (1 << count) - 1
+
+
+def test_scenes_split_a_group_by_looks():
+    group = [_media(i, f"/p/a/{i}.jpg", "2019-05-03T10:00:00") for i in (1, 2, 3, 4)]
     looks = {
-        1: similar.encode(similar.FROM_EXIF, 0),
-        2: similar.encode(similar.FROM_EXIF, 0b111),  # 1 と距離3
-        3: similar.encode(similar.FROM_EXIF, (1 << 64) - 1),  # 誰とも遠い
+        1: _look(0),
+        2: _look(0b111),  # 1 と距離3
+        3: _look((1 << 64) - 1),  # 誰とも遠い
         4: None,  # 測れなかった → 束ねない
     }
-    assert sorted(_ids(similar.scenes(run, looks, max_distance=5))) == [[1, 2], [3], [4]]
+    assert _ids(similar.scenes(group, looks, max_distance=5)) == [[1, 2], [3], [4]]
+
+
+def test_a_photo_close_only_to_a_dropped_photo_is_kept():
+    """**数珠つなぎにしない**（#93）。残した写真と遠ければ、外した写真と近くても残す。
+
+    行事まるごとを連結で束ねると、実データで挙式と披露宴の写真まで1つの場面になった。
+    """
+    group = [_media(i, f"/p/a/{i}.jpg", "2019-05-03T10:00:00") for i in (1, 2, 3)]
+    # 1〜2 は距離4、2〜3 は距離4、1〜3 は距離8
+    looks = {1: _look(0), 2: _look(_ones(4)), 3: _look(_ones(8))}
+    assert _ids(similar.scenes(group, looks, max_distance=5)) == [[1, 2], [3]]
+
+
+def test_photos_far_apart_in_time_need_to_look_closer():
+    """**時間の離れた2枚は `FAR_DISTANCE`（14）で見る**。連写は `max_distance`（16）のまま。
+
+    実データで、時間の離れた 15〜16 の組に別の場面が混ざった（利用者の決定・#93）。
+    """
+    assert similar.FAR_DISTANCE == 14
+    looks = {1: _look(0), 2: _look(_ones(15)), 3: _look(_ones(14))}
+    burst = [
+        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
+        _media(2, "/p/a/2.jpg", "2019-05-03T10:00:05"),
+    ]
+    assert _ids(similar.scenes(burst, looks, max_distance=16, seconds=10)) == [[1, 2]]
+    apart = [
+        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
+        _media(2, "/p/a/2.jpg", "2019-05-03T15:00:00"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T16:00:00"),
+    ]
+    assert _ids(similar.scenes(apart, looks, max_distance=16, seconds=10)) == [[1, 3], [2]]
+    # ルールの距離のほうが小さければ、そちらに従う
+    # （3 は 2 と距離1なので、2 の場面に入る）
+    assert _ids(similar.scenes(apart, looks, max_distance=10, seconds=10)) == [[1], [2, 3]]
+
+
+def test_a_burst_member_far_from_the_representative_needs_to_look_closer():
+    """**「時間の離れた2枚」は代表との差で決まる**（隣との差ではない。PR #94 のレビュー指摘1）。
+
+    8 秒おきの連写でも、代表から 16 秒後の3枚目は距離 14 で見る。定義を変えたら気づけるように。
+    """
+    burst = [
+        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
+        _media(2, "/p/a/2.jpg", "2019-05-03T10:00:08"),
+        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:16"),
+    ]
+    looks = {1: _look(0), 2: _look(_ones(8)), 3: _look(_ones(15))}
+    assert _ids(similar.candidate_groups(burst, {}, seconds=10)) == [[1, 2, 3]]
+    assert _ids(similar.scenes(burst, looks, max_distance=16, seconds=10)) == [[1, 2], [3]]
+
+
+def test_a_burst_across_midnight_does_not_bundle_the_other_days_photos():
+    """**0時をまたぐ連写がつないだ別の日の写真どうしは束ねない**（PR #94 のレビュー指摘2）。
+
+    候補の組は連写で前後の日がつながるが、別の日は別の行事（利用者の決定）。
+    """
+    media = {
+        1: _media(1, "/p/a/1.jpg", "2019-12-31T20:00:00"),
+        2: _media(2, "/p/a/2.jpg", "2019-12-31T23:59:58"),
+        3: _media(3, "/p/a/3.jpg", "2020-01-01T00:00:03"),
+        4: _media(4, "/p/a/4.jpg", "2020-01-01T12:00:00"),
+    }
+    assert _ids(similar.candidate_groups(list(media.values()), {}, seconds=10)) == [[1, 2, 3, 4]]
+    far = (1 << 64) - 1
+    # 1 と 4 は距離5（別の日）、連写の 2 と 3 は同じ絵（0時をまたぐ）
+    looks = {1: _look(0), 4: _look(_ones(5)), 2: _look(far), 3: _look(far)}
+    ordered = [media[1], media[4], media[2], media[3]]
+    assert _ids(similar.scenes(ordered, looks, max_distance=16, seconds=10)) == [[1], [4], [2, 3]]
 
 
 # ---------------------------------------------------------------------------

@@ -252,18 +252,18 @@ def _remove_similar(
     root_paths: Sequence[Path],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> List[Dict[str, Any]]:
-    """連写・似た写真を、場面ごとに並びの先頭1枚へまとめる（#86・`similar`）。
+    """同じ行事の中の連写・似た写真を、場面ごとに並びの先頭1枚へまとめる（#86・#93・`similar`）。
 
     ``ranked`` は並べ終えた一覧。**見た目は候補の写真だけを測り**、`Media.look_hash` に
     残す（2回目からは読まない）。測れなかった写真は束ねずに残す。
     """
     seconds = _rule_number(rule, "similar_seconds", similar.DEFAULT_SECONDS)
     max_distance = _rule_number(rule, "similar_distance", similar.DEFAULT_DISTANCE)
-    runs = similar.candidate_runs(ranked, family_of, seconds)
+    groups = similar.candidate_groups(ranked, family_of, seconds)
     looks: Dict[int, Optional[str]] = {}
     unmeasured: List[Dict[str, Any]] = []
-    for run in runs:
-        for media in run:
+    for group in groups:
+        for media in group:
             if similar.decode(media.get("look_hash")) is None:
                 unmeasured.append(media)
             else:
@@ -283,10 +283,11 @@ def _remove_similar(
 
     rank = {media["id"]: index for index, media in enumerate(ranked)}
     dropped = set()
-    for run in runs:
-        for scene in similar.scenes(run, looks, int(max_distance)):
-            best = min(scene, key=lambda media: rank[media["id"]])
-            dropped.update(media["id"] for media in scene if media is not best)
+    for group in groups:
+        ordered = sorted(group, key=lambda media: rank[media["id"]])
+        for scene in similar.scenes(ordered, looks, int(max_distance), seconds):
+            # 先頭が代表（並びのいちばん上）。残りを外す
+            dropped.update(media["id"] for media in scene[1:])
     return [media for media in ranked if media["id"] not in dropped]
 
 

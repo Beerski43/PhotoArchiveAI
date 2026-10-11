@@ -6,9 +6,10 @@
 
 **2段で決める**（利用者の決定・2026-10-10）。
 
-1. **DB だけで候補を絞る**（`candidate_runs`）: 同じフォルダ・撮影日時が近い・
-   写っている家族が同じ。撮影日時は秒まで要るので、EXIF の無い写真は束ねない
-2. **見た目で確かめる**（`scenes`）: 候補の中だけ dHash を取り、近いものを同じ場面にする。
+1. **DB だけで候補を絞る**（`candidate_groups`）: 同じフォルダ・同じ日（#93。
+   日をまたぐ連写は撮影日時の近さでつなぐ）・写っている家族が同じ。撮影日時は秒まで要るので、EXIF の無い写真は束ねない
+2. **見た目で確かめる**（`scenes`）: 候補の中だけ dHash を取り、並びの順に見て、残した写真と
+   近いものを同じ場面にする（連結にしない・#93）。時間の離れた2枚は `FAR_DISTANCE` で厳しく見る。
    **時間だけで束ねると、構図を変えた写真まで消える**（2秒以内に撮った2枚でも、
    距離の中央は 10。10分より離れた2枚は 24 以上。2026-10-10・実データ）
 
@@ -55,6 +56,18 @@ DEFAULT_SECONDS = 10
 #: すべて同じ場面の連写、19〜24 は構図や写っている子が変わった組が混ざった。
 #: 10分より離れて撮った2枚は 24 以上（中央 31）。
 DEFAULT_DISTANCE = 16
+
+#: **代表と撮影日時が離れた写真**（代表との差が ``similar_seconds`` を超える）に使う距離の上限。
+#: 連写の中でも、代表から ``similar_seconds`` より後ろの写真はこちらで見る（隣との差ではない。
+#: 実データの測定もこの定義で数えた。PR #94 のレビュー指摘1）。
+#:
+#: 同じ行事の中まで候補を広げたとき（#93）に実データで見比べて決めた（2026-10-11）。
+#: 外れた写真と外す原因になった写真の組を全部見たところ、14 以下はすべて同じ場面、
+#: 時間の離れた 15〜16 の 8 組のうち 3 組は別の場面（着物で座った写真とドレスで立った
+#: 写真・別のスタジオセット）だった。連写は #86 で 16 まで同じ場面だと確かめてあるので、
+#: こちらだけ厳しくする（利用者の決定）。ルールの ``similar_distance`` がこれより小さければ
+#: そちらに従う。
+FAR_DISTANCE = 14
 
 
 def dhash(image: Image.Image) -> int:
@@ -162,66 +175,88 @@ def _moment(media: Dict[str, Any]) -> Optional[datetime]:
     return taken_moment(media.get("shooting_date"))
 
 
-def candidate_runs(
+def candidate_groups(
     media_list: Iterable[Dict[str, Any]],
     family_of: Dict[int, FrozenSet[int]],
     seconds: float = DEFAULT_SECONDS,
 ) -> List[List[Dict[str, Any]]]:
-    """同じ場面かもしれない写真の連なり（2枚以上のものだけ）。**DB の値だけで決める。**
+    """同じ場面かもしれない写真の組（2枚以上のものだけ）。**DB の値だけで決める。**
 
-    同じフォルダで、撮影日時の差が ``seconds`` 以内に連なり、写っている家族の集合が
-    隣と同じもの。家族の写っていない写真どうしも（空の集合として）束ねうる。
+    **同じフォルダ・写っている家族の集合が同じ・同じ日**の写真（#93。行事の中なら
+    時間は問わない。利用者の決定）。撮影日時の順に並べ、隣と同じ日か、差が
+    ``seconds`` 以内なら連なる（後者は**日付をまたぐ連写**を落とさないため。#86 の
+    連写の束はすべてこの組にも入る）。間に別の家族の写真が挟まっても切れない。
+    家族の写っていない写真どうしも（空の集合として）束ねうる。
     撮影日時が秒まで読めない写真と動画は入らない。
     """
     dated = []
     for media in media_list:
         moment = _moment(media)
         if moment is not None:
-            dated.append((os.path.dirname(media["path"]), moment, media))
-    dated.sort(key=lambda item: (item[0], item[1], item[2]["id"]))
-    runs: List[List[Dict[str, Any]]] = []
+            family = family_of.get(media["id"], frozenset())
+            dated.append((os.path.dirname(media["path"]), sorted(family), moment, media))
+    dated.sort(key=lambda item: (item[0], item[1], item[2], item[3]["id"]))
+    groups: List[List[Dict[str, Any]]] = []
     current: List[Dict[str, Any]] = []
     previous = None
-    for folder, moment, media in dated:
-        family = family_of.get(media["id"], frozenset())
+    for folder, family, moment, media in dated:
         joins = (
             previous is not None
-            and folder == previous[0]
-            and (moment - previous[1]).total_seconds() <= seconds
-            and family == previous[2]
+            and (folder, family) == previous[:2]
+            and (
+                moment.date() == previous[2].date()
+                or (moment - previous[2]).total_seconds() <= seconds
+            )
         )
         if not joins:
             if len(current) > 1:
-                runs.append(current)
+                groups.append(current)
             current = []
         current.append(media)
-        previous = (folder, moment, family)
+        previous = (folder, family, moment)
     if len(current) > 1:
-        runs.append(current)
-    return runs
+        groups.append(current)
+    return groups
 
 
 def scenes(
-    run: Sequence[Dict[str, Any]], looks: Dict[int, Optional[str]], max_distance: int = DEFAULT_DISTANCE
+    group: Sequence[Dict[str, Any]],
+    looks: Dict[int, Optional[str]],
+    max_distance: int = DEFAULT_DISTANCE,
+    seconds: float = DEFAULT_SECONDS,
 ) -> List[List[Dict[str, Any]]]:
-    """候補の連なりを、見た目の近さで場面に分ける。**近い2枚が1組でもあれば同じ場面**（連結）。
+    """候補の組を場面に分ける。``group`` は**並びの順**（残したい順）に渡す。
 
+    先頭から順に見て、**すでに残した写真のどれかと近ければ、その場面に入れる**（残さない）。
+    どれとも近くなければ、新しい場面の代表として残す。各場面の先頭が代表。
+
+    **連結（1組でも近ければ同じ場面）にしない**（#93）。候補を行事まるごとに広げると、
+    A〜B・B〜C が近いだけで遠い A と C が同じ場面になる。実データでは、残した代表から
+    距離 18〜26 の写真（挙式と披露宴、衣装の違う写真）まで外れた（2026-10-11）。
+
+    近さの上限は、**代表との**撮影日時の差が ``seconds`` 以内なら ``max_distance``（連写）、
+    離れていれば ``FAR_DISTANCE`` と ``max_distance`` の小さいほう。
+    **日付の違う2枚は、連写（差が ``seconds`` 以内）のときだけ比べる。** 候補の組は
+    0時をまたぐ連写で前後の日がつながるが、別の日は別の行事（PR #94 のレビュー指摘2）。
     見た目を測れなかった写真は、どの写真とも束ねない（消さずに残す）。
     """
-    parent = list(range(len(run)))
-
-    def root(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    for i in range(len(run)):
-        for j in range(i + 1, len(run)):
-            gap = distance(looks.get(run[i]["id"]), looks.get(run[j]["id"]))
-            if gap is not None and gap <= max_distance:
-                parent[root(j)] = root(i)
-    grouped: Dict[int, List[Dict[str, Any]]] = {}
-    for index, media in enumerate(run):
-        grouped.setdefault(root(index), []).append(media)
-    return list(grouped.values())
+    far = min(max_distance, FAR_DISTANCE)
+    kept: List[List[Dict[str, Any]]] = []
+    for media in group:
+        home = None
+        for scene in kept:
+            representative = scene[0]
+            gap = distance(looks.get(representative["id"]), looks.get(media["id"]))
+            if gap is None:
+                continue
+            apart = abs((_moment(representative) - _moment(media)).total_seconds())
+            if apart > seconds and _moment(representative).date() != _moment(media).date():
+                continue  # 別の日は別の行事。日付をまたいでつなぐのは連写だけ
+            if gap <= (max_distance if apart <= seconds else far):
+                home = scene
+                break
+        if home is None:
+            kept.append([media])
+        else:
+            home.append(media)
+    return kept

@@ -1,7 +1,7 @@
 """連写・似た写真の束ね方を実データで測る（#86）。**DB は読み取り専用で開く。**
 
-`select` と同じ手順（`similar.candidate_runs` → `similar.measure` → `similar.scenes`）で、
-家族の写った写真を束ね、閾値ごとに何枚減るかを数える。目で確かめるための
+`select` と同じ手順（`similar.candidate_groups` → `similar.measure` → `similar.scenes`）で、
+家族の写った写真を束ね（#93 から同じ行事の中。ここでは並びの代わりに撮影日時の順で代表を決める）、閾値ごとに何枚減るかを数える。目で確かめるための
 見比べ画像（距離の帯ごとに、隣り合う2枚を並べたもの）も書き出す。
 
     python scripts/measure_similar_photos.py --db data/photoarchive.db --out <リポジトリの外>
@@ -95,9 +95,9 @@ def main(argv=None) -> int:
     cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
 
     media, family_of = _load(args.db)
-    runs = similar.candidate_runs(media, family_of, args.seconds)
+    runs = similar.candidate_groups(media, family_of, args.seconds)
     members = [item for run in runs for item in run]
-    print(f"家族の写った写真 {len(media)} 枚 / 候補の連なり {len(runs)} 個・{len(members)} 枚")
+    print(f"家族の写った写真 {len(media)} 枚 / 候補の組 {len(runs)} 個・{len(members)} 枚")
 
     looks = {}
     todo = []
@@ -127,10 +127,12 @@ def main(argv=None) -> int:
         sources[source] = sources.get(source, 0) + 1
     print(f"測れた {len(looks)} / {len(members)} 枚（取った場所: {sources}）")
 
-    print("閾値ごとに減る枚数（候補の連なりの中だけ）")
+    print("閾値ごとに減る枚数（候補の組の中だけ。時間の離れた2枚は similar.FAR_DISTANCE まで）")
     for threshold in THRESHOLDS:
         removed = sum(
-            len(scene) - 1 for run in runs for scene in similar.scenes(run, looks, threshold)
+            len(scene) - 1
+            for run in runs
+            for scene in similar.scenes(run, looks, threshold, args.seconds)
         )
         print(f"  距離 <= {threshold:2d}: {removed:6d} 枚")
 

@@ -233,7 +233,7 @@ def taken_at(
 def taken_moment(shooting_date: Optional[str]) -> Optional[datetime]:
     """EXIF の撮影日時を**秒まで**読む。日付だけ・読めない値は ``None``。
 
-    連写を束ねる（`similar.candidate_runs`）のに使う。**読めるかどうかは
+    似た写真を束ねる（`similar.candidate_groups`）のに使う。**読めるかどうかは
     `parse_date` に預ける**（壊れた値を弾くのはあちらの役目）。フォルダ名から
     起こした区間は秒を持たないので、ここでは見ない。
     """

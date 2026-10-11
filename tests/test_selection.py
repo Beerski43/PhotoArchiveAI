@@ -676,10 +676,27 @@ def test_a_burst_counts_once_against_the_yearly_limit(connection, tmp_path: Path
     assert _names(select_media(connection, {"count_per_year": 2})) == ["b.jpg", "c.jpg"]
 
 
-def test_shots_further_apart_than_the_rule_says_are_kept(connection, tmp_path: Path):
-    _burst(connection, tmp_path)
-    selected = select_media(connection, {"similar_seconds": 1})
-    assert _names(selected) == ["b.jpg", "a.jpg", "c.jpg"]
+def _similar_later(connection, folder, name, when, quality=70.0):
+    """``_burst`` の a.jpg とほぼ同じ絵を、別の時刻に撮ったことにして足す。"""
+    path = write_photo(folder / name, burst_of(scene(1), 5))
+    _add(connection, path, shooting_date=when, quality=quality, faces=[_face("${PERSON_1}")])
+
+
+def test_a_similar_photo_hours_later_at_the_same_event_is_bundled(connection, tmp_path: Path):
+    """**同じ行事（フォルダ×日）なら、時間が離れていても束ねる**（#93）。
+
+    #86 は隣と 10 秒以内しか見ず、連写でない似た写真が両方選ばれていた。
+    """
+    folder = _burst(connection, tmp_path)
+    _similar_later(connection, folder, "d.jpg", "2019-05-03T15:00:00")
+    assert _names(select_media(connection, {})) == ["b.jpg", "c.jpg"]
+
+
+def test_a_similar_photo_on_another_day_is_kept(connection, tmp_path: Path):
+    """別の日は別の行事。似ていても束ねない（利用者の決定・#93）。"""
+    folder = _burst(connection, tmp_path)
+    _similar_later(connection, folder, "d.jpg", "2019-05-04T10:00:00")
+    assert _names(select_media(connection, {})) == ["b.jpg", "d.jpg", "c.jpg"]
 
 
 def test_looks_are_saved_and_not_measured_again(connection, tmp_path: Path, monkeypatch):
