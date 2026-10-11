@@ -5,9 +5,12 @@
 どこから来たファイルで動いているのかが分からなくなる。dlib の `.dat` と同じで、
 **設置は明示的な操作のまま**にしてある。
 
-いま取得するのは ArcFace の認識モデル1本だけ。**`insightface` パッケージは
-入れない**（モデル動物園と GPU 版 onnxruntime を引き込む）。`buffalo_l` の
-配布物から必要な1本を取り出して置く。
+取得するのは2本。
+
+- ArcFace の認識モデル。**`insightface` パッケージは入れない**（モデル動物園と
+  GPU 版 onnxruntime を引き込む）。`buffalo_l` の配布物から必要な1本を取り出して置く
+- MediaPipe Face Landmarker（目閉じ・笑顔の表情の値・#95）。pip の mediapipe には
+  入っていない
 
 **sha256 を必ず検証する。** 特徴量モデルが別物にすり替わると、照合の結果が
 静かに変わる（版の文字列は同じままなので、`reembed` も作り直さない）。
@@ -58,7 +61,17 @@ ARCFACE = ModelFile(
     note="ArcFace の顔特徴量(512次元)。buffalo_l から認識用の1本だけを取り出す。",
 )
 
-MODELS: Sequence[ModelFile] = (ARCFACE,)
+FACE_LANDMARKER = ModelFile(
+    name="face_landmarker.task",
+    sha256="64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    url=(
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+        "face_landmarker/float16/1/face_landmarker.task"
+    ),
+    note="MediaPipe Face Landmarker。顔の表情の値（目閉じ・笑顔）を測る（#95）。",
+)
+
+MODELS: Sequence[ModelFile] = (ARCFACE, FACE_LANDMARKER)
 
 
 def sha256_of(path: Path) -> str:

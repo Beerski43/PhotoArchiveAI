@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tup
 
 import yaml
 
-from . import appearance, db, scoring, similar
+from . import appearance, db, expression, scoring, similar
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 
@@ -214,10 +214,14 @@ def family_scores(
     読むと人が直した結果が `select` に届かない。式は `scoring.family_photo_score`
     （`match` が書く `family_score` と同じもの）。
 
-    見え方が未計測の家族の顔は、先に測る（初回は数分。2回目からは差分だけ）。
+    見え方と表情（目閉じ・笑顔・#95）が未計測の家族の顔は、先に測る（初回は数分。
+    2回目からは差分だけ）。
     ``assign_sources`` の種別の顔だけを家族として数え、測るのもそれだけ（#89）。
     """
     appearance.fill_missing(
+        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback
+    )
+    expression.fill_missing(
         connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback
     )
     rows = db.family_faces(connection, assign_sources=assign_sources)

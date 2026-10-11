@@ -6,6 +6,7 @@ import pytest
 
 from photoarchive_ai import db, scoring
 from photoarchive_ai.appearance import Appearance
+from photoarchive_ai.expression import Expression
 from photoarchive_ai.matcher import MATCH_RULE
 from photoarchive_ai.selection import (
     _build_duplicate_groups,
@@ -48,10 +49,13 @@ def _add(connection, path, *, type="image", file_hash=None, shooting_date=None,
 
 
 def _face(person=None, *, sharpness=200.0, yaw=0.0, aligned=True, smile=100.0,
-          source=db.ASSIGN_MANUAL, rule=None):
-    """顔の仕様。``person`` が None なら他人（未割当）。既定は「くっきり・正面・笑顔」。"""
+          eye_blink=0.0, source=db.ASSIGN_MANUAL, rule=None):
+    """顔の仕様。``person`` が None なら他人（未割当）。既定は「くっきり・正面・目を開けた笑顔」。
+
+    ``smile`` は 0〜100 で、表情の値（`Face.mouth_smile`・#95）に直して書く。
+    """
     return dict(person=person, sharpness=sharpness, yaw=yaw, aligned=aligned, smile=smile,
-                source=source, rule=rule)
+                eye_blink=eye_blink, source=source, rule=rule)
 
 
 def _person(connection, name):
@@ -59,7 +63,8 @@ def _person(connection, name):
     return row[0] if row else db.add_person(connection, name)
 
 
-def _add_face(connection, media_id, *, person, sharpness, yaw, aligned, smile, source, rule):
+def _add_face(connection, media_id, *, person, sharpness, yaw, aligned, smile, eye_blink,
+              source, rule):
     person_id = _person(connection, person) if person else None
     face_id = db.add_face(
         connection,
@@ -72,6 +77,9 @@ def _add_face(connection, media_id, *, person, sharpness, yaw, aligned, smile, s
         assign_source=source if person_id else None,
     )
     db.save_appearance(connection, [(face_id, Appearance(aligned, yaw if aligned else None, sharpness))])
+    db.save_expressions(connection, [(face_id, Expression(
+        True, eye_blink, None if smile is None else smile / 100.0 * scoring.SMILE_FULL
+    ))])
     if rule is not None:
         connection.execute("UPDATE Face SET assign_rule = ? WHERE id = ?", (rule, face_id))
     return face_id
@@ -216,7 +224,7 @@ def test_family_only_counts_automatic_assignments_unless_the_rule_says_otherwise
 def test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo(connection):
     """false のとき、自動割り当ての顔は点にも入らない（他人と同じ扱い）。"""
     _add(connection, "blurred-manual.jpg", faces=[
-        _face("${PERSON_4}", sharpness=25.0, aligned=False, smile=0.0),
+        _face("${PERSON_4}", sharpness=25.0, aligned=False, smile=0.0, eye_blink=1.0),
         _face("${PERSON_5}", source=db.ASSIGN_AUTO),
     ])
     _add(connection, "crisp-manual.jpg", faces=[_face("${PERSON_4}", smile=0.0)])

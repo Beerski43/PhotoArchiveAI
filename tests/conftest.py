@@ -4,6 +4,7 @@ import pytest
 
 from tests.fakes import (
     APPEARANCE_STATE,
+    EXPRESSION_STATE,
     FACE_MESH_STATE,
     FRONTAL_POINTS,
     _FakeArcFaceSession,
@@ -61,6 +62,9 @@ def fake_face_mesh():
 
 
 
+_OPEN_NEUTRAL = dict(EXPRESSION_STATE["blendshapes"])
+
+
 @pytest.fixture(autouse=True)
 def fake_face_models(monkeypatch):
     """特徴量モデルの読み込みを差し替える。実物の .dat / .onnx は使わない。"""
@@ -94,6 +98,27 @@ def fake_face_models(monkeypatch):
     # は差し替えを**すべて**巻き戻すので、番人ごと消える（PR #60 の指摘1で実測）。
     # 代わりに `test_fakes_stay_installed.py` が、`models` マーカーの無いテストで
     # `monkeypatch.undo()` を使っていないことを静的に見張る。
+    # **表情（目閉じ・笑顔）も実物の Face Landmarker を読まない**（`models/` に
+    # 置いた環境だけ結果が変わらないように）。既定は「目を開けた無表情」。
+    from photoarchive_ai import expression
+
+    EXPRESSION_STATE["available"] = True
+    EXPRESSION_STATE["blendshapes"] = dict(_OPEN_NEUTRAL)
+    monkeypatch.setattr(
+        expression,
+        "_load_landmarker",
+        lambda: object() if EXPRESSION_STATE["available"] else None,
+    )
+    monkeypatch.setattr(
+        expression,
+        "_blendshapes",
+        lambda _rgb: (
+            None
+            if EXPRESSION_STATE["blendshapes"] is None
+            else dict(EXPRESSION_STATE["blendshapes"])
+        ),
+    )
+
     monkeypatch.setattr(face, "EMBED_MIN_FACE_PX", 4)
     face.reset_model_cache()
     scoring.reset_model_cache()

@@ -266,7 +266,7 @@
 | `test_a_leap_day_birthday_gets_the_same_age_window_as_the_screen` | 2月29日生まれの年齢の窓が画面と一致する（指摘4） |
 | `test_refreshing_folder_dates_leaves_the_commit_to_the_caller` | 移行の取引の途中で確定しない（指摘5） |
 
-### `test_fetch_models.py` — モデルの取得（9件）
+### `test_fetch_models.py` — モデルの取得（10件）
 
 **ネットワークには触らない。** 取得を差し替えて、sha256 の検証と「置かない」判断を見る。
 
@@ -281,6 +281,7 @@
 | `test_check_only_never_downloads` | `--check` は取得しない |
 | `test_main_reports_a_failure_with_a_non_zero_code` | 失敗を終了コードで返す |
 | `test_the_arcface_entry_matches_what_face_py_looks_for` | **取得する名前と本体が探す名前をそろえる** |
+| `test_the_face_landmarker_entry_matches_what_expression_py_looks_for` | 目閉じ・笑顔のモデルも同じ（#95） |
 
 ### `test_scanner_incremental.py` — 走査と差分判定（20件）
 
@@ -711,6 +712,27 @@
 | `test_an_older_teacher_accepts_a_face_even_when_a_baby_teacher_is_nearer` | **手本を足して割り当てが減らない**（どれか1件が上限以内なら受け入れる。PR #70 のレビュー指摘2） |
 | `test_a_face_beyond_every_teachers_own_limit_is_still_left_unassigned` | 上限以内の手本が無ければ受け入れない |
 
+### `test_expression.py` — 顔の表情（目閉じ・笑顔）と並び（14件。#95）
+
+**実物の Face Landmarker は読まない。** 表情の値はフェイク（`tests/fakes.py` の `EXPRESSION_STATE`）が返す。
+
+| テスト | 内容 |
+|---|---|
+| `test_the_eyes_are_closed_only_as_far_as_the_more_open_eye` | 目は両目の小さいほう（片目のウインクは閉じたことにしない）。笑顔は左右の平均 |
+| `test_the_thumbnail_is_padded_before_the_landmarker_sees_it` | **サムネイルに余白を足してから当てる**（余白なしは実データの 5% で顔が取れなかった） |
+| `test_fill_missing_writes_the_expression_of_assigned_faces_only` | 割り当てのある顔だけ測る。2回目は差分だけ |
+| `test_a_face_the_landmarker_cannot_find_is_recorded_and_not_measured_again` | **取れなかった顔は 0 を書き、測り直さない** |
+| `test_nothing_is_written_when_the_model_is_missing` | **モデルが無いときは書かない**（「測れない」と「取れなかった」を混ぜない） |
+| `test_the_real_loader_gives_up_quietly_without_the_model_file` | 実物の読み込み口はモデルが無ければ None |
+| `test_closed_eyes_lower_the_face_and_an_open_smile_raises_it` | 目閉じは下げ、笑顔は上げる（重みどおり） |
+| `test_a_family_member_with_closed_eyes_is_not_counted_as_clearly_pictured` | **目を閉じた家族は人数に数えない**（利用者の決定） |
+| `test_an_unmeasured_expression_neither_helps_nor_excludes` | 未計測は 0.5・人数からも外さない |
+| `test_half_closed_eyes_are_scored_between_open_and_closed` | 0.3〜0.5 は直線 |
+| `test_select_measures_the_expressions_and_puts_the_open_eyes_first` | `select` は未計測の表情を先に測って並べる |
+| `test_match_measures_the_expressions_before_writing_the_family_score` | `match` も `family_score` を書く前に測る |
+| `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
+| `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚） |
+
 ### `test_converter.py` — HEIC → JPEG（16件）
 
 | テスト | 内容 |
@@ -842,7 +864,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_clearing_before_a_question_leaves_no_old_bar` | 問いを出す前に2行を消し、答えたあとに古いバーが残らない |
 | `test_convert_heic_says_which_files_could_not_be_read` | `convert-heic` は壊れた HEIC を「読めない」と聞き、最後に一覧で知らせる |
 
-### `test_migration.py` — スキーマの移行（32件）
+### `test_migration.py` — スキーマの移行（33件）
 
 **v1 → v2**: Media と Person を温存し Face と AnalysisResult を破棄すること、
 冪等性、旧スキーマのまま使おうとしたときのエラー、特徴量 BLOB の往復。
@@ -886,6 +908,9 @@ editable install のときだけ出すこと（通常のインストールでは
 `test_following_the_instructions_in_the_stop_message_lets_the_migration_through`）。
 **v1 の再構築経路でも、顔を捨てる前に止める**（`test_a_legacy_database_with_duplicated_names_stops_before_dropping_its_faces`）。
 重なりの一覧は名前順・id 順（`test_duplicate_person_names_lists_each_name_with_its_ids`）。
+
+**v9 → v10**（#95）: `Face` に表情の列を足すだけで、手本も見え方も消えない
+（`test_a_version_9_database_gains_the_expression_columns_and_keeps_its_faces`）。
 
 ### `test_embedding_measurement.py` — 特徴量モデルの比較と他人誤認率（29件＋`models` 1件）
 
@@ -1035,10 +1060,12 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 2回目のスキャンが差分になることも確認する。`select` は出力先の直下に1つコピーし、
 2回流しても前回の出力が残らない（#83）。
 
-### `test_face_real.py` — 実物のモデル（2件、`models` マーカー）
+### `test_face_real.py` — 実物のモデル（5件、`models` マーカー）
 
 `face_recognition_models` を import せずにモデルのパスを取り出せること、
-実物の dlib が128次元を返すこと。
+実物の ArcFace が記述どおりの次元を返すこと（元写真・サムネイル・同じ画像から同じ値）。
+**実物の Face Landmarker を呼べること**（`test_the_real_face_landmarker_can_be_called`・#95）。
+conftest が `mediapipe` をフェイクに差し替えているので、これだけは白紙の子プロセスで流す。
 
 **矩形の正方形化とパディングの確認はここから `test_face_io.py` へ移した。**
 `face_rect` はモデルを必要としないのに `models` マーカーの下にあったため、

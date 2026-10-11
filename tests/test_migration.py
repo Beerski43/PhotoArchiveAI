@@ -769,7 +769,7 @@ def test_a_version_8_database_gains_the_unique_name_index_and_keeps_its_faces(tm
     assert needs_migration(str(database)) is False
     connection = db.ensure_database(str(database))
     try:
-        assert db.get_schema_version(connection) == db.SCHEMA_VERSION == 9
+        assert db.get_schema_version(connection) == db.SCHEMA_VERSION
         assert db.count_faces(connection, assign_source=db.ASSIGN_MANUAL) == 2
         with pytest.raises(db.DuplicatePersonName):
             db.add_person(connection, "父")
@@ -871,3 +871,45 @@ def test_duplicate_person_names_lists_each_name_with_its_ids(tmp_path):
         ]
     finally:
         raw.close()
+
+
+# ---------------------------------------------------------------------------
+# v9 → v10: Face の表情（目閉じ・笑顔・#95）
+# ---------------------------------------------------------------------------
+
+
+def test_a_version_9_database_gains_the_expression_columns_and_keeps_its_faces(tmp_path):
+    """列を足すだけ。**手本も見え方も消えない**（CLAUDE.md §4）。"""
+    database = tmp_path / "v9.db"
+    connection = db.ensure_database(str(database))
+    media_id = db.save_media(connection, {
+        "path": "/p/2019/a.jpg", "filename": "a.jpg", "type": "image", "file_hash": "h",
+        "file_size": 1, "created_time": "2019-01-01T00:00:00",
+    })
+    person_id = db.add_person(connection, "父")
+    face_id = db.add_face(
+        connection, media_id=media_id, bbox=(0, 10, 10, 0),
+        embedding=[0.0] * db.EMBEDDING_DIM, embed_version=db.embedding_model.ACTIVE.version,
+        person_id=person_id, assign_source=db.ASSIGN_MANUAL,
+    )
+    connection.execute("UPDATE Face SET aligned = 1, sharpness = 80.0 WHERE id = ?", (face_id,))
+    for column in ("expression_found", "eye_blink", "mouth_smile"):
+        connection.execute(f"ALTER TABLE Face DROP COLUMN {column}")
+    connection.execute("PRAGMA user_version = 9")
+    connection.commit()
+    connection.close()
+    assert needs_migration(str(database))
+
+    migrate_database(str(database), make_backup=False)
+
+    connection = db.ensure_database(str(database))
+    try:
+        assert db.get_schema_version(connection) == db.SCHEMA_VERSION == 10
+        row = connection.execute(
+            "SELECT person_id, assign_source, aligned, sharpness,"
+            " expression_found, eye_blink, mouth_smile FROM Face WHERE id = ?",
+            (face_id,),
+        ).fetchone()
+        assert tuple(row) == (person_id, db.ASSIGN_MANUAL, 1, 80.0, None, None, None)
+    finally:
+        connection.close()

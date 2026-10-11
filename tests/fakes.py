@@ -25,6 +25,18 @@ FACE_MESH_STATE = {"landmarks": {}, "detected": True}
 #: 整列できる」。整列できない手本を作るテストは `aligned` を False にする。
 APPEARANCE_STATE = {"aligned": True}
 
+#: 顔の表情（`expression`）のフェイクが返すもの。``None`` なら「顔が取れなかった」。
+#: ``available`` が False なら「モデルが無い環境」。既定は「目を開けた無表情」。
+EXPRESSION_STATE = {
+    "available": True,
+    "blendshapes": {
+        "eyeBlinkLeft": 0.0,
+        "eyeBlinkRight": 0.0,
+        "mouthSmileLeft": 0.0,
+        "mouthSmileRight": 0.0,
+    },
+}
+
 #: 正面の顔の5点（112px の ArcFace テンプレートに近い配置）。向き（yaw）は 0。
 FRONTAL_POINTS = ((38.0, 52.0), (74.0, 52.0), (56.0, 72.0), (42.0, 92.0), (70.0, 92.0))
 
@@ -183,7 +195,7 @@ def install_fake_backends() -> None:
     **ワーカープロセスの入口から呼ぶ。** 親では `conftest` のフィクスチャが
     同じことをしているので、二重に呼んでも害が無いようにしてある。
     """
-    from photoarchive_ai import appearance, face, scoring
+    from photoarchive_ai import appearance, expression, face, scoring
 
     _install_fake_mediapipe_modules()
     face._load_dlib_models = lambda: (_FakeShapePredictor(), _FakeRecognitionModel())
@@ -195,6 +207,14 @@ def install_fake_backends() -> None:
     face.detect_five_points = lambda _rgb: None
     appearance._five_points = lambda _rgb: (
         np.asarray(FRONTAL_POINTS, dtype=np.float64) if APPEARANCE_STATE["aligned"] else None
+    )
+    # **実物の Face Landmarker を読みに行かせない。** `models/` に置いてある環境と
+    # 無い環境でテストの結果が変わらないように。
+    expression._load_landmarker = lambda: object() if EXPRESSION_STATE["available"] else None
+    expression._blendshapes = lambda _rgb: (
+        None
+        if EXPRESSION_STATE["blendshapes"] is None
+        else dict(EXPRESSION_STATE["blendshapes"])
     )
     face.EMBED_MIN_FACE_PX = 4
     face.reset_model_cache()

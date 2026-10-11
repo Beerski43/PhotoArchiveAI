@@ -134,6 +134,8 @@ def aggregate_media_scores(
 #
 # 重く見るものは利用者が選んだ（2026-10-09）: **ボケていない・正面・笑顔**。
 # 家族が何人も写っている写真は優先する。**ただしボケた家族の顔は人数に数えない。**
+# 目閉じを足し、笑顔を表情の値に替えた（#95・2026-10-11）。**目を閉じた家族も
+# 人数に数えない**（利用者の決定。ボケと同じ扱い）。
 #
 # 目盛りは実データの手本 10,701 件を目で見て決めた（鮮明さ・向きの帯ごとに
 # サムネイルを並べた。docs/history/details/2026-10-09-age-threshold-measured.md）。
@@ -148,16 +150,32 @@ SHARPNESS_CRISP = 150.0
 YAW_FRONTAL = 0.1
 #: これ以上なら横顔（0）。0.45 を超えるとほぼ横顔だった。
 YAW_PROFILE = 0.6
-#: 重み。**笑顔はいちばん軽い。** `estimate_smile_score` は実データの家族の顔で
-#: 73% が 100、19% が 0 に張り付いており、見分ける力が弱い。
-WEIGHT_SHARPNESS = 0.40
-WEIGHT_FRONTAL = 0.35
-WEIGHT_SMILE = 0.25
+#: 目閉じ（`expression` の ``eye_blink``・両目の小さいほう）がこれ以下なら開いている（1）。
+#: 実データの顔を帯ごとに並べて決めた（#95・2026-10-11）。0.3 未満はほぼ開いていた。
+EYES_OPEN = 0.3
+#: これ以上なら閉じている（0）。0.5 以上はほぼ全部が寝顔・伏し目だった。
+#: 0.4〜0.5 には大笑いで目が細くなった顔が少し混じるので、間は直線で結ぶ。
+EYES_CLOSED = 0.5
+#: 笑顔（`expression` の ``mouth_smile``）がこれ以上なら満点。0.25 以上ははっきり
+#: 笑っていた。0.02 未満は無表情。
+SMILE_FULL = 0.3
+#: 重み（利用者の決定・#95）。笑顔は以前いちばん軽かった（0.25）。古い
+#: `estimate_smile_score` は無表情の顔の 86% に 100 を付けていて見分ける力が
+#: 無かったため。表情の値に替えて、目と並べて 0.20 ずつ。
+WEIGHT_SHARPNESS = 0.35
+WEIGHT_FRONTAL = 0.25
+WEIGHT_EYES = 0.20
+WEIGHT_SMILE = 0.20
 #: 「はっきり写った家族」と数える鮮明さ（0〜1）の下限。30→0・150→1 の対数目盛りで
 #: 約 57。整列できない顔（横顔・見切れ）も数えない。
 CLEAR_SHARPNESS = 0.4
 #: はっきり写った家族が1人増えるごとの加点。
-MEMBER_BONUS = 10.0
+#:
+#: **20（#95・利用者の決定）。** 以前は 10 だった。古い笑顔はほぼ全員 100 で、
+#: 写真どうしの差を作っていたのはこの加点だった。表情の値で笑顔が効くように
+#: なると（最大 20）、**1人だけ写った笑顔の写真が家族のそろった写真を押しのけた**
+#: （実データの複製で出力 638 枚のうち1人の写真が 97 → 240 枚）。20 で 127 枚。
+MEMBER_BONUS = 20.0
 #: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
 UNKNOWN = 0.5
 
@@ -188,23 +206,50 @@ def frontal_level(aligned: Optional[int], yaw: Optional[float]) -> float:
     return 1.0 - (yaw - YAW_FRONTAL) / (YAW_PROFILE - YAW_FRONTAL)
 
 
+def eyes_level(eye_blink: Optional[float]) -> float:
+    """目の開き具合を 0〜1 に直す（開いていて 1）。未計測は `UNKNOWN`。"""
+    if eye_blink is None:
+        return UNKNOWN
+    if eye_blink <= EYES_OPEN:
+        return 1.0
+    if eye_blink >= EYES_CLOSED:
+        return 0.0
+    return 1.0 - (eye_blink - EYES_OPEN) / (EYES_CLOSED - EYES_OPEN)
+
+
+def smile_level(mouth_smile: Optional[float]) -> float:
+    """笑顔を 0〜1 に直す。未計測は `UNKNOWN`。"""
+    if mouth_smile is None:
+        return UNKNOWN
+    return max(0.0, min(1.0, mouth_smile / SMILE_FULL))
+
+
 def family_face_score(
     aligned: Optional[int],
     yaw: Optional[float],
     sharpness: Optional[float],
-    smile: Optional[float],
+    eye_blink: Optional[float],
+    mouth_smile: Optional[float],
 ) -> float:
     """家族の顔1つの良さ（0〜100）。"""
-    smile_level = UNKNOWN if smile is None else max(0.0, min(1.0, smile / 100.0))
     return 100.0 * (
         WEIGHT_SHARPNESS * sharpness_level(sharpness)
         + WEIGHT_FRONTAL * frontal_level(aligned, yaw)
-        + WEIGHT_SMILE * smile_level
+        + WEIGHT_EYES * eyes_level(eye_blink)
+        + WEIGHT_SMILE * smile_level(mouth_smile)
     )
 
 
-def is_clear_face(aligned: Optional[int], sharpness: Optional[float]) -> bool:
-    """「はっきり写った家族」として人数に数えるか。**未計測は数えない。**"""
+def is_clear_face(
+    aligned: Optional[int], sharpness: Optional[float], eye_blink: Optional[float] = None
+) -> bool:
+    """「はっきり写った家族」として人数に数えるか。
+
+    **鮮明さが未計測なら数えない。** 目閉じは**測って閉じていたときだけ**外す
+    （モデルの無い環境で全員を外さないため。分からないものを外さない）。
+    """
+    if eye_blink is not None and eye_blink >= EYES_CLOSED:
+        return False
     return bool(aligned) and sharpness is not None and (
         sharpness_level(sharpness) >= CLEAR_SHARPNESS
     )
@@ -216,16 +261,22 @@ def family_photo_score(faces) -> float:
     いちばん良い家族の顔の点に、はっきり写った家族の人数ぶん（2人目から）
     `MEMBER_BONUS` を足す。家族の顔が無ければ 0。
 
-    各要素は ``person_id`` / ``aligned`` / ``yaw`` / ``sharpness`` / ``smile_score``
-    を持つ辞書（`db.family_faces` の行）。
+    各要素は ``person_id`` / ``aligned`` / ``yaw`` / ``sharpness`` / ``eye_blink`` /
+    ``mouth_smile`` を持つ辞書（`db.family_faces` の行）。
     """
     if not faces:
         return 0.0
     best = max(
-        family_face_score(face["aligned"], face["yaw"], face["sharpness"], face["smile_score"])
+        family_face_score(
+            face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"], face["mouth_smile"]
+        )
         for face in faces
     )
-    members = {face["person_id"] for face in faces if is_clear_face(face["aligned"], face["sharpness"])}
+    members = {
+        face["person_id"]
+        for face in faces
+        if is_clear_face(face["aligned"], face["sharpness"], face["eye_blink"])
+    }
     return best + MEMBER_BONUS * max(0, len(members) - 1)
 
 
