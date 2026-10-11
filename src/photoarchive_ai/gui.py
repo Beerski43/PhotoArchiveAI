@@ -808,6 +808,12 @@ def ensure_migrated(database_path: str, parent=None) -> bool:
     """
     if not migration.needs_migration(database_path):
         return True
+    try:
+        # **確認を聞く前に。** 同名の人物がいると移行は止まる（#90）。CLI と同じ順
+        migration.check_person_names(database_path)
+    except migration.DuplicatePersonNames as error:
+        QMessageBox.critical(parent, "移行できませんでした", str(error))
+        return False
 
     dialog = MigrationDialog(parent, summary=migration.describe_for_operator(database_path))
     if dialog.exec() != QDialog.Accepted:
@@ -2275,7 +2281,12 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
-        person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        try:
+            person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+        except db.DuplicatePersonName as error:
+            # 名前は重複不可（#90）。同名の2人目を作ると、どちらに割り当てたのか見分けられない
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return
         self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
@@ -2295,9 +2306,13 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
-        db.update_person(
-            self.connection, person["id"], name, relation, memo, birth_date=birth_date
-        )
+        try:
+            db.update_person(
+                self.connection, person["id"], name, relation, memo, birth_date=birth_date
+            )
+        except db.DuplicatePersonName as error:
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return
         # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
         self._reload_person_list(select_person_id=person["id"])
 

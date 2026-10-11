@@ -270,6 +270,45 @@ def test_shooting_dates_come_back_one_per_face(tmp_path: Path):
         connection.close()
 
 
+def test_a_second_person_with_the_same_name_is_refused(tmp_path: Path):
+    """**名前は重複不可**（#90）。同名だと、どちらに割り当てたのか見分けられない。"""
+    connection = db.ensure_database(str(tmp_path / "person.db"))
+    try:
+        db.add_person(connection, "父")
+
+        with pytest.raises(db.DuplicatePersonName) as error:
+            db.add_person(connection, "父", "father")
+
+        assert str(error.value) == "同じ名前の人物がすでにいます: 父"
+        assert error.value.name == "父"
+        assert [person["name"] for person in db.list_persons(connection)] == ["父"]
+        # 断ったあとも、続けて別の名前は登録できる（失敗が接続を壊さない）
+        db.add_person(connection, "母")
+        assert len(db.list_persons(connection)) == 2
+    finally:
+        connection.close()
+
+
+def test_renaming_to_another_persons_name_is_refused_but_keeping_ones_own_is_not(tmp_path: Path):
+    connection = db.ensure_database(str(tmp_path / "person.db"))
+    try:
+        db.add_person(connection, "父")
+        mother = db.add_person(connection, "母", "mother", "メモ", birth_date="1980-01-02")
+
+        with pytest.raises(db.DuplicatePersonName):
+            db.update_person(connection, mother, "父", "mother", "メモ")
+        with pytest.raises(db.DuplicatePersonName):
+            db.update_person(connection, mother, "父", "mother", "メモ", birth_date=None)
+
+        db.update_person(connection, mother, "母", "mother", "直したメモ")
+        persons = {person["name"]: person for person in db.list_persons(connection)}
+        assert set(persons) == {"父", "母"}
+        assert persons["母"]["memo"] == "直したメモ"
+        assert persons["母"]["birth_date"] == "1980-01-02"
+    finally:
+        connection.close()
+
+
 def test_updating_a_person_without_a_birth_date_keeps_it(tmp_path: Path):
     """**省いて呼んだら触らない。** `None` は「未設定へ戻す」指示。
 

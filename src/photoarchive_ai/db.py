@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -237,6 +237,11 @@ SCHEMA = [
     "quality_score REAL,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE"
     ")",
+    # **人物の名前は重複不可**（v9・#90）。SQLite は既存の列に制約を足せないので、
+    # 一意索引で持つ（効き目は UNIQUE 制約と同じ）。比べ方は完全一致。
+    # 同名のある既存DBには張れないので、`migrate` が先に調べて止める
+    # （`duplicate_person_names`）。
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_person_name ON Person(name)",
     "CREATE INDEX IF NOT EXISTS idx_media_hash ON Media(file_hash)",
     "CREATE INDEX IF NOT EXISTS idx_media_type ON Media(type)",
     "CREATE INDEX IF NOT EXISTS idx_media_unscanned ON Media(id) WHERE face_count IS NULL",
@@ -731,6 +736,37 @@ class _KeepBirthDate:
 KEEP_BIRTH_DATE = _KeepBirthDate()
 
 
+class DuplicatePersonName(ValueError):
+    """同じ名前の人物がすでにいる（`Person.name` は重複不可・#90）。"""
+
+    def __init__(self, name: str):
+        super().__init__(f"同じ名前の人物がすでにいます: {name}")
+        self.name = name
+
+
+def _is_duplicate_name(error: sqlite3.IntegrityError) -> bool:
+    # 一意索引に当たったときの SQLite の文面（`UNIQUE constraint failed: Person.name`）。
+    # **ほかの制約違反を同名と言い換えない。**
+    return "Person.name" in str(error)
+
+
+def duplicate_person_names(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """同じ名前の人物の組。``[{"name": ..., "ids": [...]}]``。名前順。
+
+    一意索引は同名があると張れない。**移行の前に調べて、何が重なっているかを
+    利用者に見せる**ために使う（勝手に名前を変えたり統合したりしない）。
+    """
+    rows = connection.execute(
+        "SELECT name, GROUP_CONCAT(id) FROM ("
+        " SELECT name, id FROM Person ORDER BY id"
+        ") GROUP BY name HAVING COUNT(*) > 1 ORDER BY name"
+    ).fetchall()
+    return [
+        {"name": row[0], "ids": [int(value) for value in str(row[1]).split(",")]}
+        for row in rows
+    ]
+
+
 def add_person(
     connection: sqlite3.Connection,
     name: str,
@@ -738,13 +774,21 @@ def add_person(
     memo: Optional[str] = None,
     birth_date: Optional[str] = None,
 ) -> int:
-    """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。"""
+    """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。
+
+    同じ名前の人物がすでにいれば `DuplicatePersonName`。
+    """
     cursor = connection.cursor()
-    cursor.execute(
-        "INSERT INTO Person (name, relation, memo, birth_date, display_order)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (name, relation, memo, birth_date, _next_display_order(connection)),
-    )
+    try:
+        cursor.execute(
+            "INSERT INTO Person (name, relation, memo, birth_date, display_order)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (name, relation, memo, birth_date, _next_display_order(connection)),
+        )
+    except sqlite3.IntegrityError as error:
+        if _is_duplicate_name(error):
+            raise DuplicatePersonName(name) from error
+        raise
     connection.commit()
     return cursor.lastrowid
 
@@ -762,17 +806,24 @@ def update_person(
     ``birth_date`` を**省くと触らない**。``None`` は「未設定へ戻す」指示。
     既定を ``None`` にしていたため、**名前だけ直すつもりの呼び出しで
     登録済みの誕生日が消えていた**（`assign_faces` の ``age`` と同じ罠）。
+
+    ほかの人物と同じ名前にしようとすると `DuplicatePersonName`。
     """
-    if birth_date is KEEP_BIRTH_DATE:
-        connection.execute(
-            "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
-            (name, relation, memo, person_id),
-        )
-    else:
-        connection.execute(
-            "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
-            (name, relation, memo, birth_date, person_id),
-        )
+    try:
+        if birth_date is KEEP_BIRTH_DATE:
+            connection.execute(
+                "UPDATE Person SET name = ?, relation = ?, memo = ? WHERE id = ?",
+                (name, relation, memo, person_id),
+            )
+        else:
+            connection.execute(
+                "UPDATE Person SET name = ?, relation = ?, memo = ?, birth_date = ? WHERE id = ?",
+                (name, relation, memo, birth_date, person_id),
+            )
+    except sqlite3.IntegrityError as error:
+        if _is_duplicate_name(error):
+            raise DuplicatePersonName(name) from error
+        raise
     connection.commit()
 
 

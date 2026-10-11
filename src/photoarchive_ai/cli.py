@@ -26,6 +26,8 @@ from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
 from .reembed import format_summary as format_reembed_summary
 from .reembed import reembed_faces
 from .migration import (
+    DuplicatePersonNames,
+    check_person_names,
     describe_for_operator,
     migrate_database,
     needs_migration,
@@ -265,6 +267,11 @@ def _run_migrate(args, db_path: str) -> None:
     if not needs_migration(db_path):
         print("スキーマはすでに最新です。移行は不要です。")
         return
+    try:
+        # **確認を聞く前に。** 同名の人物がいると移行は止まる（#90）
+        check_person_names(db_path)
+    except DuplicatePersonNames as error:
+        raise SystemExit(str(error)) from error
     # 文面は GUI と共有する。2か所に書くと、片方だけ古くなる。
     print(describe_for_operator(db_path))
     # **移行する前に見ておく。** 移行後は版が上がっており、「顔を作り直したか」を
@@ -471,9 +478,7 @@ def _parse_thresholds(raw: str) -> List[float]:
 def _resolve_person(connection, wanted: str) -> dict:
     """``--person`` に渡された名前か id から人物を1人に決める。
 
-    **同じ名前の人物が複数いたら決めない。** `Person.name` に UNIQUE 制約は
-    まだ無いので（仕様書 Phase 3 手順7）、勝手に1人目を選ぶと**別人の
-    割り当てを消す。**
+    名前は重複しない（`Person.name` の一意索引・#90）ので、名前でも1人に決まる。
     """
     persons = db.list_persons(connection)
     if wanted.isdigit():
@@ -483,11 +488,6 @@ def _resolve_person(connection, wanted: str) -> dict:
     if not matched:
         known = "、".join(f"{person['id']}:{person['name']}" for person in persons) or "（登録なし）"
         raise SystemExit(f"人物が見つかりません: {wanted}\n登録されている人物: {known}")
-    if len(matched) > 1:
-        ids = "、".join(str(person["id"]) for person in matched)
-        raise SystemExit(
-            f"同じ名前の人物が複数います: {wanted}（id {ids}）。--person に id を渡してください。"
-        )
     return matched[0]
 
 

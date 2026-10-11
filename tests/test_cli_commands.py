@@ -628,26 +628,21 @@ def test_an_unknown_person_stops_instead_of_removing_everything(tmp_path):
         connection.close()
 
 
-def test_a_duplicated_person_name_stops_instead_of_guessing(tmp_path):
-    """**同じ名前が2人いたら決めない。** `Person.name` に UNIQUE 制約がまだ無い。
+def test_migrate_stops_before_asking_when_person_names_are_duplicated(tmp_path, monkeypatch):
+    """**同名の人物がいると移行は止まる**（#90）。確認を聞く前に、重なりを伝えて止める。"""
+    from tests.test_migration import _build_v8_database
 
-    勝手に1人目を選ぶと、**別人の割り当てを消す。**
-    """
-    database, _ = _two_people_with_automatic_faces(tmp_path)
-    connection = db.ensure_database(str(database))
-    db.add_person(connection, "Alice")
-    connection.commit()
-    connection.close()
+    database = tmp_path / "v8.db"
+    _build_v8_database(database, names=("父", "父"))
 
+    def _no_prompt(*args):
+        raise AssertionError("確認を聞く前に止まるはず")
+
+    monkeypatch.setattr("builtins.input", _no_prompt)
     with pytest.raises(SystemExit) as error:
-        run_cli(["unassign-auto", "--db", str(database), "--person", "Alice"], tmp_path)
+        run_cli(["migrate", "--db", str(database)], tmp_path)
 
-    assert "同じ名前の人物が複数います" in str(error.value)
-    connection = db.ensure_database(str(database))
-    try:
-        assert db.count_faces(connection, assign_source=db.ASSIGN_AUTO) == 4
-    finally:
-        connection.close()
+    assert "同じ名前の人物がいるため移行できません: 父" in str(error.value)
 
 
 def test_select_reports_a_name_clash_without_a_traceback(tmp_path):

@@ -1,6 +1,6 @@
 # PhotoArchiveAI 仕様書
 
-Version: 1.14
+Version: 1.15
 Status: Approved
 Last Update: 2026-10-11
 
@@ -335,9 +335,9 @@ GUI は別の実行ファイル `photoarchive-gui`。
 - **`family_score` を数え直す。** 取り消しただけだと、もう存在しない自動割り当てから
   計算されたスコアが `AnalysisResult` に残り、`select` の `family_only` が
   その古い値で写真を選ぶ
-- **`--person` の名前が見つからない／同じ名前が複数いるときは中断する。**
+- **`--person` の名前が見つからないときは中断する。**
   絞り込みが黙って無視されると、1人ぶんのつもりで全員ぶんが消える。
-  `Person.name` に UNIQUE 制約はまだ無い（§Phase 3 手順7）
+  名前は重複しない（§7.2）ので、名前でも1人に決まる
 
 ## 5.6 `evaluate`
 
@@ -770,7 +770,7 @@ lastResort 経由で書式なしの stderr へ漏れ、**ログファイルに�
 | 列 | 型 | 制約 |
 |---|---|---|
 | `id` | INTEGER | PK AUTOINCREMENT |
-| `name` | TEXT | NOT NULL |
+| `name` | TEXT | NOT NULL・**重複不可**（一意索引 `idx_person_name`・v9） |
 | `relation` | TEXT | 続柄（任意） |
 | `memo` | TEXT | 任意 |
 | `birth_date` | TEXT | 生年月日 `YYYY-MM-DD`（任意）。**未設定は NULL** |
@@ -784,8 +784,16 @@ lastResort 経由で書式なしの stderr へ漏れ、**ログファイルに�
 `display_order` の昇順で、**未設定（NULL）は名前順でそのあとに続く**。
 名前順だけだと、よく割り当てる人物を上に置けない。
 
-**`name` に UNIQUE 制約は無い。**同名の人物を作れてしまうが、制約を足すには
-既存データベースの移行が必要になるため保留している（ROADMAP の Phase 3）。
+**`name` は重複不可**（v9・#90）。同名の人物がいると、どちらに割り当てたのかを
+画面でも `--person` でも見分けられない。
+
+- SQLite は既存の列に制約を足せないので、**一意索引**（`idx_person_name`）で持つ。
+  効き目は UNIQUE 制約と同じ。テーブルの作り直しは `Face` からの外部キーがあるので採らない
+- 比べ方は**完全一致**（SQLite の既定 `BINARY`）。前後の空白は GUI が落とす。
+  大文字小文字・全角半角は同一視しない
+- `db.add_person` / `db.update_person` は同名のとき `db.DuplicatePersonName` を送出し、
+  GUI は「同じ名前の人物がすでにいます: <名前>」と出して何も変えない。
+  自分の名前のままの更新は重複ではない
 
 ## 7.3 Face
 
@@ -897,6 +905,7 @@ smile / quality を触らない。** `media_id` が主キーなので、どち�
 | `idx_face_unassigned` | `Face(quality_score DESC, id) WHERE assign_source IS NULL` |
 | `idx_media_shooting` | `Media(<読める撮影日時> DESC, id)` — **式インデックス** |
 | `idx_media_event` | `Media(<フォルダ>, <読める撮影日時の日付>)` — **式インデックス** |
+| `idx_person_name` | `Person(name)` — **一意索引**（§7.2・v9） |
 
 `idx_face_unassigned` が §10.4 の「品質スコア降順のページング」を成立させている。
 部分インデックスが参照する列は SQLite では `DROP COLUMN` できないため、
@@ -1097,7 +1106,7 @@ ArcFace は 112x112 のテンプレートに5点（両目・鼻・両口角）�
 
 ## 7.8 スキーマのバージョンと移行
 
-**現在のスキーマ版は 8。** `PRAGMA user_version` で管理する。
+**現在のスキーマ版は 9。** `PRAGMA user_version` で管理する。
 
 `photoarchive migrate` が旧スキーマから移行する。**版ごとにやることが違う。**
 一括りに「移行」と呼ばない。
@@ -1111,6 +1120,7 @@ ArcFace は 112x112 のテンプレートに5点（両目・鼻・両口角）�
 | **v5 → v6** | `Media` に `folder_date_from` / `folder_date_to` を足し、**パスから埋める**（NFS は読まない。実データの複製で数秒） | **なし** |
 | **v6 → v7** | `ScanRoot` テーブルを足す（**中身は推定しない**。次の `scan` が書く・§6.5） | **なし** |
 | **v7 → v8** | `Media` に `look_hash` を足す（**中身は埋めない**。次の `select` が候補だけ測る・§11.2） | **なし** |
+| **v8 → v9** | `Person(name)` に一意索引 `idx_person_name` を張る（§7.2・#90）。**同名の人物がいれば、控えを取る前に止める**（下記） | **なし** |
 
 **足りないテーブルと索引は `db.SCHEMA` を丸ごと流して作る**（`IF NOT EXISTS` なので
 足りないものだけができる）。作るものを移行コードに書き足さない。
@@ -1127,6 +1137,15 @@ ArcFace は 112x112 のテンプレートに5点（両目・鼻・両口角）�
 `VACUUM` するのは **v1 からの移行だけ**（テーブルを組み直すため）。列を足す
 だけの移行は組み直さないので `--no-vacuum` を見ない。**そのことは移行前の
 案内に出す**（黙って効かない引数を作らない）。
+
+**同名の人物がいるデータベースは移行しない**（v9 の一意索引が張れないため）。
+**控えを取る前・何かを書く前に**調べ、重なっている名前と id を並べて止める
+（CLI も GUI も確認を聞く前に止まる）。**版の古い DB は GUI も CLI も開かない**ので、
+止まったときの案内は、アプリの外の `sqlite3` で2人目以降の名前を変える
+`UPDATE Person SET name = '<新しい名前>' WHERE id = <id>` を、実際の DB のパスと id を入れて示す。
+新しい名前は利用者が決める（勝手に改名・統合しない）。同じ人なら、移行のあとに GUI で
+片方へ顔を割り当て直し、もう片方を削除する。**v1 の再構築経路も先に同じ検査を通す。**
+再構築のあとで止まると、顔を捨てたあとで止まるため。
 
 どちらも移行前に**自動でバックアップ**を取り、`PRAGMA integrity_check` を通す。
 **冪等**で、移行済みのデータベースに実行しても何も起きない。

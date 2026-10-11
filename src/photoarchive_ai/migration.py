@@ -11,6 +11,10 @@
   `db.ADDABLE_COLUMNS` に1行書くだけでよい**
 - **足りないテーブルは `db.SCHEMA` から作る**（v6 → v7 の ``ScanRoot``）。
   **中身は推定しない。** root の記録は次の ``scan`` が書く（#24）
+- **v8 → v9 は `Person.name` の一意索引を張る**（#90）。同名の人物がいると張れないので、
+  **控えを取る前・何かを書く前に止める**（`check_person_names`）。名前を変えるか
+  統合するかは利用者が決める。**v1 の再構築経路も同じ検査を先に通す**
+  （再構築のあとで止まると、顔を捨てたあとで止まる）
 
 **v1 の経路に v2 のDBを流し込まないこと。** 使えるはずの顔が消える。
 
@@ -70,6 +74,56 @@ ANALYSIS_NEW_DDL = (
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE"
     ")"
 )
+
+
+class DuplicatePersonNames(RuntimeError):
+    """同じ名前の人物がいるため、`Person.name` の一意索引を張れない（#90）。
+
+    **抜け出す手順を、実際に打てる形で示す。** 版の古い DB は GUI も CLI も開かない
+    （`db.create_tables`）ので、「GUI で名前を変える」は案内にならない（PR #92 の
+    レビュー指摘1）。アプリの外の `sqlite3` で2人目以降の名前を変えてもらう。
+    **新しい名前は利用者が決める**（勝手に改名しない）。
+    """
+
+    def __init__(self, duplicates, database_path: str = "<データベース>"):
+        listed = "、".join(
+            f"{item['name']}（id {', '.join(str(i) for i in item['ids'])}）" for item in duplicates
+        )
+        commands = [
+            f"  sqlite3 \"{database_path}\" \"UPDATE Person SET name = '<新しい名前>' WHERE id = {person_id}\""
+            for item in duplicates
+            for person_id in item["ids"][1:]
+        ]
+        super().__init__(
+            "\n".join(
+                [
+                    f"同じ名前の人物がいるため移行できません: {listed}。"
+                    "（データベースには何も書いていません）",
+                    "次のように、2人目以降の名前を変えてから、もう一度流してください"
+                    "（<新しい名前> は重ならない名前に置き換える）。",
+                    *commands,
+                    "同じ人なら、移行のあとに GUI で片方へ顔を割り当て直し、もう片方を削除できます。",
+                ]
+            )
+        )
+        self.duplicates = duplicates
+
+
+def check_person_names(database_path: str) -> None:
+    """同じ名前の人物がいれば `DuplicatePersonNames`。**何も書かない。**
+
+    `migrate` が控えを取る前に呼ぶ。CLI と GUI は確認を聞く前にも呼ぶ（聞いてから
+    止まると、答えたことが無駄になる）。
+    """
+    connection = sqlite3.connect(str(database_path))
+    try:
+        if "Person" not in _table_names(connection):
+            return
+        duplicates = db.duplicate_person_names(connection)
+    finally:
+        connection.close()
+    if duplicates:
+        raise DuplicatePersonNames(duplicates, str(database_path))
 
 
 def _table_names(connection: sqlite3.Connection) -> set:
@@ -396,6 +450,10 @@ def migrate_database(
         emit("空のデータベースに最新スキーマを作成しました。")
         result.update(migrated=True, schema_version=db.SCHEMA_VERSION)
         return result
+
+    # **控えを取る前・何かを書く前に。** 同名があると最後に索引を張るところで落ちる。
+    # v1 の経路では、そのときにはもう顔を捨てている。
+    check_person_names(str(path))
 
     summary = describe_migration(str(path))
     result["before"] = summary

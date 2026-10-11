@@ -185,6 +185,64 @@ def test_an_empty_name_is_rejected(window, monkeypatch):
     assert db.list_persons(window.connection)[0]["name"] == "父"
 
 
+def _capture_warnings(monkeypatch):
+    shown = []
+    monkeypatch.setattr(
+        photoarchive_gui.QMessageBox,
+        "warning",
+        lambda parent, title, text: shown.append(text),
+    )
+    return shown
+
+
+def test_adding_a_person_with_an_existing_name_is_refused(window, monkeypatch):
+    """**名前は重複不可**（#90）。同名の2人目は作らず、分かる言葉で断る。"""
+    shown = _capture_warnings(monkeypatch)
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "", "", (0, 0, 0))),
+    )
+
+    window._add_person()
+
+    assert [person["name"] for person in db.list_persons(window.connection)] == ["父"]
+    assert shown == ["同じ名前の人物がすでにいます: 父"]
+
+
+def test_renaming_a_person_to_another_persons_name_is_refused(window, monkeypatch):
+    shown = _capture_warnings(monkeypatch)
+    db.add_person(window.connection, "母", "mother", "母のメモ")
+    window._reload_person_list()
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "mother", "母のメモ", (0, 0, 0))),
+    )
+    mother_index = [person["name"] for person in db.list_persons(window.connection)].index("母")
+    _select_person(window, mother_index)
+
+    window._edit_person()
+
+    names = sorted(person["name"] for person in db.list_persons(window.connection))
+    assert names == ["母", "父"]
+    assert shown == ["同じ名前の人物がすでにいます: 父"]
+
+
+def test_keeping_the_same_name_while_editing_other_fields_is_allowed(window, monkeypatch):
+    """自分の名前のままの更新は重複ではない。"""
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("父", "father", "直したメモ", (0, 0, 0))),
+    )
+    _select_person(window)
+
+    window._edit_person()
+
+    assert db.list_persons(window.connection)[0]["memo"] == "直したメモ"
+
+
 def test_editing_without_a_selection_does_not_open_a_dialog(window, monkeypatch):
     dialog = _make_dialog_class(accepted=True)
     monkeypatch.setattr(photoarchive_gui, "PersonDialog", dialog)
