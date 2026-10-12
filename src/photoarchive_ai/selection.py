@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tup
 
 import yaml
 
-from . import appearance, db, expression, scoring, similar
+from . import appearance, db, expression, scoring, similar, strangers
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 
@@ -229,7 +229,7 @@ def family_scores(
     for row in rows:
         people.setdefault(row["media_id"], set()).add(row["person_id"])
     family_of = {media_id: frozenset(found) for media_id, found in people.items()}
-    return scoring.family_photo_scores(rows), family_of
+    return scoring.family_photo_scores(rows, strangers.weights(connection, rows)), family_of
 
 
 def _source_path(path_value: str, root_paths: Sequence[Path]) -> Path:
