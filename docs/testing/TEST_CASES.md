@@ -609,7 +609,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（70件）
+### `test_selection.py` — 抽出とコピー（79件）
 
 | テスト | 内容 |
 |---|---|
@@ -662,8 +662,15 @@
 | `test_an_unreadable_photo_is_kept_rather_than_bundled` | 測れなかった写真は束ねずに残す |
 | `test_relative_paths_are_measured_from_the_root` | 相対パスのメディアは root から解いて測る |
 | `test_a_bad_similar_setting_stops_when_the_rule_is_read` | 閾値の書き損じはルールを読む時点で止める（写真を測り始めてから止まらない。6件） |
+| `test_a_copy_in_another_folder_without_a_date_is_bundled` | **別のフォルダにある写し（送られてきた写真・撮影日時なし）は同じ年なら外す**（#98。利用者の出力の 0032〜0035） |
+| `test_a_copy_without_the_exif_thumbnail_is_compared_from_the_full_image` | **取った場所が違う2枚は両方を元写真から測って比べ**、その値を `look_hash` に足して残す（写しの組 29 組のうち 11 組がこれ） |
+| `test_a_copy_in_another_year_is_kept` / `test_a_copy_showing_other_family_members_is_kept` | 年が違う・家族が重ならない写しは残す |
+| `test_a_dated_copy_on_another_day_is_kept` | **両方に撮影日時があって日付が違えば写しとみなさない**（別の日は別の行事・#93） |
+| `test_without_remove_similar_copies_are_kept` | `remove_similar: false` なら写しも残す |
+| `test_copies_are_bundled_up_to_distance_9` | **写しの距離は 9 まで**（利用者の決定。10 に別の場面が1組あった）（2件） |
+| `test_the_output_keeps_each_years_photos_together` | 年ごとに選ぶ形を変えても、出力は年ごとにまとまる |
 
-### `test_similar.py` — 連写・似た写真を束ねる（23件。#86・#93）
+### `test_similar.py` — 連写・似た写真を束ねる（25件。#86・#93・#98）
 
 | テスト | 内容 |
 |---|---|
@@ -676,8 +683,9 @@
 | `test_a_value_round_trips` | 値の書き方と読み方が対 |
 | `test_the_moment_needs_a_readable_date_with_a_time` | 秒まで読める撮影日時だけ（壊れた EXIF・日付だけは束ねない） |
 | `test_photos_of_the_same_event_are_candidates_however_far_apart_in_time` | **同じ行事（フォルダ×日）なら時間は問わず候補**。別の日は別（#93） |
-| `test_another_folder_or_other_family_members_are_not_candidates` | 別のフォルダ・写っている家族が違えば候補にしない |
-| `test_another_family_in_between_does_not_split_the_candidates` | 間に別の家族の写真が挟まっても切れない（#86 は切れていた） |
+| `test_another_folder_is_not_a_candidate_but_other_family_members_are` | 別のフォルダは候補にしない。**写っている家族の集合では分けない**（#98。顔の取りこぼしで1人ずれた同じ場面を束ねなかった） |
+| `test_a_member_missing_from_one_shot_does_not_split_the_scene` | **家族が1人でも重なれば同じ場面にできる**（#98・利用者の決定） |
+| `test_photos_without_a_family_member_in_common_are_not_bundled` | 家族が1人も重ならなければ近くても束ねない。家族の写っていない写真どうしは束ねうる |
 | `test_a_burst_across_midnight_is_still_one_candidate` | **日付をまたぐ連写**は `similar_seconds` でつなぐ（#86 の束を落とさない） |
 | `test_photos_without_a_time_and_videos_are_never_bundled` | 撮影時刻の無い写真と動画は束ねない |
 | `test_scenes_split_a_group_by_looks` | 見た目で場面に分ける。測れなかった写真は1枚で残る |
@@ -685,6 +693,7 @@
 | `test_photos_far_apart_in_time_need_to_look_closer` | **時間の離れた2枚は距離 14**（`FAR_DISTANCE`）、連写は 16。ルールの距離が小さければそちら（#93） |
 | `test_a_burst_member_far_from_the_representative_needs_to_look_closer` | 「時間の離れた2枚」は**代表との差**で決まる。8秒おきの連写でも代表から16秒後は14で見る（PR #94 のレビュー指摘1） |
 | `test_a_burst_across_midnight_does_not_bundle_the_other_days_photos` | **0時をまたぐ連写がつないだ別の日の写真どうしは束ねない**（PR #94 のレビュー指摘2） |
+| `test_a_look_can_carry_the_value_from_the_full_image_too` | **元写真から測った値を `,full:` で足して持てる**（#98）。古い形も読める。同じ場所から取った値どうしだけ比べる |
 | `test_a_version_7_database_gains_the_look_column_and_keeps_its_faces` | **v7 → v8 で顔を1件も失わない**（列を足すだけ） |
 
 ### `test_appearance.py` — 顔の見え方・手本の選別・年齢の上限（21件。#66）

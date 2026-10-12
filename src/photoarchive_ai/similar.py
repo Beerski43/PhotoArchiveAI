@@ -7,9 +7,13 @@
 **2段で決める**（利用者の決定・2026-10-10）。
 
 1. **DB だけで候補を絞る**（`candidate_groups`）: 同じフォルダ・同じ日（#93。
-   日をまたぐ連写は撮影日時の近さでつなぐ）・写っている家族が同じ。撮影日時は秒まで要るので、EXIF の無い写真は束ねない
+   日をまたぐ連写は撮影日時の近さでつなぐ）。撮影日時は秒まで要るので、EXIF の無い写真は入らない
 2. **見た目で確かめる**（`scenes`）: 候補の中だけ dHash を取り、並びの順に見て、残した写真と
-   近いものを同じ場面にする（連結にしない・#93）。時間の離れた2枚は `FAR_DISTANCE` で厳しく見る。
+   近く、写っている家族が1人でも重なるものを同じ場面にする（連結にしない・#93。家族の
+   集合が同じことまでは求めない・#98）。時間の離れた2枚は `FAR_DISTANCE` で厳しく見る。
+
+これとは別に、**フォルダ・撮影日時を問わず同じ年の中で見た目がほぼ同じ写真**（別の端末の
+写し・送られてきた写真）は、`select` が年ごとに選ぶところで `COPY_DISTANCE` で外す（#98）。
    **時間だけで束ねると、構図を変えた写真まで消える**（2秒以内に撮った2枚でも、
    距離の中央は 10。10分より離れた2枚は 24 以上。2026-10-10・実データ）
 
@@ -69,6 +73,17 @@ DEFAULT_DISTANCE = 16
 #: そちらに従う。
 FAR_DISTANCE = 14
 
+#: **フォルダ・撮影日時を問わず**、同じ年の中で同じ写真とみなす距離の上限（#98）。
+#:
+#: 別の端末のフォルダにある写し・送られてきて保存し直した写真（EXIF の日時が無い）は、
+#: 同じフォルダ・同じ日の候補（`candidate_groups`）に入らない。利用者の `select` の
+#: 出力で、そういう組が 29 組あった（2026-10-12）。総当たりで見ると、距離 0〜9 は
+#: すべて同じ写真か同じ場面（年賀状に加工した写しも含む）、**10 に別の場面が1組**
+#: （結婚式の入場と挨拶）。9 は利用者の決定。
+#:
+#: **両方に撮影日時があって日付が違えば比べない**（`on_different_days`。別の日は別の行事）。
+COPY_DISTANCE = 9
+
 
 def dhash(image: Image.Image) -> int:
     """64ビットの dHash。灰色にして 9×8 へ縮め、隣の画素との大小をビットにする。"""
@@ -82,26 +97,57 @@ def encode(source: str, value: int) -> str:
     return f"{LOOK_VERSION}/{source}:{value:016x}"
 
 
-def decode(text: Optional[str]) -> Optional[Tuple[str, int]]:
-    """``(どこから取ったか, 値)``。未計測・版違い・読めない値は ``None``（測り直す）。"""
+def decode_all(text: Optional[str]) -> Dict[str, int]:
+    """取った場所ごとの値。**先頭が主の値**（`measure` が取ったもの）。
+
+    元写真から測り直した値を後ろに足して持つことがある（#98・`with_full`）:
+    ``dhash8/exif:0123456789abcdef,full:fedcba9876543210``。
+    未計測・版違い・読めない値は空（測り直す）。
+    """
     if not text:
+        return {}
+    version, _, rest = text.partition("/")
+    if version != LOOK_VERSION:
+        return {}
+    values: Dict[str, int] = {}
+    for part in rest.split(","):
+        source, _, value = part.partition(":")
+        if source not in (FROM_EXIF, FROM_IMAGE) or source in values:
+            return {}
+        try:
+            values[source] = int(value, 16)
+        except ValueError:
+            return {}
+    return values
+
+
+def decode(text: Optional[str]) -> Optional[Tuple[str, int]]:
+    """``(どこから取ったか, 値)``（主の値）。未計測・版違い・読めない値は ``None``（測り直す）。"""
+    values = decode_all(text)
+    if not values:
         return None
-    head, _, value = text.partition(":")
-    version, _, source = head.partition("/")
-    if version != LOOK_VERSION or source not in (FROM_EXIF, FROM_IMAGE):
-        return None
-    try:
-        return source, int(value, 16)
-    except ValueError:
-        return None
+    source = next(iter(values))
+    return source, values[source]
+
+
+def with_full(text: str, value: int) -> str:
+    """主の値に、元写真から測った値を足した形。主が元写真なら、そのまま。"""
+    if FROM_IMAGE in decode_all(text):
+        return text
+    return f"{text},{FROM_IMAGE}:{value:016x}"
 
 
 def distance(a: Optional[str], b: Optional[str]) -> Optional[int]:
-    """2枚の見た目の距離。**比べられなければ ``None``**（未計測・取った場所が違う）。"""
-    left, right = decode(a), decode(b)
-    if left is None or right is None or left[0] != right[0]:
-        return None
-    return bin(left[1] ^ right[1]).count("1")
+    """2枚の見た目の距離。**比べられなければ ``None``**（未計測・同じ場所から取った値が無い）。
+
+    **取った場所が同じ値どうしだけを比べる**（サムネイル由来と元写真由来は比べない）。
+    両方に元写真の値があれば、それを使う。
+    """
+    left, right = decode_all(a), decode_all(b)
+    for source in (FROM_EXIF, FROM_IMAGE):
+        if source in left and source in right:
+            return bin(left[source] ^ right[source]).count("1")
+    return None
 
 
 def _exif_segment(head: bytes) -> Optional[bytes]:
@@ -152,6 +198,17 @@ def exif_thumbnail(head: bytes) -> Optional[Image.Image]:
     return thumbnail
 
 
+def measure_full(path: str) -> Optional[int]:
+    """元写真を縮小デコードした dHash。**EXIF のサムネイルは見ない。** 読めなければ ``None``。"""
+    try:
+        with Image.open(path) as image:
+            image.draft("L", (64, 64))
+            return dhash(image)
+    except Exception as error:  # 壊れたファイル・消えたファイル
+        logger.warning("見た目を測れませんでした: %s (%s)", path, error)
+        return None
+
+
 def measure(path: str) -> Optional[str]:
     """1枚の見た目の値（`encode` の形）。**読めなければ ``None``**（保存しない。次の回に測り直す）。"""
     try:
@@ -177,35 +234,35 @@ def _moment(media: Dict[str, Any]) -> Optional[datetime]:
 
 def candidate_groups(
     media_list: Iterable[Dict[str, Any]],
-    family_of: Dict[int, FrozenSet[int]],
     seconds: float = DEFAULT_SECONDS,
 ) -> List[List[Dict[str, Any]]]:
     """同じ場面かもしれない写真の組（2枚以上のものだけ）。**DB の値だけで決める。**
 
-    **同じフォルダ・写っている家族の集合が同じ・同じ日**の写真（#93。行事の中なら
-    時間は問わない。利用者の決定）。撮影日時の順に並べ、隣と同じ日か、差が
-    ``seconds`` 以内なら連なる（後者は**日付をまたぐ連写**を落とさないため。#86 の
-    連写の束はすべてこの組にも入る）。間に別の家族の写真が挟まっても切れない。
-    家族の写っていない写真どうしも（空の集合として）束ねうる。
-    撮影日時が秒まで読めない写真と動画は入らない。
+    **同じフォルダ・同じ日**の写真（#93。行事の中なら時間は問わない。利用者の決定）。
+    撮影日時の順に並べ、隣と同じ日か、差が ``seconds`` 以内なら連なる（後者は
+    **日付をまたぐ連写**を落とさないため。#86 の連写の束はすべてこの組にも入る）。
+    撮影日時が秒まで読めない写真と動画は入らない（それは `copies` が拾う）。
+
+    **写っている家族の集合では分けない**（#98）。以前は集合が同じ写真だけを組にして
+    いたので、顔の取りこぼしで1人ずれた同じ場面を束ねなかった（利用者の出力で 37 組）。
+    家族が重なるかは `scenes` が代表と比べて見る。
     """
     dated = []
     for media in media_list:
         moment = _moment(media)
         if moment is not None:
-            family = family_of.get(media["id"], frozenset())
-            dated.append((os.path.dirname(media["path"]), sorted(family), moment, media))
-    dated.sort(key=lambda item: (item[0], item[1], item[2], item[3]["id"]))
+            dated.append((os.path.dirname(media["path"]), moment, media))
+    dated.sort(key=lambda item: (item[0], item[1], item[2]["id"]))
     groups: List[List[Dict[str, Any]]] = []
     current: List[Dict[str, Any]] = []
     previous = None
-    for folder, family, moment, media in dated:
+    for folder, moment, media in dated:
         joins = (
             previous is not None
-            and (folder, family) == previous[:2]
+            and folder == previous[0]
             and (
-                moment.date() == previous[2].date()
-                or (moment - previous[2]).total_seconds() <= seconds
+                moment.date() == previous[1].date()
+                or (moment - previous[1]).total_seconds() <= seconds
             )
         )
         if not joins:
@@ -213,10 +270,34 @@ def candidate_groups(
                 groups.append(current)
             current = []
         current.append(media)
-        previous = (folder, family, moment)
+        previous = (folder, moment)
     if len(current) > 1:
         groups.append(current)
     return groups
+
+
+def on_different_days(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    """**両方に撮影日時があり、日付が違う**か。どちらかが読めなければ False（#98）。
+
+    別の日は別の行事（#93・利用者の決定）。写しの組（`COPY_DISTANCE`）でも守る。
+    実データの写しの組は、両方に日時があれば同じ日（差は数秒）だった（2026-10-12）。
+    """
+    first, second = _moment(left), _moment(right)
+    return first is not None and second is not None and first.date() != second.date()
+
+
+def shares_family(
+    family_of: Optional[Dict[int, FrozenSet[int]]], left: Dict[str, Any], right: Dict[str, Any]
+) -> bool:
+    """2枚に写っている家族が1人でも重なるか（#98）。**家族の写っていない写真どうしは重なる扱い。**
+
+    ``family_of`` が無ければ問わない。
+    """
+    if family_of is None:
+        return True
+    a = family_of.get(left["id"], frozenset())
+    b = family_of.get(right["id"], frozenset())
+    return bool(a & b) or (not a and not b)
 
 
 def scenes(
@@ -224,6 +305,7 @@ def scenes(
     looks: Dict[int, Optional[str]],
     max_distance: int = DEFAULT_DISTANCE,
     seconds: float = DEFAULT_SECONDS,
+    family_of: Optional[Dict[int, FrozenSet[int]]] = None,
 ) -> List[List[Dict[str, Any]]]:
     """候補の組を場面に分ける。``group`` は**並びの順**（残したい順）に渡す。
 
@@ -239,6 +321,9 @@ def scenes(
     **日付の違う2枚は、連写（差が ``seconds`` 以内）のときだけ比べる。** 候補の組は
     0時をまたぐ連写で前後の日がつながるが、別の日は別の行事（PR #94 のレビュー指摘2）。
     見た目を測れなかった写真は、どの写真とも束ねない（消さずに残す）。
+
+    **代表と写っている家族が1人も重ならなければ、近くても束ねない**（#98。
+    `shares_family`）。集合が同じことまでは求めない（顔の取りこぼしでずれるため）。
     """
     far = min(max_distance, FAR_DISTANCE)
     kept: List[List[Dict[str, Any]]] = []
@@ -246,6 +331,8 @@ def scenes(
         home = None
         for scene in kept:
             representative = scene[0]
+            if not shares_family(family_of, representative, media):
+                continue
             gap = distance(looks.get(representative["id"]), looks.get(media["id"]))
             if gap is None:
                 continue

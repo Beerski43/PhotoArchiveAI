@@ -7,7 +7,7 @@ family_only: true
 count_per_year: 30
 include_video: true
 remove_duplicate: true
-# 同じ場面の連写・似た写真を、並びの先頭1枚にまとめる（省略すると true）。
+# 同じ場面の連写・似た写真と、同じ年の中の写し（別のフォルダ・送られてきた写真）を、並びの先頭1枚にまとめる（省略すると true）。
 remove_similar: true
 # 自動割り当ての顔も家族として数える（false なら GUI の手本だけ。省略すると true）。
 include_auto_assigned: true

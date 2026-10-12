@@ -263,7 +263,7 @@ def _remove_similar(
     """
     seconds = _rule_number(rule, "similar_seconds", similar.DEFAULT_SECONDS)
     max_distance = _rule_number(rule, "similar_distance", similar.DEFAULT_DISTANCE)
-    groups = similar.candidate_groups(ranked, family_of, seconds)
+    groups = similar.candidate_groups(ranked, seconds)
     looks: Dict[int, Optional[str]] = {}
     unmeasured: List[Dict[str, Any]] = []
     for group in groups:
@@ -277,6 +277,8 @@ def _remove_similar(
         value = similar.measure(str(_source_path(media["path"], root_paths)))
         if value is not None:
             looks[media["id"]] = value
+            # 年ごとに選ぶところ（`_pick_by_year`）でも同じ値を使う。測り直さない
+            media["look_hash"] = value
             measured.append((media["id"], value))
         if len(measured) >= 500:
             db.save_look_hashes(connection, measured)
@@ -289,10 +291,123 @@ def _remove_similar(
     dropped = set()
     for group in groups:
         ordered = sorted(group, key=lambda media: rank[media["id"]])
-        for scene in similar.scenes(ordered, looks, int(max_distance), seconds):
+        for scene in similar.scenes(
+            ordered, looks, int(max_distance), seconds, family_of=family_of
+        ):
             # 先頭が代表（並びのいちばん上）。残りを外す
             dropped.update(media["id"] for media in scene[1:])
     return [media for media in ranked if media["id"] not in dropped]
+
+
+class _Looks:
+    """`_pick_by_year` が使う見た目の値。**要るときに測り、`Media.look_hash` に残す。**"""
+
+    def __init__(self, connection, root_paths: Sequence[Path], progress_callback=None):
+        self.connection = connection
+        self.root_paths = root_paths
+        self.progress_callback = progress_callback
+        self.pending: List[Tuple[int, str]] = []
+
+    def _store(self, media: Dict[str, Any], value: str) -> None:
+        media["look_hash"] = value
+        self.pending.append((media["id"], value))
+        if len(self.pending) >= 500:
+            self.flush()
+
+    def _path(self, media: Dict[str, Any]) -> str:
+        if self.progress_callback is not None:
+            self.progress_callback(0, 0, os.path.basename(media["path"]))
+        return str(_source_path(media["path"], self.root_paths))
+
+    def of(self, media: Dict[str, Any]) -> Optional[str]:
+        """主の値（`similar.measure`）。測れなければ None（保存しない）。"""
+        if similar.decode(media.get("look_hash")) is None:
+            value = similar.measure(self._path(media))
+            if value is None:
+                return None
+            self._store(media, value)
+        return media["look_hash"]
+
+    def with_full(self, media: Dict[str, Any]) -> Optional[str]:
+        """元写真から測った値も持たせた値。**取った場所が違う2枚を比べるときだけ**呼ぶ。"""
+        current = self.of(media)
+        if current is None or similar.FROM_IMAGE in similar.decode_all(current):
+            return current
+        value = similar.measure_full(self._path(media))
+        if value is None:
+            return current
+        self._store(media, similar.with_full(current, value))
+        return media["look_hash"]
+
+    def flush(self) -> None:
+        db.save_look_hashes(self.connection, self.pending)
+        self.pending = []
+
+
+def _is_copy(
+    media: Dict[str, Any],
+    kept: Sequence[Dict[str, Any]],
+    family_of: Dict[int, FrozenSet[int]],
+    looks: _Looks,
+) -> bool:
+    """すでに選んだ写真のどれかと、見た目がほぼ同じか（`similar.COPY_DISTANCE`・#98）。"""
+    if media.get("type") != "image":
+        return False
+    for other in kept:
+        if other.get("type") != "image" or not similar.shares_family(family_of, other, media):
+            continue
+        if similar.on_different_days(other, media):
+            continue
+        mine, theirs = looks.of(media), looks.of(other)
+        if mine is None:
+            return False
+        if theirs is None:
+            continue
+        gap = similar.distance(theirs, mine)
+        if gap is None:
+            # **取った場所が違う**（EXIF のサムネイルと元写真）。保存し直した写しは
+            # EXIF のサムネイルを持たないので、両方を元写真から測って比べる
+            gap = similar.distance(looks.with_full(other), looks.with_full(media))
+        if gap is not None and gap <= similar.COPY_DISTANCE:
+            return True
+    return False
+
+
+def _pick_by_year(
+    connection,
+    ranked: List[Dict[str, Any]],
+    family_of: Dict[int, FrozenSet[int]],
+    count_per_year: Optional[int],
+    remove_copies: bool,
+    root_paths: Sequence[Path],
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> List[Dict[str, Any]]:
+    """並びの順に、年ごとに ``count_per_year`` 枚まで選ぶ。
+
+    ``remove_copies`` なら、**同じ年にすでに選んだ写真と見た目がほぼ同じ写真を外す**
+    （#98。フォルダ・撮影日時を問わない）。別の端末のフォルダにある写しや、送られてきて
+    保存し直した写真（EXIF の日時が無い）は、同じ行事の候補（`similar.candidate_groups`）に
+    入らないので、ここで拾う。**見た目は選ぶかどうかを決める写真だけを測る**
+    （年の枠が埋まれば、その年の残りは測らない）。
+
+    ``count_per_year`` があれば年ごとにまとめて返し（年は並びに初めて出た順）、
+    無ければ並びの順のまま返す。
+    """
+    looks = _Looks(connection, root_paths, progress_callback)
+    by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
+    in_order: List[Dict[str, Any]] = []
+    for media in ranked:
+        kept = by_year.setdefault(_get_media_year(media), [])
+        if count_per_year and len(kept) >= count_per_year:
+            continue
+        if remove_copies and _is_copy(media, kept, family_of, looks):
+            continue
+        kept.append(media)
+        in_order.append(media)
+    looks.flush()
+    if count_per_year:
+        return [media for entries in by_year.values() for media in entries]
+    return in_order
 
 
 def select_media(
@@ -337,18 +452,15 @@ def select_media(
             connection, filtered, family_of, rule, root_paths, progress_callback
         )
 
-    count_per_year = rule.get("count_per_year")
-    if count_per_year:
-        selected: List[Dict[str, Any]] = []
-        by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
-        for media in filtered:
-            year = _get_media_year(media)
-            by_year.setdefault(year, []).append(media)
-        for year, entries in by_year.items():
-            selected.extend(entries[:count_per_year])
-        return selected
-
-    return filtered
+    return _pick_by_year(
+        connection,
+        filtered,
+        family_of,
+        rule.get("count_per_year"),
+        _rule_flag(rule, "remove_similar"),
+        root_paths,
+        progress_callback,
+    )
 
 
 def _output_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:
