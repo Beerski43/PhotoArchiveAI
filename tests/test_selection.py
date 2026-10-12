@@ -860,3 +860,18 @@ def test_the_output_keeps_each_years_photos_together(connection, tmp_path: Path)
         path = write_photo(folder / f"{index}.jpg", scene(20 + index))
         _add(connection, path, shooting_date=when, quality=quality, faces=[_face("${PERSON_1}")])
     assert _names(select_media(connection, {"count_per_year": 5})) == ["0.jpg", "2.jpg", "1.jpg"]
+
+
+def test_measuring_copies_reports_a_count_not_a_finished_bar(connection, tmp_path: Path):
+    """**総数の分からない段は件数だけを知らせる**（PR #99 の利用者の報告）。
+
+    写しを比べるために元写真を読むたびに ``(0, 0)`` を渡していたので、表示が毎回
+    「Measuring: 100% (0/0)」で終わった段とみなし、1枚ごとに行を描き直していた。
+    """
+    _copy_case(connection, tmp_path, original_thumbnail=True)
+    calls = []
+    select_media(connection, {}, progress_callback=lambda *args: calls.append(args))
+    reads = [call for call in calls if call[1] is None]
+    assert reads, "元写真を読んだことが知らされていない"
+    assert [call[0] for call in reads] == list(range(1, len(reads) + 1))
+    assert not [call for call in calls if call[1] == 0]

@@ -609,7 +609,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（79件）
+### `test_selection.py` — 抽出とコピー（80件）
 
 | テスト | 内容 |
 |---|---|
@@ -669,6 +669,7 @@
 | `test_without_remove_similar_copies_are_kept` | `remove_similar: false` なら写しも残す |
 | `test_copies_are_bundled_up_to_distance_9` | **写しの距離は 9 まで**（利用者の決定。10 に別の場面が1組あった）（2件） |
 | `test_the_output_keeps_each_years_photos_together` | 年ごとに選ぶ形を変えても、出力は年ごとにまとまる |
+| `test_measuring_copies_reports_a_count_not_a_finished_bar` | **写しを比べるために元写真を読む段は件数だけを知らせる**（`(0, 0)` を渡していて「Measuring: 100% (0/0)」が1枚ごとに出た。PR #99 の利用者の報告） |
 
 ### `test_similar.py` — 連写・似た写真を束ねる（25件。#86・#93・#98）
 

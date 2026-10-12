@@ -307,6 +307,8 @@ class _Looks:
         self.root_paths = root_paths
         self.progress_callback = progress_callback
         self.pending: List[Tuple[int, str]] = []
+        #: 元写真を読んだ回数（進み具合に出す）。
+        self.reads = 0
 
     def _store(self, media: Dict[str, Any], value: str) -> None:
         media["look_hash"] = value
@@ -315,8 +317,15 @@ class _Looks:
             self.flush()
 
     def _path(self, media: Dict[str, Any]) -> str:
+        """読む元写真のパス。読むたびに進み具合を知らせる。
+
+        **総数は分からない**（年の枠が埋まるまで、何枚読むかは見てみないと決まらない）ので、
+        件数だけを知らせる（``total=None``）。以前は ``(0, 0)`` を渡していて、表示が
+        毎回「100% (0/0)」で終わった段とみなし、1枚ごとに行を描き直していた（PR #99）。
+        """
+        self.reads += 1
         if self.progress_callback is not None:
-            self.progress_callback(0, 0, os.path.basename(media["path"]))
+            self.progress_callback(self.reads, None, os.path.basename(media["path"]))
         return str(_source_path(media["path"], self.root_paths))
 
     def of(self, media: Dict[str, Any]) -> Optional[str]:
@@ -380,7 +389,7 @@ def _pick_by_year(
     count_per_year: Optional[int],
     remove_copies: bool,
     root_paths: Sequence[Path],
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Optional[Callable[[int, Optional[int], str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """並びの順に、年ごとに ``count_per_year`` 枚まで選ぶ。
 
