@@ -95,7 +95,7 @@ def main(argv=None) -> int:
     cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
 
     media, family_of = _load(args.db)
-    runs = similar.candidate_groups(media, family_of, args.seconds)
+    runs = similar.candidate_groups(media, args.seconds)
     members = [item for run in runs for item in run]
     print(f"家族の写った写真 {len(media)} 枚 / 候補の組 {len(runs)} 個・{len(members)} 枚")
 

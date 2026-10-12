@@ -110,30 +110,38 @@ def test_photos_of_the_same_event_are_candidates_however_far_apart_in_time():
         # 別の日は別の行事
         _media(4, "/p/a/4.jpg", "2019-05-04T10:00:00"),
     ]
-    assert _ids(similar.candidate_groups(media, {}, seconds=10)) == [[1, 2, 3]]
+    assert _ids(similar.candidate_groups(media, seconds=10)) == [[1, 2, 3]]
 
 
-def test_another_folder_or_other_family_members_are_not_candidates():
+def test_another_folder_is_not_a_candidate_but_other_family_members_are():
+    """**写っている家族の集合では分けない**（#98）。分けていたので、顔の取りこぼしで
+    1人ずれた同じ場面を束ねなかった（利用者の出力で 37 組）。重なりは `scenes` が見る。"""
     media = [
         _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
         _media(2, "/p/b/2.jpg", "2019-05-03T10:00:01"),
         _media(3, "/p/a/3.jpg", "2019-05-03T12:00:00"),
         _media(4, "/p/a/4.jpg", "2019-05-03T10:00:03"),
     ]
-    family = {1: frozenset({7}), 2: frozenset({7}), 3: frozenset({7}), 4: frozenset({7, 8})}
-    # 1 と 3 は同じフォルダ・同じ日・同じ家族。2 はフォルダが、4 は写っている家族が違う
-    assert _ids(similar.candidate_groups(media, family, seconds=10)) == [[1, 3]]
+    # 2 だけフォルダが違う。4 は写っている家族が違っても候補
+    assert _ids(similar.candidate_groups(media, seconds=10)) == [[1, 4, 3]]
 
 
-def test_another_family_in_between_does_not_split_the_candidates():
-    """#86 は家族の違う写真が1枚挟まるだけで連なりが切れていた。"""
-    media = [
-        _media(1, "/p/a/1.jpg", "2019-05-03T10:00:00"),
-        _media(2, "/p/a/2.jpg", "2019-05-03T10:00:01"),
-        _media(3, "/p/a/3.jpg", "2019-05-03T10:00:02"),
-    ]
-    family = {1: frozenset({7}), 2: frozenset({8}), 3: frozenset({7})}
-    assert _ids(similar.candidate_groups(media, family, seconds=10)) == [[1, 3]]
+def test_a_member_missing_from_one_shot_does_not_split_the_scene():
+    """**家族が1人でも重なれば同じ場面にできる**（#98・利用者の決定）。"""
+    group = [_media(i, f"/p/a/{i}.jpg", "2019-05-03T10:00:00") for i in (1, 2)]
+    looks = {1: _look(0), 2: _look(_ones(3))}
+    family = {1: frozenset({7, 8}), 2: frozenset({7})}
+    assert _ids(similar.scenes(group, looks, max_distance=5, family_of=family)) == [[1, 2]]
+
+
+def test_photos_without_a_family_member_in_common_are_not_bundled():
+    """見た目が近くても、写っている家族が1人も重ならなければ別の写真として残す。"""
+    group = [_media(i, f"/p/a/{i}.jpg", "2019-05-03T10:00:00") for i in (1, 2, 3)]
+    looks = {1: _look(0), 2: _look(_ones(3)), 3: _look(_ones(2))}
+    family = {1: frozenset({7}), 2: frozenset({8}), 3: frozenset()}
+    assert _ids(similar.scenes(group, looks, max_distance=5, family_of=family)) == [[1], [2], [3]]
+    # 家族の写っていない写真どうしは束ねうる（`family_only: false` のとき）
+    assert similar.shares_family({}, group[0], group[1])
 
 
 def test_a_burst_across_midnight_is_still_one_candidate():
@@ -144,9 +152,9 @@ def test_a_burst_across_midnight_is_still_one_candidate():
         _media(3, "/p/a/3.jpg", "2020-01-01T00:30:00"),
         _media(4, "/p/a/4.jpg", "2019-12-31T20:00:00"),
     ]
-    assert _ids(similar.candidate_groups(media, {}, seconds=10)) == [[4, 1, 2, 3]]
+    assert _ids(similar.candidate_groups(media, seconds=10)) == [[4, 1, 2, 3]]
     # 間隔を 0 にすれば、日付で切れる
-    assert _ids(similar.candidate_groups(media, {}, seconds=0)) == [[4, 1], [2, 3]]
+    assert _ids(similar.candidate_groups(media, seconds=0)) == [[4, 1], [2, 3]]
 
 
 def test_photos_without_a_time_and_videos_are_never_bundled():
@@ -157,7 +165,7 @@ def test_photos_without_a_time_and_videos_are_never_bundled():
         _media(4, "/p/a/4.mp4", "2019-05-03T10:00:01", type="video"),
         _media(5, "/p/a/5.jpg", None),
     ]
-    assert similar.candidate_groups(media, {}) == []
+    assert similar.candidate_groups(media) == []
 
 
 def _look(bits):
@@ -225,7 +233,7 @@ def test_a_burst_member_far_from_the_representative_needs_to_look_closer():
         _media(3, "/p/a/3.jpg", "2019-05-03T10:00:16"),
     ]
     looks = {1: _look(0), 2: _look(_ones(8)), 3: _look(_ones(15))}
-    assert _ids(similar.candidate_groups(burst, {}, seconds=10)) == [[1, 2, 3]]
+    assert _ids(similar.candidate_groups(burst, seconds=10)) == [[1, 2, 3]]
     assert _ids(similar.scenes(burst, looks, max_distance=16, seconds=10)) == [[1, 2], [3]]
 
 
@@ -240,7 +248,7 @@ def test_a_burst_across_midnight_does_not_bundle_the_other_days_photos():
         3: _media(3, "/p/a/3.jpg", "2020-01-01T00:00:03"),
         4: _media(4, "/p/a/4.jpg", "2020-01-01T12:00:00"),
     }
-    assert _ids(similar.candidate_groups(list(media.values()), {}, seconds=10)) == [[1, 2, 3, 4]]
+    assert _ids(similar.candidate_groups(list(media.values()), seconds=10)) == [[1, 2, 3, 4]]
     far = (1 << 64) - 1
     # 1 と 4 は距離5（別の日）、連写の 2 と 3 は同じ絵（0時をまたぐ）
     looks = {1: _look(0), 4: _look(_ones(5)), 2: _look(far), 3: _look(far)}
@@ -298,3 +306,20 @@ def test_a_version_7_database_gains_the_look_column_and_keeps_its_faces(tmp_path
         raw.close()
     assert any("look_hash" in message for message in messages)
     assert needs_migration(str(database)) is False
+
+
+def test_a_look_can_carry_the_value_from_the_full_image_too():
+    """**元写真から測った値を後ろに足して持てる**（#98）。古い形もそのまま読める。"""
+    exif = similar.encode(similar.FROM_EXIF, 0)
+    both = similar.with_full(exif, _ones(3))
+    assert both == exif + ",full:0000000000000007"
+    assert similar.decode(both) == (similar.FROM_EXIF, 0)
+    assert similar.decode_all(both) == {similar.FROM_EXIF: 0, similar.FROM_IMAGE: 7}
+    full_only = similar.encode(similar.FROM_IMAGE, 0)
+    # サムネイル由来どうし・元写真由来どうしだけを比べる
+    assert similar.distance(exif, full_only) is None
+    assert similar.distance(both, full_only) == 3
+    assert similar.with_full(full_only, 5) == full_only
+    # 壊れた形は未計測扱い（測り直す）
+    assert similar.decode_all("dhash8/exif:00,exif:01") == {}
+    assert similar.decode("dhash8/exif:zz") is None

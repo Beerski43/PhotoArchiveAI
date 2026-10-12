@@ -760,3 +760,165 @@ def test_a_bad_similar_setting_stops_when_the_rule_is_read(tmp_path: Path, key, 
     rule.write_text(f"{key}: {json.dumps(value)}\n", encoding="utf-8")
     with pytest.raises(ValueError, match=key):
         load_rule(str(rule))
+
+
+# ---------------------------------------------------------------------------
+# フォルダをまたぐ写し・撮影日時の無い写真（#98）
+# ---------------------------------------------------------------------------
+
+
+def _copy_case(connection, tmp_path, *, copy_date=None, copy_faces=None, original_thumbnail=False,
+               copy_folder="2019/received", original_date="2019-05-03T10:00:00"):
+    """元の写真（写りが良い）と、別のフォルダにある写し。写しは EXIF のサムネイルを持たない。
+
+    写しの年は、撮影日時が無ければフォルダ名（`2019/…`）から決まる。"""
+    image = scene(5)
+    first = tmp_path / "phone"
+    first.mkdir(exist_ok=True)
+    second = tmp_path / copy_folder
+    second.mkdir(parents=True, exist_ok=True)
+    thumbnail = image.resize((160, 120)) if original_thumbnail else None
+    original = write_photo(first / "IMG_1.jpg", image, thumbnail)
+    _add(connection, original, shooting_date=original_date, quality=90.0,
+         faces=[_face("${PERSON_1}")])
+    copy = write_photo(second / "1748775337556.jpg", burst_of(image, 1))
+    _add(connection, copy, shooting_date=copy_date, quality=50.0,
+         faces=copy_faces if copy_faces is not None else [_face("${PERSON_1}")])
+    return original, copy
+
+
+def test_a_copy_in_another_folder_without_a_date_is_bundled(connection, tmp_path: Path):
+    """**別のフォルダにある写し（送られてきて保存し直した写真）は、同じ年なら外す**（#98）。
+
+    利用者の出力で、端末のフォルダの写真と、送られてきた写し3枚が並んで選ばれていた。
+    写しは EXIF の日時が無いので、同じ行事の候補に入らなかった。
+    """
+    _copy_case(connection, tmp_path, copy_date=None)
+    assert _names(select_media(connection, {"count_per_year": 30})) == ["IMG_1.jpg"]
+    assert _names(select_media(connection, {})) == ["IMG_1.jpg"]
+
+
+def test_a_copy_without_the_exif_thumbnail_is_compared_from_the_full_image(
+    connection, tmp_path: Path
+):
+    """**取った場所が違う2枚は、両方を元写真から測って比べる。** 保存し直した写しは
+    EXIF のサムネイルを持たず、いまの見た目の値（サムネイル由来と元写真由来は比べない）
+    では比べられなかった（利用者の出力の写しの組 29 組のうち 11 組）。"""
+    original, _ = _copy_case(connection, tmp_path, original_thumbnail=True)
+    assert _names(select_media(connection, {})) == ["IMG_1.jpg"]
+    stored = db.get_media_by_path(connection, original)["look_hash"]
+    # 元写真から測った値を足して残す（次の回は測り直さない）
+    assert set(similar.decode_all(stored)) == {similar.FROM_EXIF, similar.FROM_IMAGE}
+    assert similar.decode(stored)[0] == similar.FROM_EXIF
+
+
+def test_a_copy_in_another_year_is_kept(
+    connection, tmp_path: Path
+):
+    _copy_case(connection, tmp_path, copy_date="2020-05-03T10:00:00")
+    assert sorted(_names(select_media(connection, {}))) == ["1748775337556.jpg", "IMG_1.jpg"]
+
+
+def test_a_copy_showing_other_family_members_is_kept(connection, tmp_path: Path):
+    _copy_case(connection, tmp_path, copy_faces=[_face("${PERSON_2}")])
+    assert sorted(_names(select_media(connection, {}))) == ["1748775337556.jpg", "IMG_1.jpg"]
+
+
+def test_a_dated_copy_on_another_day_is_kept(connection, tmp_path: Path):
+    """**両方に撮影日時があって日付が違えば写しとみなさない**（別の日は別の行事・#93）。"""
+    _copy_case(connection, tmp_path, copy_date="2019-05-04T10:00:00")
+    assert sorted(_names(select_media(connection, {}))) == ["1748775337556.jpg", "IMG_1.jpg"]
+
+
+def test_without_remove_similar_copies_are_kept(connection, tmp_path: Path):
+    _copy_case(connection, tmp_path)
+    selected = select_media(connection, {"remove_similar": False})
+    assert sorted(_names(selected)) == ["1748775337556.jpg", "IMG_1.jpg"]
+
+
+@pytest.mark.parametrize("gap, bundled", [(9, True), (10, False)])
+def test_copies_are_bundled_up_to_distance_9(gap, bundled):
+    """**9 まで**（利用者の決定）。実データで 10 に別の場面が1組あった（結婚式の入場と挨拶）。"""
+    from photoarchive_ai.selection import _is_copy, _Looks
+
+    kept = {"id": 1, "type": "image", "path": "/p/a/1.jpg",
+            "look_hash": similar.encode(similar.FROM_EXIF, 0)}
+    media = {"id": 2, "type": "image", "path": "/p/b/2.jpg",
+             "look_hash": similar.encode(similar.FROM_EXIF, (1 << gap) - 1)}
+    family = {1: frozenset({7}), 2: frozenset({7})}
+    assert _is_copy(media, [kept], family, _Looks(None, [])) is bundled
+
+
+def test_the_output_keeps_each_years_photos_together(connection, tmp_path: Path):
+    """年ごとに選ぶ形を変えても、出力は年ごとにまとまったまま（名前の順位が年で並ぶ）。"""
+    folder = tmp_path / "p"
+    folder.mkdir()
+    for index, (when, quality) in enumerate(
+        [("2019-01-01T10:00:00", 90.0), ("2020-01-01T10:00:00", 80.0),
+         ("2019-02-01T10:00:00", 70.0)]
+    ):
+        path = write_photo(folder / f"{index}.jpg", scene(20 + index))
+        _add(connection, path, shooting_date=when, quality=quality, faces=[_face("${PERSON_1}")])
+    assert _names(select_media(connection, {"count_per_year": 5})) == ["0.jpg", "2.jpg", "1.jpg"]
+
+
+def test_measuring_copies_reports_a_count_not_a_finished_bar(connection, tmp_path: Path):
+    """**総数の分からない段は件数だけを知らせる**（PR #99 の利用者の報告）。
+
+    写しを比べるために元写真を読むたびに ``(0, 0)`` を渡していたので、表示が毎回
+    「Measuring: 100% (0/0)」で終わった段とみなし、1枚ごとに行を描き直していた。
+    """
+    _copy_case(connection, tmp_path, original_thumbnail=True)
+    calls = []
+    select_media(connection, {}, progress_callback=lambda *args: calls.append(args))
+    reads = [call for call in calls if call[1] is None]
+    assert reads, "元写真を読んだことが知らされていない"
+    assert [call[0] for call in reads] == list(range(1, len(reads) + 1))
+    assert not [call for call in calls if call[1] == 0]
+
+
+def test_measuring_copies_draws_one_progress_line(connection, tmp_path: Path):
+    """表示まで通して、**「(0/0)」の行が積み上がらない**こと（PR #99 のレビュー指摘1）。"""
+    import io
+
+    from photoarchive_ai.progress import ProgressDisplay
+
+    _copy_case(connection, tmp_path, original_thumbnail=True)
+    stream = io.StringIO()
+    display = ProgressDisplay(stream=stream, interactive=False)
+    select_media(
+        connection, {},
+        progress_callback=lambda c, t, d: display.update(c, t, d, prefix="Measuring"),
+    )
+    assert "(0/0)" not in stream.getvalue()
+    # 非対話では終わった段だけを1行書く。件数だけの段は終わらないので、何も積み上がらない
+    assert "Measuring: [" not in stream.getvalue()
+
+
+def test_the_full_image_is_read_only_once_without_count_per_year(
+    connection, tmp_path: Path, monkeypatch
+):
+    """**`count_per_year` が無いと初回は元写真を多く読むが、2回目は読まない**
+    （PR #99 のレビュー指摘4。利用者は「受け入れて文書に書く」を選んだ）。
+
+    撮影日時も EXIF のサムネイルも無い写真が上位にあると、同じ年に選ぶ写真の全部を
+    元写真から読み直す。値を `look_hash` に残すので、次の回はゼロになる。
+    """
+    reads = []
+    real = similar.measure_full
+    monkeypatch.setattr(similar, "measure_full", lambda path: reads.append(path) or real(path))
+    folder = tmp_path / "2019"
+    folder.mkdir()
+    lead = write_photo(folder / "lead.jpg", scene(999))
+    _add(connection, lead, quality=99.0, faces=[_face("${PERSON_1}")])
+    for index in range(5):
+        image = scene(100 + index)
+        path = write_photo(folder / f"p{index}.jpg", image, image.resize((160, 120)))
+        _add(connection, path, shooting_date=f"2019-0{index + 1}-01T10:00:00", quality=50.0,
+             faces=[_face("${PERSON_1}")])
+
+    assert len(select_media(connection, {})) == 6
+    assert len(reads) == 5  # 比べた5枚（先頭の1枚は最初から元写真で測っている）
+    reads.clear()
+    select_media(connection, {})
+    assert reads == []
