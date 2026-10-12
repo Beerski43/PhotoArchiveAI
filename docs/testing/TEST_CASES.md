@@ -745,7 +745,7 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
-### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（9件。#100）
+### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（10件。#100）
 
 | テスト | 内容 |
 |---|---|
@@ -758,6 +758,7 @@
 | `test_without_any_family_face_to_compare_unassigned_faces_are_not_counted` | 比べる家族の顔が無ければ引かない |
 | `test_the_penalty_is_subtracted_from_the_photo_score` | 重み 1 あたり 30 点（利用者の決定） |
 | `test_select_and_match_use_the_same_penalty` | `select` の並びと `match` の `family_score` は同じ式 |
+| `test_a_family_photo_with_a_stranger_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
 
 ### `test_converter.py` — HEIC → JPEG（16件）
 

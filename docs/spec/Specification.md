@@ -1702,8 +1702,8 @@ quality_score = min(100, brightness × 60 + size_ratio × 40)
 家族の手本まで照合の閾値以内で、並べると家族の子の取りこぼしに見えた。家族らしくなさを閾値以内で 0 にするのは
 これを引かないため。**写っている人物に似た顔は家族ではない**（同じ人は1枚に1人）ので、その人物とは比べない。
 自動割り当ての顔は家族として扱い、引かない（`include_auto_assigned: false` でも）。`select` と `match`
-（`family_score`）で同じ式。実データの複製で、出力 638 枚のうち重みのある写真が 139 → 37 枚、入れ替わり 104 枚
-（測定は `docs/history/details/2026-10-12-stranger-penalty-measured.md`）。
+（`family_score`）で同じ式。実データの複製で、出力 638 枚のうち重みのある写真が 146 → 37 枚、入れ替わり 112 枚（#98 を含む develop と比べた値）（測定は `docs/history/details/2026-10-12-stranger-penalty-measured.md`）。
+**点は負になりうる**（`select` は家族の写った写真を先に並べる・§12.1）。
 
 ## 9.3 未実装（将来）
 
@@ -2204,7 +2204,7 @@ include_auto_assigned: true
 
 **真偽値のキー（`include_video`・`family_only`・`remove_duplicate`・`remove_similar`・`include_auto_assigned`）は `true` / `false` だけを受け付け、それ以外は読むときに止める。** 引用符付きの `"false"` は文字列で、そのまま使うと真として扱われ、黙って逆の結果になるため（PR #91 のレビュー指摘1。以前は `family_only: "false"` で家族だけに絞っていた）。
 
-並び順は **家族写真としての良さ**（§9.2）→ `quality_score` → `smile_score` → `face_count` の降順。
+並び順は **家族が写っているか**（写っている写真が先）→ **家族写真としての良さ**（§9.2）→ `quality_score` → `smile_score` → `face_count` の降順。家族が写っているかを先に見るのは、目立つ他人の重みで点が負になりうるため（#100。`family_only: false` のとき、点だけで並べると家族の写った写真が家族のいない写真（点 0）より後ろに来た。PR #101 のレビュー指摘1・利用者の決定）。
 家族写真としての良さは**その場でいまの割り当てから計算する**（§5.8）。
 連写・似た写真は束ねて先頭1枚にしてから（§11.2）、`count_per_year` はこの順で各年の上位から採る。年ごとの件数を揃える処理は
 入っていないので、元の件数が少ない年はそのままになる。

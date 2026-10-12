@@ -155,3 +155,31 @@ def test_select_and_match_use_the_same_penalty(connection, family):
     scores, _ = family_scores(connection)
     stored = db.get_analysis_result(connection, crowded)["family_score"]
     assert stored == pytest.approx(scores[crowded])
+
+
+def test_a_family_photo_with_a_stranger_still_ranks_above_a_photo_without_family(
+    connection, family
+):
+    """**点は負になりうるが、家族の写った写真は家族のいない写真より前**（PR #101 の
+    レビュー指摘1・利用者の決定）。`family_only: false` で、ボケて横を向いた父と大きな
+    他人2人の写真（20 − 30×2 = −40 点）が、他人しか写っていない写真より後ろに来ていた。"""
+    from photoarchive_ai.selection import select_media
+
+    father, _ = family
+    clear = _media(connection, 1)
+    _face(connection, clear, vector=_unit(0), person_id=father, source=db.ASSIGN_MANUAL)
+    crowded = _media(connection, 2)
+    blurred = _face(connection, crowded, vector=_unit(0), person_id=father,
+                    source=db.ASSIGN_MANUAL)
+    db.save_appearance(connection, [(blurred, Appearance(False, None, 20.0))])
+    _face(connection, crowded, vector=_unit(5))
+    _face(connection, crowded, vector=_unit(6))
+    stranger_only = _media(connection, 3)
+    _face(connection, stranger_only, vector=_unit(7))
+
+    rows = db.family_faces(connection)
+    assert scoring.family_photo_scores(rows, strangers.weights(connection, rows))[crowded] < 0
+    order = [m["id"] for m in select_media(
+        connection, {"family_only": False, "remove_similar": False}
+    ) if m["id"] in (clear, crowded, stranger_only)]
+    assert order == [clear, crowded, stranger_only]
