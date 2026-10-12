@@ -369,12 +369,14 @@ def match_faces(
 
     if not dry_run:
         # **`select` と同じ式で `family_score` を書く**（`scoring.family_photo_score`）。
-        # 式は家族の顔の見え方を使うので、付けたばかりの顔を先に測る。
-        from . import appearance
+        # 式は家族の顔の見え方と表情を使うので、付けたばかりの顔を先に測る。
+        from . import appearance, expression
 
         appearance.fill_missing(
             connection, assign_sources=(db.ASSIGN_AUTO,), progress_callback=progress_callback
         )
+        # 表情は手本も測る（手本の見え方は照合の前に測ってあるが、表情はまだ）。
+        expression.fill_missing(connection, progress_callback=progress_callback)
         db.recompute_family_scores(connection)
         # 見え方を測った進み具合で終わらせない。**最後は照合した件数を出す。**
         if progress_callback is not None:

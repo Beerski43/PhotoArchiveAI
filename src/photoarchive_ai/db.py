@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -200,6 +200,14 @@ SCHEMA = [
     # **auto の行だけが意味を持つ。** 規則を変えたあとに古い判定が残っているかを
     # `select` が見分けるため。
     "assign_rule TEXT,"
+    # **顔の表情**（v10・#95。保存済みサムネイルから測る。`expression.py`）。
+    # expression_found: NULL＝未計測 / 1＝測れた / 0＝サムネイルから顔が取れなかった
+    # （**取れなかった顔を毎回測り直さないため**）。0 のとき下の2つは NULL。
+    "expression_found INTEGER,"
+    # eye_blink: 両目の閉じ具合の小さいほう（0〜1。0.5 以上でほぼ閉じている）。
+    "eye_blink REAL,"
+    # mouth_smile: 笑顔（左右の平均・0〜1）。`smile_score`（scan が書く古い笑顔）とは別物。
+    "mouth_smile REAL,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
     ")",
@@ -392,6 +400,9 @@ ADDABLE_COLUMNS = {
     ("Face", "yaw"): "REAL",
     ("Face", "sharpness"): "REAL",
     ("Face", "assign_rule"): "TEXT",
+    ("Face", "expression_found"): "INTEGER",
+    ("Face", "eye_blink"): "REAL",
+    ("Face", "mouth_smile"): "REAL",
     ("Media", "folder_date_from"): "TEXT",
     ("Media", "folder_date_to"): "TEXT",
     ("Media", "look_hash"): "TEXT",
@@ -2303,6 +2314,24 @@ def faces_without_appearance(
     return [int(row[0]) for row in rows]
 
 
+def faces_without_expression(
+    connection: sqlite3.Connection, assign_sources: Sequence[str]
+) -> List[int]:
+    """表情（`Face.expression_found`）が未計測で、サムネイルのある顔の id。
+
+    ``assign_sources`` の割り当ての顔だけ（`faces_without_appearance` と同じ考え）。
+    """
+    if not assign_sources:
+        return []
+    placeholders = ",".join("?" for _ in assign_sources)
+    rows = connection.execute(
+        "SELECT id FROM Face WHERE expression_found IS NULL AND thumbnail IS NOT NULL"
+        f" AND assign_source IN ({placeholders}) ORDER BY id",
+        tuple(assign_sources),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 def face_thumbnails(
     connection: sqlite3.Connection, face_ids: Sequence[int]
 ) -> Dict[int, Optional[bytes]]:
@@ -2336,6 +2365,22 @@ def save_appearance(connection: sqlite3.Connection, rows: Sequence[Tuple[int, An
 
 #: match が一度に読み出す顔の件数。matcher と二重に持たない。
 MATCH_CHUNK_SIZE = 5000
+
+
+def save_expressions(connection: sqlite3.Connection, rows: Sequence[Tuple[int, Any]]) -> int:
+    """``(face_id, expression.Expression)`` を書く。"""
+    if not rows:
+        return 0
+    cursor = connection.cursor()
+    cursor.executemany(
+        "UPDATE Face SET expression_found = ?, eye_blink = ?, mouth_smile = ? WHERE id = ?",
+        [
+            (int(bool(item.found)), item.eye_blink, item.mouth_smile, face_id)
+            for face_id, item in rows
+        ],
+    )
+    connection.commit()
+    return cursor.rowcount
 
 
 def _match_candidate_filter(include_auto: bool) -> str:
@@ -2476,7 +2521,8 @@ def family_faces(
     """
     sources = list(assign_sources)
     query = (
-        "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness, smile_score"
+        "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness,"
+        " eye_blink, mouth_smile"
         " FROM Face WHERE person_id IS NOT NULL"
         f" AND assign_source IN ({','.join('?' for _ in sources)})"
     )

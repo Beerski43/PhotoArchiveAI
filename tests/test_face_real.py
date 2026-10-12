@@ -79,3 +79,31 @@ def test_the_same_face_image_gives_the_same_vector(monkeypatch):
 
 # `face_rect` の確認は tests/test_face_io.py にある。モデルを必要としないのに
 # ここに置いていたため、回帰テスト(`-m "not models"`)では常に除外されていた。
+
+
+def test_the_real_face_landmarker_can_be_called(tmp_path):
+    """**目閉じ・笑顔（#95）の実物の経路。** 回帰テストのフェイクは `_blendshapes` を
+    丸ごと差し替えるので、実物の Face Landmarker の呼び方はここでしか通らない。
+
+    conftest は `mediapipe` をフェイクのモジュールに差し替えている（`monkeypatch.undo()`
+    では戻らない）ので、**白紙の子プロセス**で流す。顔の無い画像なので「顔が取れなかった」。
+    """
+    import subprocess
+    import sys
+
+    from photoarchive_ai import expression
+
+    if face.find_model_file(expression.MODEL_FILE) is None:  # pragma: no cover - 環境依存
+        pytest.skip(f"{expression.MODEL_FILE} が無い（scripts/fetch_models.py で取得する）")
+    script = (
+        "import numpy as np\n"
+        "from photoarchive_ai import expression\n"
+        "assert expression.available()\n"
+        "rgb = (np.random.default_rng(0).random((160, 160, 3)) * 255).astype(np.uint8)\n"
+        "print(expression.measure(rgb) == expression.NOT_FOUND)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, cwd=tmp_path, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "True"

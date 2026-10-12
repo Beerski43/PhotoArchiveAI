@@ -159,3 +159,12 @@ def test_the_arcface_entry_matches_what_face_py_looks_for(fetch_models):
 
     assert fetch_models.ARCFACE.name == face.ARCFACE_FILE
     assert len(fetch_models.ARCFACE.sha256) == 64
+
+
+def test_the_face_landmarker_entry_matches_what_expression_py_looks_for(fetch_models):
+    """目閉じ・笑顔のモデルも、取得する名前と本体が探す名前をそろえる（#95）。"""
+    from photoarchive_ai import expression
+
+    assert fetch_models.FACE_LANDMARKER.name == expression.MODEL_FILE
+    assert fetch_models.FACE_LANDMARKER in fetch_models.MODELS
+    assert len(fetch_models.FACE_LANDMARKER.sha256) == 64

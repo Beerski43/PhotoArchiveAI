@@ -650,8 +650,10 @@ def _compute_arcface_embedding(face_rgb: np.ndarray) -> Optional[np.ndarray]:
         return None
 
 
-def _resolve_arcface_path() -> Path:
-    """ArcFace の ONNX を探す。探索順は dlib のモデルと同じ考え方。
+def find_model_file(filename: str) -> Optional[Path]:
+    """`models/` 系の置き場からモデルのファイルを探す。無ければ None。
+
+    探索順は dlib のモデルと同じ考え方（ArcFace と Face Landmarker が使う）。
 
     1. 環境変数 ``PHOTOARCHIVE_ONNX_MODEL_DIR``
     2. 環境変数 ``PHOTOARCHIVE_DLIB_MODEL_DIR``（同じ置き場にまとめる運用）
@@ -664,8 +666,16 @@ def _resolve_arcface_path() -> Path:
             candidates.append(Path(value))
     candidates.append(Path(__file__).resolve().parents[2] / "models")
     for candidate in candidates:
-        if (candidate / ARCFACE_FILE).is_file():
-            return candidate / ARCFACE_FILE
+        if (candidate / filename).is_file():
+            return candidate / filename
+    return None
+
+
+def _resolve_arcface_path() -> Path:
+    """ArcFace の ONNX を探す（`find_model_file`）。無ければ取得の手順を添えて落とす。"""
+    found = find_model_file(ARCFACE_FILE)
+    if found is not None:
+        return found
     raise FileNotFoundError(
         f"ArcFace のモデルが見つかりません。{ARCFACE_FILE} を models/ に置いてください。"
         " `python scripts/fetch_models.py` で取得できます"

@@ -108,6 +108,10 @@ python scripts/fetch_models.py
   環境変数 `PHOTOARCHIVE_ONNX_MODEL_DIR` で別の場所を指定できます
 - **モデルが無いと `scan` と `reembed` は開始前に中断します**（顔は検出されるのに
   特徴量が保存されない状態を避けるため）
+- あわせて `models/face_landmarker.task`（3.7MB・MediaPipe Face Landmarker）も取得します。
+  `select` の並びで**目閉じと笑顔**を見るのに使います（顔のサムネイルから測る・#95）。
+  pip の `mediapipe` には入っていません。**無くても `select` は動きます**が、
+  目閉じと笑顔は「分からない」扱いになり、並びに効きません（ログに一度だけ警告が出ます）
 
 **2026-10-02 に dlib ResNet から替えました。** 実データの手本126件で1位正解率
 69.8% → 95.2%。測定は

@@ -334,6 +334,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `dates.py` | **日付の読み取りと年齢の計算。** 「読める撮影日時か」の判断の正本。**フォルダ名から撮影時期を起こす読み方**（`folder_date_range`）もここだけ |
 | `scoring.py` | 笑顔・画質のスコア（FaceMesh）と、**家族写真としての良さ**（`select` の並び） |
 | `appearance.py` | **顔の見え方**（整列できるか・向き・鮮明さ）を保存済みサムネイルから測る |
+| `expression.py` | **顔の表情**（目閉じ・笑顔）を保存済みサムネイルから測る（MediaPipe Face Landmarker・#95）。モデル `face_landmarker.task` は `scripts/fetch_models.py` で置く |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
 | `recommend.py` | 顔を「この人物に似た順」に並べる（GUI の顔候補の推薦・#69）。**閾値では切らない** |
 | `evaluation.py` | 手本を1件ずつ抜いて、自動紐づけの取りこぼし率と誤一致率を実測 |
@@ -363,6 +364,9 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - `Face.aligned` / `yaw` / `sharpness`: **顔の見え方。NULL=未計測。** 割り当てのある
   顔だけを、`match` と `select` が使う前に測る。`aligned=0` の手本は受け入れの根拠に
   しない（対抗馬としては使う）。
+- `Face.expression_found` / `eye_blink` / `mouth_smile`: **顔の表情**（v10・#95）。
+  `expression_found` は NULL=未計測 / 1=測れた / 0=顔が取れなかった。**モデルが無い環境では書かない。**
+  `select` の並びの目と笑顔はこちら（古い `Face.smile_score` は並びに使わない）。
 - `Face.assign_rule`: 自動割り当てを付けた規則の版（`matcher.MATCH_RULE`）。
   **判定の規則を変えたら版を上げる。** `select` が古い判定の残りを知らせる。
 - `Person.name`: **重複不可**（v9・#90。一意索引 `idx_person_name`・完全一致）。同名がある DB は
