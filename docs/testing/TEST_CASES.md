@@ -731,7 +731,7 @@
 | `test_select_measures_the_expressions_and_puts_the_open_eyes_first` | `select` は未計測の表情を先に測って並べる |
 | `test_match_measures_the_expressions_before_writing_the_family_score` | `match` も `family_score` を書く前に測る |
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
-| `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚） |
+| `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
 ### `test_converter.py` — HEIC → JPEG（16件）
 

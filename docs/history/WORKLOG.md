@@ -17,6 +17,7 @@
 **スキーマ版10**（`Face.expression_found` / `eye_blink` / `mouth_smile`・列を足すだけ）。測るのは割り当てのある顔だけで、`select` と `match` が使う前に埋める。モデル `face_landmarker.task` は `scripts/fetch_models.py` で置く（無ければ測らず、何も書かない）。
 並びは鮮明さ 0.35・正面 0.25・**目 0.20・笑顔 0.20**、**目を閉じた家族は人数に数えない**、人数の加点は **10 → 20**（3つとも利用者の決定）。古い `smile_score` は無表情の顔の 86% に 100 を付けていたので並びに使わない。仕様書 1.16（§7.2・§7.7・§7.8・§9.2）。
 実データの複製で、出力 638 枚のうち **229 枚が入れ替わる**（外れたのは無表情・変顔・目閉じ、入ったのは笑顔。目を閉じた家族のいる写真 28 → 3 枚）。加点 10 のままだと1人だけの写真が 97 → 240 枚に増えたので 20 にした。測定は [details/2026-10-11-eyes-and-smile-measured.md](details/2026-10-11-eyes-and-smile-measured.md)。
+レビュー対応（PR #97）: 指摘1 ROADMAP の Phase 6 の行の「済んだもの」に #89・#93 を足した。指摘2 加点 20 の境目は「押しのけない」ではなく**ちょうど同点**（テストの説明を直し、同点を固定した）。
 本筋の外: ROADMAP の 4.3 を済に（PR #94 はマージ済み）。`face.find_model_file` に ArcFace のモデル探索を切り出した（Face Landmarker も同じ置き場を見る）。
 **利用者がやること**: マージ後に `python scripts/fetch_models.py`（Face Landmarker を置く）→ `photoarchive migrate`（版10）→ `photoarchive select`（初回は家族の顔約2万件の表情を測るので約14分）。次は 4.5（白飛び・見切れ・美しさ。子 Issue が未起票なので起票の許可から）。
 

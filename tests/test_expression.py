@@ -209,7 +209,14 @@ def test_a_dry_run_of_match_writes_no_expression(connection):
 
 def test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly():
     """**人数の加点は 20**（利用者の決定）。10 のままだと、1人だけ写った笑顔の写真が
-    家族のそろった写真を押しのけた（実データの出力で1人の写真が 97 → 240 枚）。"""
+    家族のそろった写真を押しのけた（実データの出力で1人の写真が 97 → 240 枚）。
+
+    **境目はちょうど同点**（1人の満点の笑顔 35+25+20+20 = 2人の無表情 80+20）。
+    それ以上には押しのけない。同点のときの順は `select` の並びの次の手がかり
+    （`quality_score` 以降）で決まる（PR #97 のレビュー指摘2）。
+    """
     lone_smile = scoring.family_photo_score([_row(1, mouth_smile=1.0)])
     two_straight_faces = scoring.family_photo_score([_row(1), _row(2)])
-    assert two_straight_faces >= lone_smile
+    two_with_a_faint_smile = scoring.family_photo_score([_row(1, mouth_smile=0.03), _row(2)])
+    assert two_straight_faces == pytest.approx(lone_smile)
+    assert two_with_a_faint_smile > lone_smile
