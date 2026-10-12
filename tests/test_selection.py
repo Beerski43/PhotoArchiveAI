@@ -875,3 +875,50 @@ def test_measuring_copies_reports_a_count_not_a_finished_bar(connection, tmp_pat
     assert reads, "元写真を読んだことが知らされていない"
     assert [call[0] for call in reads] == list(range(1, len(reads) + 1))
     assert not [call for call in calls if call[1] == 0]
+
+
+def test_measuring_copies_draws_one_progress_line(connection, tmp_path: Path):
+    """表示まで通して、**「(0/0)」の行が積み上がらない**こと（PR #99 のレビュー指摘1）。"""
+    import io
+
+    from photoarchive_ai.progress import ProgressDisplay
+
+    _copy_case(connection, tmp_path, original_thumbnail=True)
+    stream = io.StringIO()
+    display = ProgressDisplay(stream=stream, interactive=False)
+    select_media(
+        connection, {},
+        progress_callback=lambda c, t, d: display.update(c, t, d, prefix="Measuring"),
+    )
+    assert "(0/0)" not in stream.getvalue()
+    # 非対話では終わった段だけを1行書く。件数だけの段は終わらないので、何も積み上がらない
+    assert "Measuring: [" not in stream.getvalue()
+
+
+def test_the_full_image_is_read_only_once_without_count_per_year(
+    connection, tmp_path: Path, monkeypatch
+):
+    """**`count_per_year` が無いと初回は元写真を多く読むが、2回目は読まない**
+    （PR #99 のレビュー指摘4。利用者は「受け入れて文書に書く」を選んだ）。
+
+    撮影日時も EXIF のサムネイルも無い写真が上位にあると、同じ年に選ぶ写真の全部を
+    元写真から読み直す。値を `look_hash` に残すので、次の回はゼロになる。
+    """
+    reads = []
+    real = similar.measure_full
+    monkeypatch.setattr(similar, "measure_full", lambda path: reads.append(path) or real(path))
+    folder = tmp_path / "2019"
+    folder.mkdir()
+    lead = write_photo(folder / "lead.jpg", scene(999))
+    _add(connection, lead, quality=99.0, faces=[_face("${PERSON_1}")])
+    for index in range(5):
+        image = scene(100 + index)
+        path = write_photo(folder / f"p{index}.jpg", image, image.resize((160, 120)))
+        _add(connection, path, shooting_date=f"2019-0{index + 1}-01T10:00:00", quality=50.0,
+             faces=[_face("${PERSON_1}")])
+
+    assert len(select_media(connection, {})) == 6
+    assert len(reads) == 5  # 比べた5枚（先頭の1枚は最初から元写真で測っている）
+    reads.clear()
+    select_media(connection, {})
+    assert reads == []
