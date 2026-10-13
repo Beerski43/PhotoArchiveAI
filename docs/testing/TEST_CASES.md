@@ -609,7 +609,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（82件）
+### `test_selection.py` — 抽出とコピー（100件）
 
 | テスト | 内容 |
 |---|---|
@@ -672,6 +672,15 @@
 | `test_measuring_copies_draws_one_progress_line` | 表示まで通して「(0/0)」の行が積み上がらない（PR #99 のレビュー指摘1） |
 | `test_the_full_image_is_read_only_once_without_count_per_year` | **`count_per_year` が無いと初回は元写真を多く読むが、2回目は読まない**（レビュー指摘4。利用者は受け入れて文書に書くことを選んだ） |
 | `test_measuring_copies_reports_a_count_not_a_finished_bar` | **写しを比べるために元写真を読む段は件数だけを知らせる**（`(0, 0)` を渡していて「Measuring: 100% (0/0)」が1枚ごとに出た。PR #99 の利用者の報告） |
+| `test_the_default_weights_are_the_constants_and_writing_them_changes_nothing` | **既定の重みのままなら今と同じ並び**（#103。実データの出力 638 枚も ID の並びまで一致） |
+| `test_the_weights_in_the_rule_change_the_order` | ルールの `weights` で並びが変わる |
+| `test_choosing_again_does_not_measure_or_write_anything` | **`choose` は何度呼んでも DB に書かない**（GUI で重みを動かすたびに呼ぶ） |
+| `test_candidates_refuse_a_source_they_did_not_load` | 用意していない割り当ての種別では選ばない |
+| `test_counts_per_year_select_only_the_years_written` | **年ごとの対応なら、書いていない年と年の分からない写真は選ばない**（利用者の決定・#102） |
+| `test_a_single_count_per_year_still_applies_to_every_year` | 整数の `count_per_year` は全部の年に同じ数・0 は制限なし（以前と同じ） |
+| `test_a_bad_weight_or_count_stops_when_the_rule_is_read` | 知らない重みの項目・負の値・壊れた年ごとの枚数は読むときに止める（9件） |
+| `test_counts_per_year_are_read_from_yaml` | YAML の年ごとの対応を読む |
+| `test_the_copy_distance_can_be_set_in_the_rule` / `test_a_copy_beyond_the_distance_set_in_the_rule_is_kept` | 写しの距離をルールで変えられる |
 
 ### `test_similar.py` — 連写・似た写真を束ねる（25件。#86・#93・#98）
 

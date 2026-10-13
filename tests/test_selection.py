@@ -922,3 +922,126 @@ def test_the_full_image_is_read_only_once_without_count_per_year(
     reads.clear()
     select_media(connection, {})
     assert reads == []
+
+
+# ---------------------------------------------------------------------------
+# 重みと年ごとの枚数をルールに出す・候補の用意と選ぶを分ける（#103）
+# ---------------------------------------------------------------------------
+
+from photoarchive_ai.selection import choose, prepare, rule_weights, year_limits  # noqa: E402
+
+
+def _blurred_smile_and_sharp_straight(connection):
+    _add(connection, "blurred-smile.jpg", faces=[_face("${PERSON_4}", sharpness=40.0, smile=100.0)])
+    _add(connection, "sharp-straight.jpg", faces=[_face("${PERSON_4}", smile=0.0)])
+
+
+def test_the_default_weights_are_the_constants_and_writing_them_changes_nothing(connection):
+    """**既定の重みのままなら、今と同じ並び**（#103）。"""
+    assert rule_weights({}) == scoring.Weights.default()
+    _blurred_smile_and_sharp_straight(connection)
+    written = {"weights": dict(scoring.Weights.default()._asdict())}
+    assert _paths(select_media(connection, written)) == _paths(select_media(connection, {}))
+
+
+def test_the_weights_in_the_rule_change_the_order(connection):
+    """利用者がルール（GUI）で重みを動かすと並びが変わる。"""
+    _blurred_smile_and_sharp_straight(connection)
+    assert _paths(select_media(connection, {}))[0] == "sharp-straight.jpg"
+    heavy_smile = {"weights": {"smile": 2.0}}
+    assert _paths(select_media(connection, heavy_smile))[0] == "blurred-smile.jpg"
+
+
+def test_choosing_again_does_not_measure_or_write_anything(connection):
+    """**`choose` は何度呼んでもよい**（GUI で重みを動かすたびに呼ぶ）。2回目は DB に書かない。"""
+    _blurred_smile_and_sharp_straight(connection)
+    candidates = prepare(connection)
+    choose(candidates, {})
+    before = connection.total_changes
+    for smile in (0.0, 1.0, 3.0):
+        choose(candidates, {"weights": {"smile": smile}})
+    assert connection.total_changes == before
+
+
+def test_candidates_refuse_a_source_they_did_not_load(connection):
+    candidates = prepare(connection, assign_sources=(db.ASSIGN_MANUAL,))
+    with pytest.raises(ValueError, match="含めなかった"):
+        choose(candidates, {"include_auto_assigned": True})
+
+
+def _yearly(connection):
+    for year, name in ((2018, "a"), (2019, "b"), (2019, "c"), (2020, "d")):
+        _add(connection, f"{name}.jpg", shooting_date=f"{year}-05-03T10:00:00",
+             faces=[_face("${PERSON_4}")])
+    # 撮影日時が壊れていて、フォルダ名からも起こせない（年が分からない）
+    _add(connection, "undated.jpg", shooting_date="0000-00-00T00:00:00",
+         faces=[_face("${PERSON_4}")])
+
+
+def test_counts_per_year_select_only_the_years_written(connection):
+    """**書いていない年は選ばない**（利用者の決定・#102。既定の枚数は持たない）。年の分からない写真も選ばない。"""
+    _yearly(connection)
+    selected = select_media(connection, {"count_per_year": {2019: 1, 2020: 5}})
+    assert sorted(_paths(selected)) == ["b.jpg", "d.jpg"] or sorted(_paths(selected)) == ["c.jpg", "d.jpg"]
+    assert len(select_media(connection, {"count_per_year": {2018: 0}})) == 0
+
+
+def test_a_single_count_per_year_still_applies_to_every_year(connection):
+    """以前からの整数の書き方は全部の年に同じ数。0 は上限なし（以前と同じ）。"""
+    _yearly(connection)
+    assert len(select_media(connection, {"count_per_year": 1})) == 4  # 2018・2019・2020・年なし
+    assert len(select_media(connection, {"count_per_year": 0})) == 5
+
+
+@pytest.mark.parametrize("text, match", [
+    ("weights:\n  smil: 1\n", "知らない項目"),
+    ("weights:\n  smile: -1\n", "weights.smile"),
+    ("weights: 3\n", "weights"),
+    ("count_per_year:\n  2018: -1\n", "2018"),
+    ("count_per_year:\n  2018: many\n", "2018"),
+    ("count_per_year:\n  this-year: 3\n", "年"),
+    ("count_per_year: -2\n", "count_per_year"),
+    ("copy_distance: -1\n", "copy_distance"),
+    ("similar_far_distance: ten\n", "similar_far_distance"),
+])
+def test_a_bad_weight_or_count_stops_when_the_rule_is_read(tmp_path: Path, text, match):
+    rule = tmp_path / "rule.yml"
+    rule.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match=match):
+        load_rule(str(rule))
+
+
+def test_counts_per_year_are_read_from_yaml(tmp_path: Path):
+    rule = tmp_path / "rule.yml"
+    rule.write_text("count_per_year:\n  2018: 50\n  2019: 30\n", encoding="utf-8")
+    limit = year_limits(load_rule(str(rule)))
+    assert (limit(2018), limit(2019), limit(2020), limit(None)) == (50, 30, 0, 0)
+
+
+def test_the_copy_distance_can_be_set_in_the_rule(connection, tmp_path: Path, monkeypatch):
+    """写しの距離（`copy_distance`）をルールで変えられる。既定は `similar.COPY_DISTANCE`。"""
+    from photoarchive_ai import selection
+
+    seen = []
+    real = selection._is_copy
+    monkeypatch.setattr(
+        selection, "_is_copy",
+        lambda media, kept, family, looks, distance=similar.COPY_DISTANCE: seen.append(distance)
+        or real(media, kept, family, looks, distance),
+    )
+    _copy_case(connection, tmp_path)
+    select_media(connection, {})
+    select_media(connection, {"copy_distance": 3})
+    assert set(seen) == {similar.COPY_DISTANCE, 3}
+
+
+def test_a_copy_beyond_the_distance_set_in_the_rule_is_kept():
+    from photoarchive_ai.selection import _is_copy, _Looks
+
+    kept = {"id": 1, "type": "image", "path": "/p/a/1.jpg",
+            "look_hash": similar.encode(similar.FROM_EXIF, 0)}
+    media = {"id": 2, "type": "image", "path": "/p/b/2.jpg",
+             "look_hash": similar.encode(similar.FROM_EXIF, (1 << 9) - 1)}
+    family = {1: frozenset({7}), 2: frozenset({7})}
+    assert _is_copy(media, [kept], family, _Looks(None, []), 9)
+    assert not _is_copy(media, [kept], family, _Looks(None, []), 8)

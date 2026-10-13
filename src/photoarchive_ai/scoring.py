@@ -5,7 +5,7 @@ MediaPipe の FaceMesh だけを使う。
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -230,19 +230,44 @@ def smile_level(mouth_smile: Optional[float]) -> float:
     return max(0.0, min(1.0, mouth_smile / SMILE_FULL))
 
 
+class Weights(NamedTuple):
+    """並びの重み（#103）。**利用者がルールの ``weights:`` で変えられる。**
+
+    既定（`Weights.default`）はこの module の定数。式を変えずに重みだけを動かせるよう、
+    `select`（GUI の調整も）はここを通して点を出す。`match` の `family_score` は既定のまま。
+    """
+
+    sharpness: float
+    frontal: float
+    eyes: float
+    smile: float
+    member_bonus: float
+    stranger_penalty: float
+
+    @classmethod
+    def default(cls) -> "Weights":
+        """いまの定数から作る（呼んだときに読むので、定数の差し替えも効く）。"""
+        return cls(
+            WEIGHT_SHARPNESS, WEIGHT_FRONTAL, WEIGHT_EYES, WEIGHT_SMILE,
+            MEMBER_BONUS, STRANGER_PENALTY,
+        )
+
+
 def family_face_score(
     aligned: Optional[int],
     yaw: Optional[float],
     sharpness: Optional[float],
     eye_blink: Optional[float],
     mouth_smile: Optional[float],
+    weights: Optional[Weights] = None,
 ) -> float:
-    """家族の顔1つの良さ（0〜100）。"""
+    """家族の顔1つの良さ（既定の重みで 0〜100）。"""
+    weights = weights or Weights.default()
     return 100.0 * (
-        WEIGHT_SHARPNESS * sharpness_level(sharpness)
-        + WEIGHT_FRONTAL * frontal_level(aligned, yaw)
-        + WEIGHT_EYES * eyes_level(eye_blink)
-        + WEIGHT_SMILE * smile_level(mouth_smile)
+        weights.sharpness * sharpness_level(sharpness)
+        + weights.frontal * frontal_level(aligned, yaw)
+        + weights.eyes * eyes_level(eye_blink)
+        + weights.smile * smile_level(mouth_smile)
     )
 
 
@@ -261,7 +286,7 @@ def is_clear_face(
     )
 
 
-def family_photo_score(faces) -> float:
+def family_photo_score(faces, weights: Optional[Weights] = None) -> float:
     """写真1枚の家族写真としての良さ。``faces`` はその写真の**家族の顔だけ**。
 
     いちばん良い家族の顔の点に、はっきり写った家族の人数ぶん（2人目から）
@@ -272,9 +297,11 @@ def family_photo_score(faces) -> float:
     """
     if not faces:
         return 0.0
+    weights = weights or Weights.default()
     best = max(
         family_face_score(
-            face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"], face["mouth_smile"]
+            face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"],
+            face["mouth_smile"], weights,
         )
         for face in faces
     )
@@ -283,10 +310,10 @@ def family_photo_score(faces) -> float:
         for face in faces
         if is_clear_face(face["aligned"], face["sharpness"], face["eye_blink"])
     }
-    return best + MEMBER_BONUS * max(0, len(members) - 1)
+    return best + weights.member_bonus * max(0, len(members) - 1)
 
 
-def family_photo_scores(rows, strangers=None) -> dict:
+def family_photo_scores(rows, strangers=None, weights: Optional[Weights] = None) -> dict:
     """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。
 
     ``strangers`` は写真ごとの目立つ他人の重み（`strangers.weights`。1人で最大 1）。
@@ -294,10 +321,12 @@ def family_photo_scores(rows, strangers=None) -> dict:
     select の対象になりにくいように」）。
     """
     strangers = strangers or {}
+    weights = weights or Weights.default()
     by_media: dict = {}
     for row in rows:
         by_media.setdefault(row["media_id"], []).append(row)
     return {
-        media_id: family_photo_score(faces) - STRANGER_PENALTY * strangers.get(media_id, 0)
+        media_id: family_photo_score(faces, weights)
+        - weights.stranger_penalty * strangers.get(media_id, 0)
         for media_id, faces in by_media.items()
     }

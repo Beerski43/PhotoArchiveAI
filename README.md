@@ -349,6 +349,23 @@ remove_similar: true   # 同じ行事の中の似た写真は1枚に（省略し
 include_auto_assigned: true  # 自動割り当ての顔も家族として数える（false で手本だけ。省略しても true）
 # similar_seconds: 10  # 日付をまたぐ連写をつなぐ撮影の間隔（秒）
 # similar_distance: 16 # 見た目の近さ（小さいほど厳しい）
+# similar_far_distance: 14  # 撮影時刻の離れた2枚の見た目の近さ
+# copy_distance: 9     # 同じ年の写し（別のフォルダ・送られてきた写真）とみなす見た目の近さ
+# weights:             # 並びの重み（書いていない項目は既定値）
+#   sharpness: 0.35    # ボケていない
+#   frontal: 0.25      # 正面を向いている
+#   eyes: 0.20         # 目を開けている
+#   smile: 0.20        # 笑顔
+#   member_bonus: 20   # はっきり写った家族が1人増えるごとの加点
+#   stranger_penalty: 30  # 目立つ他人1人ぶんの減点
+```
+
+**年ごとの枚数は、年ごとに書くこともできます。** そのときは**書いていない年からは選びません**（撮影時期の分からない写真も選びません）。
+
+```yaml
+count_per_year:
+  2018: 50
+  2019: 30
 ```
 
 実行:
