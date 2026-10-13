@@ -176,6 +176,12 @@ CLEAR_SHARPNESS = 0.4
 #: なると（最大 20）、**1人だけ写った笑顔の写真が家族のそろった写真を押しのけた**
 #: （実データの複製で出力 638 枚のうち1人の写真が 97 → 240 枚）。20 で 127 枚。
 MEMBER_BONUS = 20.0
+#: **目立つ他人**の重み 1 あたりに引く点（#100・利用者の決定）。家族に似ていない・家族と
+#: 同じくらい大きく写った他人1人で、この点を引く（`strangers.weights`）。家族1人の加点
+#: （`MEMBER_BONUS`）より重い。実データの複製で、出力 638 枚のうち重みのある写真が
+#: 146 → 37 枚、入れ替わり 112 枚（2026-10-12・#98 を含む develop と比べた値）。
+#: **点は負になりうる**ので、`select` は家族の写った写真を先に並べる（`selection.select_media`）。
+STRANGER_PENALTY = 30.0
 #: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
 UNKNOWN = 0.5
 
@@ -280,9 +286,18 @@ def family_photo_score(faces) -> float:
     return best + MEMBER_BONUS * max(0, len(members) - 1)
 
 
-def family_photo_scores(rows) -> dict:
-    """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。"""
+def family_photo_scores(rows, strangers=None) -> dict:
+    """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。
+
+    ``strangers`` は写真ごとの目立つ他人の重み（`strangers.weights`。1人で最大 1）。
+    重み 1 につき `STRANGER_PENALTY` を引く（#100。利用者の要望「家族以外の顔がある場合は、
+    select の対象になりにくいように」）。
+    """
+    strangers = strangers or {}
     by_media: dict = {}
     for row in rows:
         by_media.setdefault(row["media_id"], []).append(row)
-    return {media_id: family_photo_score(faces) for media_id, faces in by_media.items()}
+    return {
+        media_id: family_photo_score(faces) - STRANGER_PENALTY * strangers.get(media_id, 0)
+        for media_id, faces in by_media.items()
+    }

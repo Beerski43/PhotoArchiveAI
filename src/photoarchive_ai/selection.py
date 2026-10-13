@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tup
 
 import yaml
 
-from . import appearance, db, expression, scoring, similar
+from . import appearance, db, expression, scoring, similar, strangers
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 
@@ -229,7 +229,7 @@ def family_scores(
     for row in rows:
         people.setdefault(row["media_id"], set()).add(row["person_id"])
     family_of = {media_id: frozenset(found) for media_id, found in people.items()}
-    return scoring.family_photo_scores(rows), family_of
+    return scoring.family_photo_scores(rows, strangers.weights(connection, rows)), family_of
 
 
 def _source_path(path_value: str, root_paths: Sequence[Path]) -> Path:
@@ -442,7 +442,11 @@ def select_media(
     if _rule_flag(rule, "family_only"):
         filtered = [m for m in filtered if m["id"] in family_of]
 
+    # **家族の写った写真が先。** 目立つ他人の重みを引くと点が負になりうる（#100）ので、
+    # 点だけで並べると、家族の写った写真が家族のいない写真（点 0）より後ろに来る
+    # （`family_only: false` のとき。PR #101 のレビュー指摘1・利用者の決定）。
     filtered.sort(key=lambda m: (
+        m["id"] not in family_of,
         -(m.get("family_score") or 0.0),
         -(m.get("quality_score") or 0.0),
         -(m.get("smile_score") or 0.0),
@@ -452,6 +456,7 @@ def select_media(
     if _rule_flag(rule, "remove_duplicate"):
         groups = _build_duplicate_groups(filtered)
         filtered = [sorted(group, key=lambda m: (
+            m["id"] not in family_of,
             -(m.get("family_score") or 0.0),
             -(m.get("quality_score") or 0.0),
         ))[0] for group in groups.values()]

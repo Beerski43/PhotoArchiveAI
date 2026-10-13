@@ -2522,7 +2522,7 @@ def family_faces(
     sources = list(assign_sources)
     query = (
         "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness,"
-        " eye_blink, mouth_smile"
+        " eye_blink, mouth_smile, bbox_top, bbox_right, bbox_bottom, bbox_left"
         " FROM Face WHERE person_id IS NOT NULL"
         f" AND assign_source IN ({','.join('?' for _ in sources)})"
     )
@@ -2543,6 +2543,50 @@ def family_faces(
     return found
 
 
+def family_embeddings(connection: sqlite3.Connection) -> Tuple[np.ndarray, np.ndarray]:
+    """家族の顔（手本と自動割り当て）の ``(人物 ID の配列, 特徴量の行列)``（#100）。
+
+    「家族らしさ」の物差し（`strangers`）に使う。`embedding.ACTIVE` の版のものだけ。
+    """
+    rows = connection.execute(
+        "SELECT person_id, embedding FROM Face WHERE person_id IS NOT NULL"
+        " AND assign_source IN (?, ?) AND embedding IS NOT NULL AND embed_version = ?",
+        (ASSIGN_MANUAL, ASSIGN_AUTO, embedding_model.ACTIVE.version),
+    ).fetchall()
+    if not rows:
+        return np.empty((0,), dtype=np.int64), np.empty((0, EMBEDDING_DIM), dtype=EMBEDDING_DTYPE)
+    return (
+        np.asarray([row[0] for row in rows], dtype=np.int64),
+        np.vstack([decode_embedding(row[1]) for row in rows]),
+    )
+
+
+def other_faces(
+    connection: sqlite3.Connection, media_ids: Iterable[int]
+) -> List[Dict[str, Any]]:
+    """``media_ids`` の写真の、**家族でない顔**（未割当・除外）の矩形と特徴量（#100）。
+
+    サムネイルは読まない。特徴量は `embedding.ACTIVE` の版のものだけ（違えば None）。
+    """
+    found: List[Dict[str, Any]] = []
+    ids = list(media_ids)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        for row in connection.execute(
+            "SELECT id, media_id, assign_source, bbox_top, bbox_right, bbox_bottom, bbox_left,"
+            " embedding, embed_version FROM Face"
+            " WHERE (assign_source IS NULL OR assign_source = ?)"
+            f" AND media_id IN ({placeholders})",
+            [ASSIGN_REJECTED] + chunk,
+        ):
+            item = dict(row)
+            same_model = item.pop("embed_version") == embedding_model.ACTIVE.version
+            item["embedding"] = decode_embedding(item["embedding"]) if same_model else None
+            found.append(item)
+    return found
+
+
 def recompute_family_scores(connection: sqlite3.Connection) -> None:
     """``family_score`` を、家族の顔だけから計算し直す。
 
@@ -2553,7 +2597,10 @@ def recompute_family_scores(connection: sqlite3.Connection) -> None:
     """
     from . import scoring
 
-    scores = scoring.family_photo_scores(family_faces(connection))
+    from . import strangers
+
+    rows = family_faces(connection)
+    scores = scoring.family_photo_scores(rows, strangers.weights(connection, rows))
     cursor = connection.cursor()
     cursor.execute("UPDATE AnalysisResult SET family_score = 0.0")
     cursor.executemany(

@@ -745,6 +745,21 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
+### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（10件。#100）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_levels_are_straight_lines_between_their_bounds` | 目立ち具合・家族らしくなさは境の間を直線で結ぶ。分からなければ家族らしくなさ 0 |
+| `test_a_large_stranger_weighs_one_and_a_small_one_nothing` | 家族と同じ大きさの他人は重み 1、背景の小さな人は 0 |
+| `test_a_face_like_a_family_member_missing_from_the_photo_is_not_counted` | **写真にいない家族の手本に似た未割当の顔は引かない**（取りこぼした家族。実データで 1,876 個） |
+| `test_a_face_like_someone_already_in_the_photo_is_a_stranger` | **写っている人物に似ていても家族ではない**（同じ人は1枚に1人）。家族全員が写っていれば重み 1 |
+| `test_a_rejected_face_counts_and_a_face_without_features_does_not` | 除外の顔は引く。特徴量の無い顔は引かない |
+| `test_photos_without_family_are_not_looked_at` | 家族の写っていない写真は見ない |
+| `test_without_any_family_face_to_compare_unassigned_faces_are_not_counted` | 比べる家族の顔が無ければ引かない |
+| `test_the_penalty_is_subtracted_from_the_photo_score` | 重み 1 あたり 30 点（利用者の決定） |
+| `test_select_and_match_use_the_same_penalty` | `select` の並びと `match` の `family_score` は同じ式 |
+| `test_a_family_photo_with_a_stranger_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
+
 ### `test_converter.py` — HEIC → JPEG（16件）
 
 | テスト | 内容 |
