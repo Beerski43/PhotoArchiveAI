@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import shutil
 from functools import lru_cache
 from datetime import date, datetime, time
@@ -76,12 +77,22 @@ def rule_weights(rule: Dict[str, Any]) -> "scoring.Weights":
     })
 
 
+#: 年ごとの対応で「年の分からない写真」の枚数を書くキー（PR #108・利用者の決定）。
+COUNT_UNKNOWN = "unknown"
+#: 年ごとの対応で「その年以降」の枚数を書くキーの形（``2027+``）。PR #108・利用者の決定。
+LATER_SUFFIX = "+"
+
+
 def year_limits(rule: Dict[str, Any]) -> Optional[Callable[[Optional[int]], Optional[int]]]:
     """年ごとに選ぶ枚数（``count_per_year``・#103）。``年 -> 枚数（None は上限なし）``。
 
     - 整数: 全部の年に同じ数（以前からの書き方）。0 や省略は上限なし（以前と同じ）
-    - **年と枚数の対応**（``{2018: 50, 2019: 30}``）: **書いていない年は選ばない**
-      （利用者の決定・#102。既定の枚数は持たない）。年の分からない写真も選ばない
+    - **年と枚数の対応**（``{2018: 50, 2019: 30, unknown: 10, 2027+: 30}``）:
+      **書いていない年は選ばない**（利用者の決定・#102。既定の枚数は持たない）
+      - ``unknown``: 年の分からない写真（撮影日時もフォルダ名からも年が決まらない）の枚数。
+        書かなければ選ばない
+      - ``2027+``: その年**以降**で、対応に書いていない年の枚数。これから増える年のため。
+        **年が変わったら GUI で設定し直す運用**（利用者の決定・PR #108）。1つだけ書ける
 
     関数を返すのは、`_pick_by_year` が整数と対応を区別しなくて済むように。
     """
@@ -97,15 +108,36 @@ def year_limits(rule: Dict[str, Any]) -> Optional[Callable[[Optional[int]], Opti
     if not isinstance(value, dict):
         raise ValueError(f"ルールの count_per_year は数か、年と枚数の組で書いてください: {value!r}")
     limits: Dict[int, int] = {}
-    for year, count in value.items():
-        if isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999:
-            raise ValueError(f"ルールの count_per_year の年は 4 桁の数で書いてください: {year!r}")
+    unknown = 0
+    later: Optional[Tuple[int, int]] = None
+    for key, count in value.items():
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise ValueError(
-                f"ルールの count_per_year の {year} 年の枚数は 0 以上の整数で書いてください: {count!r}"
+                f"ルールの count_per_year の {key} の枚数は 0 以上の整数で書いてください: {count!r}"
             )
-        limits[year] = count
-    return lambda year: limits.get(year, 0)
+        if key == COUNT_UNKNOWN:
+            unknown = count
+        elif isinstance(key, str) and re.fullmatch(r"\d{4}\+", key):
+            if later is not None:
+                raise ValueError("ルールの count_per_year に「〜年以降」（2027+ など）が2つあります。")
+            later = (int(key[:-1]), count)
+        elif isinstance(key, bool) or not isinstance(key, int) or not 1000 <= key <= 9999:
+            raise ValueError(
+                f"ルールの count_per_year の年は 4 桁の数・unknown・2027+ の形で書いてください: {key!r}"
+            )
+        else:
+            limits[key] = count
+
+    def limit(year: Optional[int]) -> int:
+        if year is None:
+            return unknown
+        if year in limits:
+            return limits[year]
+        if later is not None and year >= later[0]:
+            return later[1]
+        return 0
+
+    return limit
 
 
 #: ルールの真偽値のキーと既定値。**既定はここにだけ書く**（`select_media` も引く）。

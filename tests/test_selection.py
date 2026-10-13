@@ -1000,6 +1000,8 @@ def test_a_single_count_per_year_still_applies_to_every_year(connection):
     ("count_per_year:\n  2018: -1\n", "2018"),
     ("count_per_year:\n  2018: many\n", "2018"),
     ("count_per_year:\n  this-year: 3\n", "年"),
+    ("count_per_year:\n  2027+: 1\n  2030+: 2\n", "2つ"),
+    ("count_per_year:\n  unknown: -1\n", "unknown"),
     ("count_per_year: -2\n", "count_per_year"),
     ("copy_distance: -1\n", "copy_distance"),
     ("similar_far_distance: ten\n", "similar_far_distance"),

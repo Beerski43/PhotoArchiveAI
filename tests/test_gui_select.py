@@ -81,7 +81,8 @@ def test_loading_lists_every_year_with_its_candidates(window):
         for row in range(panel.year_table.rowCount())
     }
     # 整数の count_per_year（5）は全部の年に入る
-    assert rows == {"2018": ("1", 5), "2019": ("2", 5)}
+    later = f"{gui_select.later_year()} 年以降"
+    assert rows == {"2018": ("1", 5), "2019": ("2", 5), "年不明": ("0", 5), later: ("", 5)}
 
 
 def test_choosing_again_with_other_weights_changes_the_order(window):
@@ -103,7 +104,9 @@ def test_a_year_set_to_zero_is_not_chosen(window):
             panel.year_table.cellWidget(row, 2).setValue(0)
     panel.choose()
     assert "2018.jpg" not in _names(panel)
-    assert panel.current_rule()["count_per_year"] == {2018: 0, 2019: 5}
+    assert panel.current_rule()["count_per_year"] == {
+        2018: 0, 2019: 5, "unknown": 5, f"{gui_select.later_year()}+": 5
+    }
 
 
 def test_fill_all_years_sets_every_year(window):
@@ -111,7 +114,9 @@ def test_fill_all_years_sets_every_year(window):
     panel.load_candidates()
     panel.fill_spin.setValue(7)
     panel.fill_all_years()
-    assert panel.current_rule()["count_per_year"] == {2018: 7, 2019: 7}
+    assert panel.current_rule()["count_per_year"] == {
+        2018: 7, 2019: 7, "unknown": 7, f"{gui_select.later_year()}+": 7
+    }
 
 
 def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatch):
@@ -125,7 +130,9 @@ def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatc
     assert "元のコメント" in backup.read_text(encoding="utf-8")
     saved = selection.load_rule(str(rule_path))
     assert saved["weights"]["smile"] == pytest.approx(0.5)
-    assert saved["count_per_year"] == {2018: 5, 2019: 5}
+    assert saved["count_per_year"] == {
+        2018: 5, 2019: 5, "unknown": 5, f"{gui_select.later_year()}+": 5
+    }
     assert saved["family_only"] is True
 
 
@@ -187,3 +194,114 @@ def test_selecting_a_photo_shows_where_it_is_and_why(window):
     panel.result_list.setCurrentRow(0)
     text = panel.detail.text()
     assert "点 " in text and "鮮明さ" in text
+
+
+# ---------------------------------------------------------------------------
+# PR #108 のレビュー対応
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def mixed(tmp_path):
+    """2019（手本）・2017（自動割り当て）・2016（他人だけ）・年不明（手本・EXIF 日時が壊れている）。"""
+    path = tmp_path / "mixed.db"
+    connection = db.ensure_database(str(path))
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    for name, when, face, seed in (
+        ("dated.jpg", "2019-05-03T10:00:00", _face("${PERSON_4}"), 1),
+        ("auto2017.jpg", "2017-05-03T10:00:00", _face("${PERSON_4}", source=db.ASSIGN_AUTO), 2),
+        ("nofamily2016.jpg", "2016-05-03T10:00:00", _face(None), 3),
+        ("undated.jpg", "0000-00-00T00:00:00", _face("${PERSON_4}"), 4),
+    ):
+        _add(connection, write_photo(folder / name, scene(seed)), shooting_date=when, faces=[face])
+    connection.close()
+    return path
+
+
+def _panel(mixed, tmp_path, rule_text):
+    rule = tmp_path / "mixed-rule.yml"
+    rule.write_text(rule_text, encoding="utf-8")
+    window = gui.AppWindow(str(mixed), rule_path=str(rule), output_root=str(tmp_path / "out"))
+    return window, window.selection
+
+
+def test_unchecking_family_only_adds_the_years_without_family(mixed, tmp_path):
+    """**絞り込みを変えたら年の表を作り直す**（PR #108 のレビュー指摘1）。
+
+    作り直さないと、家族の写っていない写真しかない年が表に無く、選ばれなかった。
+    """
+    window, panel = _panel(mixed, tmp_path, "family_only: true\ncount_per_year: 5\nremove_similar: false\n")
+    panel.load_candidates()
+    panel.fill_spin.setValue(5)
+    panel.fill_all_years()
+    panel.flag_checks["family_only"].setChecked(False)
+    years = [panel.year_table.item(r, 0).text() for r in range(panel.year_table.rowCount())]
+    assert "2016" in years
+    panel.choose()
+    assert "nofamily2016.jpg" in _names(panel)
+    window.close()
+
+
+def test_reloading_for_auto_assignments_keeps_the_year_counts(mixed, tmp_path):
+    """**読み込み直しても、入れた年ごとの枚数を引き継ぐ**（指摘1）。ルールファイルの値に戻さない。"""
+    window, panel = _panel(
+        mixed, tmp_path,
+        "include_auto_assigned: false\ncount_per_year: 5\nremove_similar: false\n",
+    )
+    panel.load_candidates()
+    panel.fill_spin.setValue(1)
+    panel.fill_all_years()
+    before = panel.current_rule()["count_per_year"]
+    panel.flag_checks["include_auto_assigned"].setChecked(True)
+    panel.choose()
+    after = panel.current_rule()["count_per_year"]
+    assert all(after[year] == 1 for year in before)
+    window.close()
+
+
+def test_reloading_clears_the_previous_results(mixed, tmp_path, monkeypatch):
+    """**読み込み直したら前の結果を捨てる**（指摘2）。古い結果をクリックすると例外、出力は古いまま
+    コピーしていた。"""
+    window, panel = _panel(mixed, tmp_path, "remove_similar: false\n")
+    panel.choose()
+    assert panel.result_list.count() > 0 or panel.year_combo.count() > 0
+    panel.flag_checks["include_auto_assigned"].setChecked(False)
+    panel.load_candidates()
+    assert panel.result_list.count() == 0 and panel.selected == []
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args[2]))
+    panel.export()
+    assert shown and "並べ直す" in shown[0]
+    window.close()
+
+
+def test_the_weights_from_the_rule_are_shown_as_they_are(mixed, tmp_path):
+    """**ルールの重みを丸めない・頭打ちにしない**（指摘3）。画面と CLI の結果がずれる。"""
+    window, panel = _panel(mixed, tmp_path, "weights:\n  smile: 0.125\n  sharpness: 20\n")
+    weights = panel.current_rule()["weights"]
+    assert weights["smile"] == pytest.approx(0.125)
+    assert weights["sharpness"] == pytest.approx(20.0)
+    window.close()
+
+
+
+def test_reading_an_int_rule_and_choosing_gives_the_cli_result(mixed, tmp_path):
+    """**年の表に「年不明」と「翌年以降」の行がある**ので、整数のルールを読んで並べ直しても
+    CLI と同じ結果になる（PR #108 のレビュー指摘4。利用者の決定）。以前は年不明の写真が落ちた。
+    """
+    window, panel = _panel(mixed, tmp_path, "count_per_year: 5\nremove_similar: false\n")
+    panel.choose()
+    cli = selection.select_media(
+        panel.connection, selection.load_rule(str(tmp_path / "mixed-rule.yml"))
+    )
+    assert sorted(_names(panel)) == sorted(Path(m["path"]).name for m in cli)
+    assert "undated.jpg" in _names(panel)
+    window.close()
+
+
+def test_the_later_row_covers_years_after_this_one(tmp_path):
+    """翌年以降の行は、表に無い新しい年の枚数（年が変わったら設定し直す運用）。"""
+    later = gui_select.later_year()
+    limit = selection.year_limits({"count_per_year": {2019: 1, f"{later}+": 3, "unknown": 2}})
+    assert (limit(2019), limit(2020), limit(later), limit(later + 5), limit(None)) == (1, 0, 3, 3, 2)

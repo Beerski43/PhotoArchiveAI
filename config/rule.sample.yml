@@ -30,3 +30,5 @@ include_auto_assigned: true
 # count_per_year:
 #   2018: 50
 #   2019: 30
+#   unknown: 10   # 撮影した年の分からない写真
+#   2027+: 30     # 2027 年以降（年が変わったら GUI で設定し直す）

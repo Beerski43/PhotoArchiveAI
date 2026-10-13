@@ -20,6 +20,7 @@ CLI の `photoarchive select` は同じルールで同じ結果になる。
 from __future__ import annotations
 
 import shutil
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -61,13 +62,17 @@ RESULT_THUMBNAIL = 180
 
 #: 重みの項目と、画面に出す名前・刻み・上限。順は `scoring.Weights` と同じ。
 WEIGHT_FIELDS = (
-    ("sharpness", "鮮明さ（ボケていない）", 0.05, 10.0),
-    ("frontal", "正面を向いている", 0.05, 10.0),
-    ("eyes", "目を開けている", 0.05, 10.0),
-    ("smile", "笑顔", 0.05, 10.0),
-    ("member_bonus", "家族1人ごとの加点", 1.0, 500.0),
-    ("stranger_penalty", "目立つ他人の減点", 1.0, 500.0),
+    ("sharpness", "鮮明さ（ボケていない）", 0.05),
+    ("frontal", "正面を向いている", 0.05),
+    ("eyes", "目を開けている", 0.05),
+    ("smile", "笑顔", 0.05),
+    ("member_bonus", "家族1人ごとの加点", 1.0),
+    ("stranger_penalty", "目立つ他人の減点", 1.0),
 )
+#: 重みの入力の桁と上限。**ルールの値を丸めない・頭打ちにしない**（PR #108 のレビュー指摘3。
+#: 画面の値が CLI と黙ってずれ、保存すると丸めた値が残っていた）。`load_rule` は 0 以上なら受け付ける。
+WEIGHT_DECIMALS = 4
+WEIGHT_MAXIMUM = 1_000_000.0
 
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
@@ -97,7 +102,14 @@ BREAKDOWN_LABELS = (
 )
 
 YEAR_UNKNOWN = "年不明"
+#: 年の表の「年以降」の行の印（`selection.year_limits` の ``2027+``）。
+ROW_LATER = "later"
 STALE_NOTICE = "顔の割り当てを変えたら「候補を読み込む」を押し直してください。"
+
+
+def later_year() -> int:
+    """「〜年以降」の行の年（今年の翌年）。年が変わったら設定し直す運用（利用者の決定・PR #108）。"""
+    return date.today().year + 1
 
 
 def year_label(year: Optional[int]) -> str:
@@ -240,10 +252,10 @@ class SelectionPanel(QWidget):
         weights_box = QGroupBox("並びの重み")
         weights_form = QFormLayout(weights_box)
         self.weight_spins: Dict[str, QDoubleSpinBox] = {}
-        for key, label, step, maximum in WEIGHT_FIELDS:
+        for key, label, step in WEIGHT_FIELDS:
             spin = QDoubleSpinBox()
-            spin.setRange(0.0, maximum)
-            spin.setDecimals(2)
+            spin.setRange(0.0, WEIGHT_MAXIMUM)
+            spin.setDecimals(WEIGHT_DECIMALS)
             spin.setSingleStep(step)
             self.weight_spins[key] = spin
             weights_form.addRow(label, spin)
@@ -254,6 +266,7 @@ class SelectionPanel(QWidget):
         self.flag_checks: Dict[str, QCheckBox] = {}
         for key, label in FLAG_FIELDS:
             check = QCheckBox(label)
+            check.toggled.connect(self._filters_changed)
             self.flag_checks[key] = check
             flags_layout.addWidget(check)
         layout.addWidget(flags_box)
@@ -268,7 +281,7 @@ class SelectionPanel(QWidget):
             numbers_form.addRow(label, spin)
         layout.addWidget(numbers_box)
 
-        years_box = QGroupBox("年ごとの枚数（書いていない年からは選ばない）")
+        years_box = QGroupBox("年ごとの枚数（0 の年からは選ばない）")
         years_layout = QVBoxLayout(years_box)
         self.year_table = QTableWidget(0, 3)
         self.year_table.setHorizontalHeaderLabels(["年", "候補", "選ぶ枚数"])
@@ -372,36 +385,70 @@ class SelectionPanel(QWidget):
         for key, spin in self.number_spins.items():
             rule[key] = spin.value()
         if self.year_table.rowCount():
-            counts = {}
-            for row in range(self.year_table.rowCount()):
-                year = self.year_table.item(row, 0).data(Qt.UserRole)
-                if year is not None:
-                    counts[int(year)] = self.year_table.cellWidget(row, 2).value()
+            counts: Dict[Any, int] = {}
+            for key, value in self._year_values().items():
+                if key == selection.COUNT_UNKNOWN:
+                    counts[selection.COUNT_UNKNOWN] = value
+                elif key == ROW_LATER:
+                    counts[f"{later_year()}{selection.LATER_SUFFIX}"] = value
+                else:
+                    counts[int(key)] = value
             rule["count_per_year"] = counts
         return rule
 
+    def _year_values(self) -> Dict[Any, int]:
+        """いま表に入っている枚数（``{年 / "unknown" / "later": 枚数}``）。"""
+        values: Dict[Any, int] = {}
+        for row in range(self.year_table.rowCount()):
+            key = self.year_table.item(row, 0).data(Qt.UserRole)
+            values[key] = self.year_table.cellWidget(row, 2).value()
+        return values
+
     def _fill_year_table(self) -> None:
-        """候補の年ごとの枚数を表に出す。選ぶ枚数の初期値はいまのルールから。"""
+        """候補の年ごとの枚数を表に出す。**入っている値は引き継ぐ**（PR #108 のレビュー指摘1）。
+
+        行は、候補のある年・**年不明**・**翌年以降**（利用者の決定・PR #108。これから増える年は
+        ここで決め、年が変わったら設定し直す）。新しく現れた行の初期値はルールファイルから
+        （年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が無ければ候補の枚数。
+        """
+        previous = self._year_values()
         counts = selection.candidate_counts(self.candidates, self.current_rule_without_years())
         limit_of = selection.year_limits(self.rule)
+        rows = [(year, year_label(year), counts[year]) for year in sorted(y for y in counts if y is not None)]
+        rows.append((selection.COUNT_UNKNOWN, YEAR_UNKNOWN, counts.get(None, 0)))
+        rows.append((ROW_LATER, f"{later_year()} 年以降", None))
         self.year_table.setRowCount(0)
-        for year in sorted(counts, key=lambda y: (y is None, y or 0)):
+        for key, label, candidates in rows:
             row = self.year_table.rowCount()
             self.year_table.insertRow(row)
-            label = QTableWidgetItem(year_label(year))
-            label.setData(Qt.UserRole, year)
-            self.year_table.setItem(row, 0, label)
-            self.year_table.setItem(row, 1, QTableWidgetItem(str(counts[year])))
+            item = QTableWidgetItem(label)
+            item.setData(Qt.UserRole, key)
+            self.year_table.setItem(row, 0, item)
+            self.year_table.setItem(row, 1, QTableWidgetItem("" if candidates is None else str(candidates)))
             spin = QSpinBox()
-            spin.setRange(0, 9999)
-            if year is None:
-                # 年の分からない写真は、年ごとの対応の形では選べない（`selection.year_limits`）
-                spin.setEnabled(False)
-            elif limit_of is None:
-                spin.setValue(counts[year])
-            else:
+            spin.setRange(0, 99_999)
+            if key in previous:
+                spin.setValue(previous[key])
+            elif limit_of is not None:
+                year = None if key == selection.COUNT_UNKNOWN else (
+                    later_year() if key == ROW_LATER else key
+                )
                 spin.setValue(limit_of(year) or 0)
+            else:
+                spin.setValue(candidates or 0)
             self.year_table.setCellWidget(row, 2, spin)
+
+    def _filters_changed(self, _checked: bool) -> None:
+        """絞り込みを変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。
+
+        読み込んだ候補に無い種別（自動割り当て）を求めるときは何もしない。「並べ直す」が
+        読み込み直し、そこで作り直す（入っている値は引き継ぐ）。
+        """
+        if self.candidates is None:
+            return
+        sources = selection.family_sources(self.current_rule_without_years())
+        if set(sources) <= set(self.candidates.assign_sources):
+            self._fill_year_table()
 
     def current_rule_without_years(self) -> Dict[str, Any]:
         rule = dict(self.rule)
@@ -411,10 +458,9 @@ class SelectionPanel(QWidget):
         return rule
 
     def fill_all_years(self) -> None:
+        """全部の行（年不明・翌年以降も）に同じ数を入れる。"""
         for row in range(self.year_table.rowCount()):
-            spin = self.year_table.cellWidget(row, 2)
-            if spin.isEnabled():
-                spin.setValue(self.fill_spin.value())
+            self.year_table.cellWidget(row, 2).setValue(self.fill_spin.value())
 
     # ------------------------------------------------------------------
     # 実行
@@ -436,6 +482,12 @@ class SelectionPanel(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
             progress.finish()
+        # **前の結果を捨てる**（PR #108 のレビュー指摘2）。結果は読み込んだ候補に結びついている。
+        # 残すと、古い写真の内訳が新しい割り当てで出たり（種別が足りなければ例外）、
+        # 「出力する」が古い割り当てで選んだ結果をコピーしたりする。
+        self.selected = []
+        self.chosen_rule = {}
+        self._group_by_year()
         self.status.setText(f"候補を読み込みました。{STALE_NOTICE}")
 
     def choose(self) -> None:
