@@ -609,7 +609,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（100件）
+### `test_selection.py` — 抽出とコピー（107件）
 
 | テスト | 内容 |
 |---|---|
@@ -678,9 +678,13 @@
 | `test_candidates_refuse_a_source_they_did_not_load` | 用意していない割り当ての種別では選ばない |
 | `test_counts_per_year_select_only_the_years_written` | **年ごとの対応なら、書いていない年と年の分からない写真は選ばない**（利用者の決定・#102） |
 | `test_a_single_count_per_year_still_applies_to_every_year` | 整数の `count_per_year` は全部の年に同じ数・0 は制限なし（以前と同じ） |
-| `test_a_bad_weight_or_count_stops_when_the_rule_is_read` | 知らない重みの項目・負の値・壊れた年ごとの枚数は読むときに止める（9件） |
+| `test_a_bad_weight_or_count_stops_when_the_rule_is_read` | 知らない重みの項目・負の値・`.nan`/`.inf`・4桁でない年・壊れた年ごとの枚数は読むときに止める（12件。3件は PR #107 のレビュー指摘4） |
 | `test_counts_per_year_are_read_from_yaml` | YAML の年ごとの対応を読む |
 | `test_the_copy_distance_can_be_set_in_the_rule` / `test_a_copy_beyond_the_distance_set_in_the_rule_is_kept` | 写しの距離をルールで変えられる |
+| `test_a_burst_across_new_year_keeps_the_written_year` | **書いていない年の写真は束ねの代表にならない**（年越しの連写で、書いた年の写真まで消えていた。PR #107 のレビュー指摘1） |
+| `test_years_not_written_are_not_measured` | 書いていない年の写真の見た目は測らない |
+| `test_choosing_again_does_not_reread_an_unreadable_photo` | **測れなかった写真を同じ候補の中で読み直さない**（`choose` 3回で 6 回読んでいた。指摘2）。次の `prepare` からは測り直す |
+| `test_an_earlier_choice_keeps_its_scores` | 前に返した結果の点が次の `choose` で書き換わらない（指摘3） |
 
 ### `test_similar.py` — 連写・似た写真を束ねる（25件。#86・#93・#98）
 

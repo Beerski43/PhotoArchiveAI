@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 from datetime import date, datetime, time
@@ -96,7 +97,7 @@ def year_limits(rule: Dict[str, Any]) -> Optional[Callable[[Optional[int]], Opti
         raise ValueError(f"ルールの count_per_year は数か、年と枚数の組で書いてください: {value!r}")
     limits: Dict[int, int] = {}
     for year, count in value.items():
-        if isinstance(year, bool) or not isinstance(year, int):
+        if isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999:
             raise ValueError(f"ルールの count_per_year の年は 4 桁の数で書いてください: {year!r}")
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise ValueError(
@@ -282,6 +283,10 @@ class Candidates:
         self.root_paths = list(root_paths)
         self.progress_callback = progress_callback
         self._strangers: Dict[Tuple[str, ...], Dict[int, float]] = {}
+        #: 見た目を測れなかった写真の ID。**同じ候補の中では読み直さない**（PR #107 の
+        #: レビュー指摘2。GUI で重みを動かすたびに NFS を読み直していた）。DB には書かないので、
+        #: 次の `prepare`（CLI の次の実行）からは測り直す。
+        self.unreadable: set = set()
 
     def family_rows(self, sources: Sequence[str]) -> List[Dict[str, Any]]:
         """``sources`` の種別の家族の顔の行。**用意していない種別は求めない。**"""
@@ -388,7 +393,12 @@ def _rule_number(
 ) -> float:
     """ルールの数の値。**読むとき（`load_rule`）に確かめる**ので、写真を測り始めてから止まらない。"""
     value = rule.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)  # `.nan` は `< 0` で弾けず、並びが不定になる（PR #107 指摘4）
+        or value < 0
+    ):
         raise ValueError(f"ルールの {label or key} は 0 以上の数で書いてください: {value!r}")
     return value
 
@@ -400,6 +410,7 @@ def _remove_similar(
     rule: Dict[str, Any],
     root_paths: Sequence[Path],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    unreadable: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """同じ行事の中の連写・似た写真を、場面ごとに並びの先頭1枚へまとめる（#86・#93・`similar`）。
 
@@ -412,8 +423,11 @@ def _remove_similar(
     groups = similar.candidate_groups(ranked, seconds)
     looks: Dict[int, Optional[str]] = {}
     unmeasured: List[Dict[str, Any]] = []
+    unreadable = set() if unreadable is None else unreadable
     for group in groups:
         for media in group:
+            if media["id"] in unreadable:
+                continue
             if similar.decode(media.get("look_hash")) is None:
                 unmeasured.append(media)
             else:
@@ -426,6 +440,8 @@ def _remove_similar(
             # 年ごとに選ぶところ（`_pick_by_year`）でも同じ値を使う。測り直さない
             media["look_hash"] = value
             measured.append((media["id"], value))
+        else:
+            unreadable.add(media["id"])
         if len(measured) >= 500:
             db.save_look_hashes(connection, measured)
             measured = []
@@ -449,8 +465,13 @@ def _remove_similar(
 class _Looks:
     """`_pick_by_year` が使う見た目の値。**要るときに測り、`Media.look_hash` に残す。**"""
 
-    def __init__(self, connection, root_paths: Sequence[Path], progress_callback=None):
+    def __init__(
+        self, connection, root_paths: Sequence[Path], progress_callback=None,
+        unreadable: Optional[set] = None,
+    ):
         self.connection = connection
+        #: 測れなかった写真の ID（`Candidates.unreadable` と共有する）。
+        self.unreadable = set() if unreadable is None else unreadable
         self.root_paths = root_paths
         self.progress_callback = progress_callback
         self.pending: List[Tuple[int, str]] = []
@@ -478,8 +499,11 @@ class _Looks:
     def of(self, media: Dict[str, Any]) -> Optional[str]:
         """主の値（`similar.measure`）。測れなければ None（保存しない）。"""
         if similar.decode(media.get("look_hash")) is None:
+            if media["id"] in self.unreadable:
+                return None
             value = similar.measure(self._path(media))
             if value is None:
+                self.unreadable.add(media["id"])
                 return None
             self._store(media, value)
         return media["look_hash"]
@@ -539,6 +563,7 @@ def _pick_by_year(
     root_paths: Sequence[Path],
     progress_callback: Optional[Callable[[int, Optional[int], str], None]] = None,
     copy_distance: int = similar.COPY_DISTANCE,
+    unreadable: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """並びの順に、年ごとに ``limit_of(年)`` 枚まで選ぶ（`year_limits`）。
 
@@ -549,9 +574,9 @@ def _pick_by_year(
     （年の枠が埋まれば、その年の残りは測らない）。
 
     年ごとの枚数があれば年ごとにまとめて返し（年は並びに初めて出た順）、
-    無ければ並びの順のまま返す。**枚数が 0 の年は、写しの判定もせずに飛ばす**（測らない）。
+    無ければ並びの順のまま返す。選ばない年（枚数 0）の写真は、`choose` がここへ来る前に外す。
     """
-    looks = _Looks(connection, root_paths, progress_callback)
+    looks = _Looks(connection, root_paths, progress_callback, unreadable)
     by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
     in_order: List[Dict[str, Any]] = []
     for media in ranked:
@@ -599,6 +624,11 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
         filtered = [m for m in filtered if m.get("type") != "video"]
     if _rule_flag(rule, "family_only"):
         filtered = [m for m in filtered if m["id"] in family_of]
+    # **選ばない年の写真は、束ねる前に外す**（PR #107 のレビュー指摘1）。残すと、書いていない
+    # 年の写真が似た写真の代表になって書いた年の写真を外し（年越しの連写）、見た目も測っていた。
+    limit_of = year_limits(rule)
+    if limit_of is not None:
+        filtered = [m for m in filtered if limit_of(_get_media_year(m)) != 0]
 
     # **家族の写った写真が先。** 目立つ他人の重みを引くと点が負になりうる（#100）ので、
     # 点だけで並べると、家族の写った写真が家族のいない写真（点 0）より後ろに来る
@@ -622,19 +652,24 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     if _rule_flag(rule, "remove_similar"):
         filtered = _remove_similar(
             candidates.connection, filtered, family_of, rule, candidates.root_paths,
-            candidates.progress_callback,
+            candidates.progress_callback, candidates.unreadable,
         )
 
-    return _pick_by_year(
+    picked = _pick_by_year(
         candidates.connection,
         filtered,
         family_of,
-        year_limits(rule),
+        limit_of,
         _rule_flag(rule, "remove_similar"),
         candidates.root_paths,
         candidates.progress_callback,
         int(_rule_number(rule, "copy_distance", similar.COPY_DISTANCE)),
+        candidates.unreadable,
     )
+    # **浅く写して返す**（PR #107 のレビュー指摘3）。候補の辞書は次の `choose` が点を書き換える
+    # ので、そのまま返すと前に返した結果の点まで変わる。見た目の値（`look_hash`）は候補の辞書に
+    # 残したいので、写すのは返す直前だけ。
+    return [dict(media) for media in picked]
 
 
 def _output_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:

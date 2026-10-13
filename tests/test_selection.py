@@ -1003,6 +1003,9 @@ def test_a_single_count_per_year_still_applies_to_every_year(connection):
     ("count_per_year: -2\n", "count_per_year"),
     ("copy_distance: -1\n", "copy_distance"),
     ("similar_far_distance: ten\n", "similar_far_distance"),
+    ("count_per_year:\n  18: 50\n", "4 桁"),
+    ("weights:\n  smile: .nan\n", "weights.smile"),
+    ("similar_distance: .inf\n", "similar_distance"),
 ])
 def test_a_bad_weight_or_count_stops_when_the_rule_is_read(tmp_path: Path, text, match):
     rule = tmp_path / "rule.yml"
@@ -1045,3 +1048,64 @@ def test_a_copy_beyond_the_distance_set_in_the_rule_is_kept():
     family = {1: frozenset({7}), 2: frozenset({7})}
     assert _is_copy(media, [kept], family, _Looks(None, []), 9)
     assert not _is_copy(media, [kept], family, _Looks(None, []), 8)
+
+
+
+def _burst_across_new_year(connection, look=True):
+    """同じフォルダで年をまたぐ連写。2018 年側の写りが良い（並びが上）。"""
+    for name, when, quality in (("old.jpg", "2018-12-31T23:59:58", 90.0),
+                                ("new.jpg", "2019-01-01T00:00:02", 10.0)):
+        media_id = _add(connection, f"/nfs/ev/{name}", shooting_date=when, quality=quality,
+                        faces=[_face("${PERSON_4}")])
+        if look:
+            db.save_look_hashes(connection, [(media_id, similar.encode(similar.FROM_EXIF, 0))])
+
+
+def test_a_burst_across_new_year_keeps_the_written_year(connection):
+    """**書いていない年の写真は、束ねの代表にもならない**（PR #107 のレビュー指摘1）。
+
+    2018 の写真が代表になって 2019 の写真を外し、2018 は書いていない年なので選ばれず、
+    結果が空になっていた。
+    """
+    _burst_across_new_year(connection)
+    assert _paths(select_media(connection, {"count_per_year": 5})) == ["/nfs/ev/old.jpg"]
+    assert _paths(select_media(connection, {"count_per_year": {2019: 5}})) == ["/nfs/ev/new.jpg"]
+
+
+def test_years_not_written_are_not_measured(connection, monkeypatch):
+    """書いていない年の写真の見た目は測らない（元写真を読まない）。"""
+    measured = []
+    monkeypatch.setattr(similar, "measure", lambda path: measured.append(path) or None)
+    for name, when in (("1.jpg", "2018-05-03T10:00:00"), ("2.jpg", "2018-05-03T10:00:05"),
+                       ("9.jpg", "2019-05-03T10:00:00")):
+        _add(connection, f"/nfs/{when[:4]}/ev/{name}", shooting_date=when,
+             faces=[_face("${PERSON_4}")])
+    select_media(connection, {"count_per_year": {2019: 1}})
+    assert not [path for path in measured if "/2018/" in path]
+
+
+def test_choosing_again_does_not_reread_an_unreadable_photo(connection, monkeypatch):
+    """**測れなかった写真は、同じ候補の中で読み直さない**（PR #107 のレビュー指摘2）。
+
+    GUI で重みを動かすたびに `choose` を呼ぶ。読めない写真を毎回 NFS から読み直していた
+    （`choose` 3回で 12 回）。次の `prepare`（CLI の次の実行）からは測り直す。
+    """
+    calls = []
+    monkeypatch.setattr(similar, "measure", lambda path: calls.append(path) or None)
+    _burst_across_new_year(connection, look=False)
+    candidates = prepare(connection)
+    for smile in (0.0, 1.0, 2.0):
+        choose(candidates, {"weights": {"smile": smile}})
+    assert len(calls) == 2
+    choose(prepare(connection), {})
+    assert len(calls) == 4
+
+
+def test_an_earlier_choice_keeps_its_scores(connection):
+    """前に返した結果の点が、次の `choose` で書き換わらない（PR #107 のレビュー指摘3）。"""
+    _add(connection, "a.jpg", faces=[_face("${PERSON_4}", smile=100.0)])
+    candidates = prepare(connection)
+    first = choose(candidates, {})
+    score = first[0]["family_score"]
+    choose(candidates, {"weights": {"smile": 0.0}})
+    assert first[0]["family_score"] == score
