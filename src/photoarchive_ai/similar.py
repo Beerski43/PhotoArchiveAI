@@ -31,6 +31,7 @@ import io
 import logging
 import os
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -106,19 +107,28 @@ def decode_all(text: Optional[str]) -> Dict[str, int]:
     """
     if not text:
         return {}
+    return dict(_decode_parts(text))
+
+
+@lru_cache(maxsize=200_000)
+def _decode_parts(text: str) -> Tuple[Tuple[str, int], ...]:
+    """`decode_all` の中身。**結果を覚える**（#104。GUI の並べ直しで同じ値を何度も読む）。
+
+    返すのは書き換えられない形（呼び出し側の辞書を共有しないため）。
+    """
     version, _, rest = text.partition("/")
     if version != LOOK_VERSION:
-        return {}
+        return ()
     values: Dict[str, int] = {}
     for part in rest.split(","):
         source, _, value = part.partition(":")
         if source not in (FROM_EXIF, FROM_IMAGE) or source in values:
-            return {}
+            return ()
         try:
             values[source] = int(value, 16)
         except ValueError:
-            return {}
-    return values
+            return ()
+    return tuple(values.items())
 
 
 def decode(text: Optional[str]) -> Optional[Tuple[str, int]]:

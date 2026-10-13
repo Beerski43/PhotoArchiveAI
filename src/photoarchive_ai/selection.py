@@ -1,6 +1,8 @@
 import math
 import os
+import re
 import shutil
+from functools import lru_cache
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import (
@@ -75,12 +77,22 @@ def rule_weights(rule: Dict[str, Any]) -> "scoring.Weights":
     })
 
 
+#: 年ごとの対応で「年の分からない写真」の枚数を書くキー（PR #108・利用者の決定）。
+COUNT_UNKNOWN = "unknown"
+#: 年ごとの対応で「その年以降」の枚数を書くキーの形（``2027+``）。PR #108・利用者の決定。
+LATER_SUFFIX = "+"
+
+
 def year_limits(rule: Dict[str, Any]) -> Optional[Callable[[Optional[int]], Optional[int]]]:
     """年ごとに選ぶ枚数（``count_per_year``・#103）。``年 -> 枚数（None は上限なし）``。
 
     - 整数: 全部の年に同じ数（以前からの書き方）。0 や省略は上限なし（以前と同じ）
-    - **年と枚数の対応**（``{2018: 50, 2019: 30}``）: **書いていない年は選ばない**
-      （利用者の決定・#102。既定の枚数は持たない）。年の分からない写真も選ばない
+    - **年と枚数の対応**（``{2018: 50, 2019: 30, unknown: 10, 2027+: 30}``）:
+      **書いていない年は選ばない**（利用者の決定・#102。既定の枚数は持たない）
+      - ``unknown``: 年の分からない写真（撮影日時もフォルダ名からも年が決まらない）の枚数。
+        書かなければ選ばない
+      - ``2027+``: その年**以降**で、対応に書いていない年の枚数。これから増える年のため。
+        **年が変わったら GUI で設定し直す運用**（利用者の決定・PR #108）。1つだけ書ける
 
     関数を返すのは、`_pick_by_year` が整数と対応を区別しなくて済むように。
     """
@@ -96,15 +108,36 @@ def year_limits(rule: Dict[str, Any]) -> Optional[Callable[[Optional[int]], Opti
     if not isinstance(value, dict):
         raise ValueError(f"ルールの count_per_year は数か、年と枚数の組で書いてください: {value!r}")
     limits: Dict[int, int] = {}
-    for year, count in value.items():
-        if isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999:
-            raise ValueError(f"ルールの count_per_year の年は 4 桁の数で書いてください: {year!r}")
+    unknown = 0
+    later: Optional[Tuple[int, int]] = None
+    for key, count in value.items():
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise ValueError(
-                f"ルールの count_per_year の {year} 年の枚数は 0 以上の整数で書いてください: {count!r}"
+                f"ルールの count_per_year の {key} の枚数は 0 以上の整数で書いてください: {count!r}"
             )
-        limits[year] = count
-    return lambda year: limits.get(year, 0)
+        if key == COUNT_UNKNOWN:
+            unknown = count
+        elif isinstance(key, str) and re.fullmatch(r"\d{4}\+", key):
+            if later is not None:
+                raise ValueError("ルールの count_per_year に「〜年以降」（2027+ など）が2つあります。")
+            later = (int(key[:-1]), count)
+        elif isinstance(key, bool) or not isinstance(key, int) or not 1000 <= key <= 9999:
+            raise ValueError(
+                f"ルールの count_per_year の年は 4 桁の数・unknown・2027+ の形で書いてください: {key!r}"
+            )
+        else:
+            limits[key] = count
+
+    def limit(year: Optional[int]) -> int:
+        if year is None:
+            return unknown
+        if year in limits:
+            return limits[year]
+        if later is not None and year >= later[0]:
+            return later[1]
+        return 0
+
+    return limit
 
 
 #: ルールの真偽値のキーと既定値。**既定はここにだけ書く**（`select_media` も引く）。
@@ -176,23 +209,34 @@ def _media_period(media: Dict[str, Any]) -> Optional[Tuple[datetime, datetime]]:
     コピーで変わるので、壊れた EXIF の代わりにはしない）。
     **読めるかどうかは `dates.taken_at` に預ける**（CLAUDE.md §8）。
     """
-    taken = taken_at(
-        media.get("shooting_date"), media.get("folder_date_from"), media.get("folder_date_to")
+    # **結果を覚える**（#104）。GUI の並べ直しのたびに全写真（約7万枚）の日付を読み直していた。
+    return _period_of(
+        media.get("shooting_date"), media.get("folder_date_from"),
+        media.get("folder_date_to"), media.get("created_time"),
     )
+
+
+@lru_cache(maxsize=200_000)
+def _period_of(
+    shooting_date: Optional[str],
+    folder_date_from: Optional[str],
+    folder_date_to: Optional[str],
+    created_time: Optional[str],
+) -> Optional[Tuple[datetime, datetime]]:
+    """`_media_period` の中身。値は4つの文字列だけで決まる。"""
+    taken = taken_at(shooting_date, folder_date_from, folder_date_to)
     if taken is not None and not taken.inferred:
         # 時刻まで持っているので、日付の範囲の指定と時刻で比べる。
-        moment = _parse_date(media.get("shooting_date")) or datetime.combine(
-            taken.earliest, time.min
-        )
+        moment = _parse_date(shooting_date) or datetime.combine(taken.earliest, time.min)
         return moment, moment
     if taken is not None:
         return (
             datetime.combine(taken.earliest, time.min),
             datetime.combine(taken.latest, time.max),
         )
-    if media.get("shooting_date") or parse_date(media.get("created_time")) is None:
+    if shooting_date or parse_date(created_time) is None:
         return None
-    moment = _parse_date(media.get("created_time"))
+    moment = _parse_date(created_time)
     return None if moment is None else (moment, moment)
 
 
@@ -303,6 +347,38 @@ class Candidates:
         if key not in self._strangers:
             self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
         return self._strangers[key]
+
+
+def candidate_counts(candidates: "Candidates", rule: Dict[str, Any]) -> Dict[Optional[int], int]:
+    """年ごとの候補の枚数（期間・動画・`family_only` で絞ったあと、束ねる前）。#104 の年ごとの表に出す。"""
+    _, family_of = _scores(candidates, family_sources(rule), None)
+    counts: Dict[Optional[int], int] = {}
+    for media in _filtered(candidates.media, rule, family_of):
+        year = _get_media_year(media)
+        counts[year] = counts.get(year, 0) + 1
+    return counts
+
+
+def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Dict[str, float]:
+    """写真1枚の点の内訳（`scoring.photo_breakdown`。#104）。`choose` と同じ重み・同じ顔。"""
+    sources = family_sources(rule)
+    faces = [row for row in candidates.family_rows(sources) if row["media_id"] == media_id]
+    weight = candidates.stranger_weights(sources).get(media_id, 0.0)
+    return scoring.photo_breakdown(faces, weight, rule_weights(rule))
+
+
+def _filtered(
+    media_list: Iterable[Dict[str, Any]],
+    rule: Dict[str, Any],
+    family_of: Dict[int, FrozenSet[int]],
+) -> List[Dict[str, Any]]:
+    """期間・動画・`family_only` で絞る（`choose` と `candidate_counts` で同じ絞り方にする）。"""
+    filtered = [m for m in media_list if _passes_date_filter(m, rule)]
+    if not _rule_flag(rule, "include_video"):
+        filtered = [m for m in filtered if m.get("type") != "video"]
+    if _rule_flag(rule, "family_only"):
+        filtered = [m for m in filtered if m["id"] in family_of]
+    return filtered
 
 
 def prepare(
@@ -619,11 +695,7 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     scores, family_of = _scores(candidates, family_sources(rule), rule_weights(rule))
     for media in candidates.media:
         media["family_score"] = scores.get(media["id"], 0.0)
-    filtered = [m for m in candidates.media if _passes_date_filter(m, rule)]
-    if not _rule_flag(rule, "include_video"):
-        filtered = [m for m in filtered if m.get("type") != "video"]
-    if _rule_flag(rule, "family_only"):
-        filtered = [m for m in filtered if m["id"] in family_of]
+    filtered = _filtered(candidates.media, rule, family_of)
     # **選ばない年の写真は、束ねる前に外す**（PR #107 のレビュー指摘1）。残すと、書いていない
     # 年の写真が似た写真の代表になって書いた年の写真を外し（年越しの連写）、見た目も測っていた。
     limit_of = year_limits(rule)

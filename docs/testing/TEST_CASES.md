@@ -512,6 +512,30 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
+### `test_gui_select.py` — 写真の選定タブ（19件。#104）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚。1枚目は今の顔の割り当て |
+| `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
+| `test_loading_lists_every_year_with_its_candidates` | 候補を読み込むと、年ごとの候補の枚数が表に並ぶ（整数の `count_per_year` は全部の年に入る） |
+| `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
+| `test_a_year_set_to_zero_is_not_chosen` | 0 の年からは選ばない |
+| `test_fill_all_years_sets_every_year` | 「全部の年に入れる」 |
+| `test_saving_writes_the_rule_and_keeps_a_backup` | **保存の前に `.bak` に控える**（コメントは消える）。書いたルールは CLI でも読める |
+| `test_the_breakdown_adds_up_to_the_score` | 点の内訳の合計が並びの点と一致する |
+| `test_the_results_are_paged` | 結果はページ送り（CLAUDE.md §8） |
+| `test_exporting_copies_the_chosen_photos` | 出力は CLI の `select` と同じコピー |
+| `test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation` | サムネイルは EXIF の埋め込みから（先頭だけ読む）。読めなければ None |
+| `test_the_breakdown_never_shows_minus_zero` | 内訳に `-0.0` を出さない |
+| `test_selecting_a_photo_shows_where_it_is_and_why` | 写真を選ぶと場所と点の内訳が出る |
+| `test_unchecking_family_only_adds_the_years_without_family` | **絞り込みを変えたら年の表を作り直す**（家族のいない年が表に無く選ばれなかった。PR #108 のレビュー指摘1） |
+| `test_reloading_for_auto_assignments_keeps_the_year_counts` | **読み込み直しても入れた枚数を引き継ぐ**（ルールファイルの値に戻っていた。指摘1） |
+| `test_reloading_clears_the_previous_results` | **読み込み直したら前の結果を捨てる**（古い写真の内訳で例外・古い結果を出力していた。指摘2） |
+| `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
+| `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
+| `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |
+
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
 **1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。
@@ -609,7 +633,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（107件）
+### `test_selection.py` — 抽出とコピー（109件）
 
 | テスト | 内容 |
 |---|---|
@@ -678,7 +702,7 @@
 | `test_candidates_refuse_a_source_they_did_not_load` | 用意していない割り当ての種別では選ばない |
 | `test_counts_per_year_select_only_the_years_written` | **年ごとの対応なら、書いていない年と年の分からない写真は選ばない**（利用者の決定・#102） |
 | `test_a_single_count_per_year_still_applies_to_every_year` | 整数の `count_per_year` は全部の年に同じ数・0 は制限なし（以前と同じ） |
-| `test_a_bad_weight_or_count_stops_when_the_rule_is_read` | 知らない重みの項目・負の値・`.nan`/`.inf`・4桁でない年・壊れた年ごとの枚数は読むときに止める（12件。3件は PR #107 のレビュー指摘4） |
+| `test_a_bad_weight_or_count_stops_when_the_rule_is_read` | 知らない重みの項目・負の値・`.nan`/`.inf`・4桁でない年・壊れた年ごとの枚数・「〜年以降」が2つは読むときに止める（14件） |
 | `test_counts_per_year_are_read_from_yaml` | YAML の年ごとの対応を読む |
 | `test_the_copy_distance_can_be_set_in_the_rule` / `test_a_copy_beyond_the_distance_set_in_the_rule_is_kept` | 写しの距離をルールで変えられる |
 | `test_a_burst_across_new_year_keeps_the_written_year` | **書いていない年の写真は束ねの代表にならない**（年越しの連写で、書いた年の写真まで消えていた。PR #107 のレビュー指摘1） |

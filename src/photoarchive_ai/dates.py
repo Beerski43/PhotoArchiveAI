@@ -30,6 +30,7 @@ from __future__ import annotations
 import calendar
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime
 from typing import Optional, Tuple, Union
 
@@ -230,12 +231,16 @@ def taken_at(
     return Taken(start, end, True)
 
 
+@lru_cache(maxsize=200_000)
 def taken_moment(shooting_date: Optional[str]) -> Optional[datetime]:
     """EXIF の撮影日時を**秒まで**読む。日付だけ・読めない値は ``None``。
 
     似た写真を束ねる（`similar.candidate_groups`）のに使う。**読めるかどうかは
     `parse_date` に預ける**（壊れた値を弾くのはあちらの役目）。フォルダ名から
     起こした区間は秒を持たないので、ここでは見ない。
+
+    **結果を覚える**（#104）。GUI の並べ直し（`selection.choose`）で、同じ写真の日時を
+    何十万回も読み直していた（1回の `choose` の時間の約3割）。値は文字列だけで決まる。
     """
     if parse_date(shooting_date) is None or len(str(shooting_date)) <= 10:
         return None

@@ -313,6 +313,38 @@ def family_photo_score(faces, weights: Optional[Weights] = None) -> float:
     return best + weights.member_bonus * max(0, len(members) - 1)
 
 
+def photo_breakdown(faces, stranger_weight: float = 0.0, weights: Optional[Weights] = None) -> dict:
+    """写真1枚の点の**内訳**（#104。GUI で「なぜこの順位か」を見せる）。
+
+    ``family_photo_score(faces, weights) - weights.stranger_penalty * stranger_weight`` と
+    同じ式を項目に分けたもの。``total`` は各項目の和で、`family_photo_scores` の点と一致する。
+    家族の顔が無ければ全部 0。
+    """
+    weights = weights or Weights.default()
+    parts = {key: 0.0 for key in ("sharpness", "frontal", "eyes", "smile", "members", "strangers")}
+    if faces:
+        best = max(
+            faces,
+            key=lambda face: family_face_score(
+                face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"],
+                face["mouth_smile"], weights,
+            ),
+        )
+        parts["sharpness"] = 100.0 * weights.sharpness * sharpness_level(best["sharpness"])
+        parts["frontal"] = 100.0 * weights.frontal * frontal_level(best["aligned"], best["yaw"])
+        parts["eyes"] = 100.0 * weights.eyes * eyes_level(best["eye_blink"])
+        parts["smile"] = 100.0 * weights.smile * smile_level(best["mouth_smile"])
+        members = {
+            face["person_id"]
+            for face in faces
+            if is_clear_face(face["aligned"], face["sharpness"], face["eye_blink"])
+        }
+        parts["members"] = weights.member_bonus * max(0, len(members) - 1)
+        parts["strangers"] = -weights.stranger_penalty * stranger_weight
+    parts["total"] = sum(parts.values())
+    return parts
+
+
 def family_photo_scores(rows, strangers=None, weights: Optional[Weights] = None) -> dict:
     """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。
 

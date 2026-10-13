@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -3380,6 +3381,36 @@ class MainWindow(QWidget):
         )
 
 
+class AppWindow(QTabWidget):
+    """起動したときの窓（#104）。**1枚目は今までの顔の割り当て、2枚目は写真の選定。**
+
+    1枚目（`MainWindow`）の中身と操作は変えない。2枚目（`gui_select.SelectionPanel`）は
+    同じ DB の接続を使う（`select` の重みを動かして、結果をサムネイルで見る）。
+    """
+
+    def __init__(
+        self,
+        database_path: str,
+        source_roots: SourceRoots = None,
+        rule_path: Optional[str] = None,
+        output_root: Optional[str] = None,
+    ):
+        super().__init__()
+        from .gui_select import SelectionPanel
+
+        self.assignment = MainWindow(database_path, source_roots=source_roots)
+        roots = self.assignment.source_roots
+        if isinstance(roots, str):
+            roots = [roots]
+        self.selection = SelectionPanel(
+            self.assignment.connection, rule_path, output_root, roots or []
+        )
+        self.addTab(self.assignment, "顔の割り当て")
+        self.addTab(self.selection, "写真の選定")
+        self.setWindowTitle("PhotoArchiveAI")
+        self.resize(1240, 820)
+
+
 def main() -> None:
     import sys
 
@@ -3395,6 +3426,8 @@ def main() -> None:
     from .config import (
         find_legacy_settings_path,
         get_database_path,
+        get_output_root,
+        get_rule_path,
         get_source_roots,
         legacy_settings_stop_message,
         load_settings,
@@ -3424,7 +3457,12 @@ def main() -> None:
     if not ensure_migrated(db_path):
         raise SystemExit("移行していないため、起動できません。")
     try:
-        window = MainWindow(db_path, source_roots=source_roots)
+        window = AppWindow(
+            db_path,
+            source_roots=source_roots,
+            rule_path=get_rule_path(settings),
+            output_root=get_output_root(settings),
+        )
     except db.SchemaVersionError as error:
         # `ensure_migrated` を通っても開けないとき（版が新しすぎる、など）。
         # **黙って落とさない。** GUI は端末を見ずに起動されることがある。
