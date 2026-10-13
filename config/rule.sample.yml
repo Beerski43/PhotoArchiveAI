@@ -15,3 +15,18 @@ include_auto_assigned: true
 # 見た目の近さ（0〜64・小さいほど厳しい）。省略すると下の値。
 # similar_seconds: 10
 # similar_distance: 16
+# 撮影時刻の離れた2枚の見た目の近さと、同じ年の写し（別のフォルダ・送られてきた写真）とみなす近さ。
+# similar_far_distance: 14
+# copy_distance: 9
+# 並びの重み（書いていない項目は既定値）。
+# weights:
+#   sharpness: 0.35
+#   frontal: 0.25
+#   eyes: 0.20
+#   smile: 0.20
+#   member_bonus: 20
+#   stranger_penalty: 30
+# 年ごとの枚数は年ごとにも書ける（書いていない年からは選ばない）。
+# count_per_year:
+#   2018: 50
+#   2019: 30

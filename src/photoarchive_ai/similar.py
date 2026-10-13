@@ -306,6 +306,7 @@ def scenes(
     max_distance: int = DEFAULT_DISTANCE,
     seconds: float = DEFAULT_SECONDS,
     family_of: Optional[Dict[int, FrozenSet[int]]] = None,
+    far_distance: int = FAR_DISTANCE,
 ) -> List[List[Dict[str, Any]]]:
     """候補の組を場面に分ける。``group`` は**並びの順**（残したい順）に渡す。
 
@@ -317,7 +318,8 @@ def scenes(
     距離 18〜26 の写真（挙式と披露宴、衣装の違う写真）まで外れた（2026-10-11）。
 
     近さの上限は、**代表との**撮影日時の差が ``seconds`` 以内なら ``max_distance``（連写）、
-    離れていれば ``FAR_DISTANCE`` と ``max_distance`` の小さいほう。
+    離れていれば ``far_distance``（既定 `FAR_DISTANCE`・ルールの ``similar_far_distance``）と
+    ``max_distance`` の小さいほう。
     **日付の違う2枚は、連写（差が ``seconds`` 以内）のときだけ比べる。** 候補の組は
     0時をまたぐ連写で前後の日がつながるが、別の日は別の行事（PR #94 のレビュー指摘2）。
     見た目を測れなかった写真は、どの写真とも束ねない（消さずに残す）。
@@ -325,7 +327,7 @@ def scenes(
     **代表と写っている家族が1人も重ならなければ、近くても束ねない**（#98。
     `shares_family`）。集合が同じことまでは求めない（顔の取りこぼしでずれるため）。
     """
-    far = min(max_distance, FAR_DISTANCE)
+    far = min(max_distance, far_distance)
     kept: List[List[Dict[str, Any]]] = []
     for media in group:
         home = None
