@@ -512,6 +512,24 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
+### `test_gui_select.py` — 写真の選定タブ（13件。#104）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚。1枚目は今の顔の割り当て |
+| `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
+| `test_loading_lists_every_year_with_its_candidates` | 候補を読み込むと、年ごとの候補の枚数が表に並ぶ（整数の `count_per_year` は全部の年に入る） |
+| `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
+| `test_a_year_set_to_zero_is_not_chosen` | 0 の年からは選ばない |
+| `test_fill_all_years_sets_every_year` | 「全部の年に入れる」 |
+| `test_saving_writes_the_rule_and_keeps_a_backup` | **保存の前に `.bak` に控える**（コメントは消える）。書いたルールは CLI でも読める |
+| `test_the_breakdown_adds_up_to_the_score` | 点の内訳の合計が並びの点と一致する |
+| `test_the_results_are_paged` | 結果はページ送り（CLAUDE.md §8） |
+| `test_exporting_copies_the_chosen_photos` | 出力は CLI の `select` と同じコピー |
+| `test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation` | サムネイルは EXIF の埋め込みから（先頭だけ読む）。読めなければ None |
+| `test_the_breakdown_never_shows_minus_zero` | 内訳に `-0.0` を出さない |
+| `test_selecting_a_photo_shows_where_it_is_and_why` | 写真を選ぶと場所と点の内訳が出る |
+
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
 **1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。

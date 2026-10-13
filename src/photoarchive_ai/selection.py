@@ -1,6 +1,7 @@
 import math
 import os
 import shutil
+from functools import lru_cache
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import (
@@ -176,23 +177,34 @@ def _media_period(media: Dict[str, Any]) -> Optional[Tuple[datetime, datetime]]:
     コピーで変わるので、壊れた EXIF の代わりにはしない）。
     **読めるかどうかは `dates.taken_at` に預ける**（CLAUDE.md §8）。
     """
-    taken = taken_at(
-        media.get("shooting_date"), media.get("folder_date_from"), media.get("folder_date_to")
+    # **結果を覚える**（#104）。GUI の並べ直しのたびに全写真（約7万枚）の日付を読み直していた。
+    return _period_of(
+        media.get("shooting_date"), media.get("folder_date_from"),
+        media.get("folder_date_to"), media.get("created_time"),
     )
+
+
+@lru_cache(maxsize=200_000)
+def _period_of(
+    shooting_date: Optional[str],
+    folder_date_from: Optional[str],
+    folder_date_to: Optional[str],
+    created_time: Optional[str],
+) -> Optional[Tuple[datetime, datetime]]:
+    """`_media_period` の中身。値は4つの文字列だけで決まる。"""
+    taken = taken_at(shooting_date, folder_date_from, folder_date_to)
     if taken is not None and not taken.inferred:
         # 時刻まで持っているので、日付の範囲の指定と時刻で比べる。
-        moment = _parse_date(media.get("shooting_date")) or datetime.combine(
-            taken.earliest, time.min
-        )
+        moment = _parse_date(shooting_date) or datetime.combine(taken.earliest, time.min)
         return moment, moment
     if taken is not None:
         return (
             datetime.combine(taken.earliest, time.min),
             datetime.combine(taken.latest, time.max),
         )
-    if media.get("shooting_date") or parse_date(media.get("created_time")) is None:
+    if shooting_date or parse_date(created_time) is None:
         return None
-    moment = _parse_date(media.get("created_time"))
+    moment = _parse_date(created_time)
     return None if moment is None else (moment, moment)
 
 
@@ -303,6 +315,38 @@ class Candidates:
         if key not in self._strangers:
             self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
         return self._strangers[key]
+
+
+def candidate_counts(candidates: "Candidates", rule: Dict[str, Any]) -> Dict[Optional[int], int]:
+    """年ごとの候補の枚数（期間・動画・`family_only` で絞ったあと、束ねる前）。#104 の年ごとの表に出す。"""
+    _, family_of = _scores(candidates, family_sources(rule), None)
+    counts: Dict[Optional[int], int] = {}
+    for media in _filtered(candidates.media, rule, family_of):
+        year = _get_media_year(media)
+        counts[year] = counts.get(year, 0) + 1
+    return counts
+
+
+def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Dict[str, float]:
+    """写真1枚の点の内訳（`scoring.photo_breakdown`。#104）。`choose` と同じ重み・同じ顔。"""
+    sources = family_sources(rule)
+    faces = [row for row in candidates.family_rows(sources) if row["media_id"] == media_id]
+    weight = candidates.stranger_weights(sources).get(media_id, 0.0)
+    return scoring.photo_breakdown(faces, weight, rule_weights(rule))
+
+
+def _filtered(
+    media_list: Iterable[Dict[str, Any]],
+    rule: Dict[str, Any],
+    family_of: Dict[int, FrozenSet[int]],
+) -> List[Dict[str, Any]]:
+    """期間・動画・`family_only` で絞る（`choose` と `candidate_counts` で同じ絞り方にする）。"""
+    filtered = [m for m in media_list if _passes_date_filter(m, rule)]
+    if not _rule_flag(rule, "include_video"):
+        filtered = [m for m in filtered if m.get("type") != "video"]
+    if _rule_flag(rule, "family_only"):
+        filtered = [m for m in filtered if m["id"] in family_of]
+    return filtered
 
 
 def prepare(
@@ -619,11 +663,7 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     scores, family_of = _scores(candidates, family_sources(rule), rule_weights(rule))
     for media in candidates.media:
         media["family_score"] = scores.get(media["id"], 0.0)
-    filtered = [m for m in candidates.media if _passes_date_filter(m, rule)]
-    if not _rule_flag(rule, "include_video"):
-        filtered = [m for m in filtered if m.get("type") != "video"]
-    if _rule_flag(rule, "family_only"):
-        filtered = [m for m in filtered if m["id"] in family_of]
+    filtered = _filtered(candidates.media, rule, family_of)
     # **選ばない年の写真は、束ねる前に外す**（PR #107 のレビュー指摘1）。残すと、書いていない
     # 年の写真が似た写真の代表になって書いた年の写真を外し（年越しの連写）、見た目も測っていた。
     limit_of = year_limits(rule)
