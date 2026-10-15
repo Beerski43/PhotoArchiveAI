@@ -904,7 +904,7 @@ def test_a_version_9_database_gains_the_expression_columns_and_keeps_its_faces(t
 
     connection = db.ensure_database(str(database))
     try:
-        assert db.get_schema_version(connection) == db.SCHEMA_VERSION == 10
+        assert db.get_schema_version(connection) == db.SCHEMA_VERSION
         row = connection.execute(
             "SELECT person_id, assign_source, aligned, sharpness,"
             " expression_found, eye_blink, mouth_smile FROM Face WHERE id = ?",

@@ -512,7 +512,7 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（19件。#104）
+### `test_gui_select.py` — 写真の選定タブ（21件。#104・#106）
 
 | テスト | 内容 |
 |---|---|
@@ -535,6 +535,8 @@
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
 | `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
 | `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |
+| `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
+| `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
 
@@ -633,7 +635,7 @@
 | `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
-### `test_selection.py` — 抽出とコピー（109件）
+### `test_selection.py` — 抽出とコピー（112件）
 
 | テスト | 内容 |
 |---|---|
@@ -709,6 +711,9 @@
 | `test_years_not_written_are_not_measured` | 書いていない年の写真の見た目は測らない |
 | `test_choosing_again_does_not_reread_an_unreadable_photo` | **測れなかった写真を同じ候補の中で読み直さない**（`choose` 3回で 6 回読んでいた。指摘2）。次の `prepare` からは測り直す |
 | `test_an_earlier_choice_keeps_its_scores` | 前に返した結果の点が次の `choose` で書き換わらない（指摘3） |
+| `test_select_reads_the_photo_quality_and_its_weight_changes_the_order` | `prepare` が `PhotoQuality` を読み、画質の重みで並びが変わる。**重み 0 では変わらない**（#106） |
+| `test_the_explanation_includes_the_photo_parts` | 点の内訳に写真全体の項目が入る |
+| `test_the_photo_weights_can_be_written_in_the_rule` | ルールの `weights` に写真全体の5つを書ける |
 
 ### `test_similar.py` — 連写・似た写真を束ねる（25件。#86・#93・#98）
 
@@ -782,6 +787,32 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
+### `test_quality.py` — 写真全体の良し悪し（19件＋`models` 1件。#106）
+
+**前処理は pyiqa（PyTorch）の処理を numpy に写したもの。** 正解値は PyTorch で作って埋め込んだ。写真の点まで一致することは `scripts/export_iqa_onnx.py` が実物のモデルで確かめる。
+
+| テスト | 内容 |
+|---|---|
+| `test_cubic_resize_matches_pytorch_when_shrinking` / `..._when_enlarging` | 3次補間が PyTorch の bicubic（平滑化なし・端は複製）と同じ値 |
+| `test_hashed_positions_match_pyiqa` | MUSIQ の位置の番号が pyiqa と同じ |
+| `test_musiq_input_has_two_padded_scales_and_every_original_patch` | 224・384 の2段は決まった長さに埋め（マスク 0）、元の解像度は全パッチ |
+| `test_nima_input_is_the_centre_square_of_299` | NIMA は短辺 299 に縮めて中央を切り出す |
+| `test_clipping_counts_blown_and_crushed_pixels` | 白飛び・黒つぶれの割合 |
+| `test_the_size_is_taken_before_the_exif_rotation` | **大きさは EXIF の向きを直す前**（顔の矩形と同じ座標）。モデルには向きを直して渡す |
+| `test_the_models_are_required_with_how_to_make_them` | モデルが無ければ書き出し方を示して落ちる |
+| `test_assess_measures_only_family_photos_and_only_once` | 家族の写った写真だけ・**測った写真は二度と読まない** |
+| `test_assess_continues_where_it_stopped` | **途中で止めても続きから測る**（塊ごとに書く） |
+| `test_an_unreadable_photo_is_recorded_and_not_read_again` | 読めなかった写真は `readable=0` で残し、読み直さない |
+| `test_a_new_model_version_measures_everything_again` | 版が変われば測り直す |
+| `test_a_changed_file_loses_its_old_measurement` | **ハッシュが変わったら消す**。属性だけの変化では消さない |
+| `test_deleting_the_media_deletes_its_measurement` | `Media` を消すと連鎖して消える |
+| `test_a_version_10_database_gains_the_table_and_keeps_its_faces` | **v10 → v11 で顔と手本が減らない**（CLAUDE.md §4） |
+| `test_a_face_touching_the_edge_is_cut_off` | 顔の矩形が縁に接していれば見切れ。大きさが分からなければ見切れとしない |
+| `test_unmeasured_photos_are_neither_good_nor_bad` | 未計測は画質・美しさが真ん中、欠点は引かない |
+| `test_zero_photo_weights_give_the_score_from_before` | **写真全体の重みが 0 なら、#106 の前と同じ点** |
+| `test_the_breakdown_adds_up_to_the_score_with_photo_weights` | 内訳の合計が並びの点と一致する |
+| `test_the_real_models_give_scores_in_their_ranges`（`models`） | 実物の ONNX が範囲内の点を出す（環境依存・合否に含めない） |
+
 ### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（10件。#100）
 
 | テスト | 内容 |
@@ -834,7 +865,7 @@
 | `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
 | `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
-### `test_cli_commands.py` — サブコマンドの配線（31件）
+### `test_cli_commands.py` — サブコマンドの配線（33件）
 
 | テスト | 内容 |
 |---|---|
@@ -856,6 +887,8 @@
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 | `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
 | `test_select_warns_about_old_automatic_assignments_only_when_it_uses_them`（2件） | 自動割り当てを使わない `select` は、その規則が古いという知らせを出さない（#89） |
+| `test_assess_measures_with_the_models_and_reports_the_counts` | `assess` が測って件数を出し、2回目は「測る写真はありません」（#106） |
+| `test_assess_without_the_models_says_how_to_make_them` | モデルが無ければ置き方を示して止まる |
 
 ### `test_config.py` — 設定の探索（25件）
 

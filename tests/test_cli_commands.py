@@ -700,3 +700,45 @@ def test_select_warns_about_old_automatic_assignments_only_when_it_uses_them(
              "--source", str(root), "--output", str(tmp_path / "out")], tmp_path)
 
     assert ("自動割り当て 1 件" in capsys.readouterr().out) is warned
+
+
+def test_assess_measures_with_the_models_and_reports_the_counts(tmp_path, monkeypatch, capsys):
+    """`photoarchive assess`（#106）。測ったあとにもう一度流すと、測る写真は無い。"""
+    from photoarchive_ai import quality
+    from tests.test_quality import FakeModels
+
+    database = tmp_path / "photoarchive.db"
+    connection = db.ensure_database(str(database))
+    photo = tmp_path / "a.jpg"
+    write_image(photo)
+    media_id = db.save_media(connection, {
+        "path": str(photo), "filename": "a.jpg", "type": "image", "file_hash": "h",
+        "file_size": 1, "created_time": "2020-01-01T00:00:00",
+    })
+    db.add_face(
+        connection, media_id=media_id, bbox=(0, 10, 10, 0), embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        person_id=db.add_person(connection, "${PERSON_1}"), assign_source=db.ASSIGN_MANUAL,
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(quality.Models, "load", classmethod(lambda cls: FakeModels()))
+
+    run_cli(["assess", "--db", str(database)], tmp_path)
+    assert "測った写真: 1 枚" in capsys.readouterr().out
+    run_cli(["assess", "--db", str(database)], tmp_path)
+    assert "測る写真はありません" in capsys.readouterr().out
+
+
+def test_assess_without_the_models_says_how_to_make_them(tmp_path, monkeypatch):
+    from photoarchive_ai import quality
+
+    database = tmp_path / "photoarchive.db"
+    db.ensure_database(str(database)).close()
+
+    def missing(cls):
+        raise FileNotFoundError("写真の良し悪しのモデルが見つかりません: export_iqa_onnx.py")
+
+    monkeypatch.setattr(quality.Models, "load", classmethod(missing))
+    with pytest.raises(SystemExit, match="export_iqa_onnx.py"):
+        run_cli(["assess", "--db", str(database)], tmp_path)

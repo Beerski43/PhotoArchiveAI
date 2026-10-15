@@ -335,6 +335,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `scoring.py` | 笑顔・画質のスコア（FaceMesh）と、**家族写真としての良さ**（`select` の並び） |
 | `appearance.py` | **顔の見え方**（整列できるか・向き・鮮明さ）を保存済みサムネイルから測る |
 | `expression.py` | **顔の表情**（目閉じ・笑顔）を保存済みサムネイルから測る（MediaPipe Face Landmarker・#95）。モデル `face_landmarker.task` は `scripts/fetch_models.py` で置く |
+| `quality.py` | **写真全体の良し悪し**（#106）。画質（MUSIQ）・美しさ（NIMA）を ONNX で、白飛び・黒つぶれを明るさで測る（`photoarchive assess`）。**前処理は pyiqa の PyTorch の処理を numpy に写したもの**。ONNX は `scripts/export_iqa_onnx.py` が別の仮想環境で書き出す（アプリに PyTorch を入れない・利用者の決定） |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
 | `strangers.py` | **目立つ他人の重み**（#100）。家族らしくなさ（写真にいない家族の顔までの距離）× 目立ち具合（家族の顔と比べた大きさ）。`select` と `match` の点から引く。**手本に似た未割当の顔は引かない**（家族の取りこぼし） |
 | `recommend.py` | 顔を「この人物に似た順」に並べる（GUI の顔候補の推薦・#69）。**閾値では切らない** |
@@ -379,6 +380,10 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - `Media.look_hash`: **写真の見た目の値**（v8・#86）。NULL=未計測。`select` が候補の
   写真だけを測って書く。**中身から測った値なので、ファイルのハッシュが変わったら
   `save_media` が消す**（呼び出し側から受け取らない）。サムネイル由来と元写真由来は比べない
+- `PhotoQuality`: **写真全体の良し悪し**（v11・#106）。`assess` が家族の写った写真を測って書き、`select` は読むだけ。
+  `model_version`（`quality.MODEL_VERSION`）が違う行は無いものとして測り直す。**前処理か書き出し方を変えたら版を上げる。**
+  `readable=0` は読めなかった写真（次からは読まない）。**ファイルのハッシュが変わったら `save_media` が消す**（`look_hash` と同じ）。
+  `width` / `height` は **EXIF の向きを直す前**の大きさ（`scan` の顔の矩形は `face.read_rgb` で向きを直さない座標なので、見切れの判定をそろえる）
 - `Media.folder_date_from` / `folder_date_to`: **フォルダ名から起こした撮影時期**
   （月か年の区間・両端を含む。v6・#65）。**`shooting_date` に書き戻さない。**
   両方を見るときは `dates.taken_at` で `Taken` にする。`scan` と `migrate` が
@@ -488,6 +493,12 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - **`--allow-missing-embeddings` で入れたメディアは `detector_version` を書かない。**
   書くと、モデルを設置しても差分判定が「版が一致する」と見なして全件スキップし、
   `--force-rescan`（手動割り当てを巻き添えにする）以外に回収手段が無くなる。
+- **`quality.py` の前処理を変えたら `scripts/export_iqa_onnx.py` を流し直して pyiqa と突き合わせる。** アプリの
+  テストには PyTorch が無いので、PyTorch で作った小さな正解値しか見ていない。写真の点まで一致するか（2026-10-15 に
+  50 枚で差の最大 0.0001）は、PyTorch のある仮想環境でしか確かめられない
+- **この PC の numpy の BLAS は遅い**（AVX2 なし）。MUSIQ の前処理の3次補間を行列の積で書いたら 1 段 約 2 秒かかり、
+  推論（約 1 秒）より遅かった。1画素に効くのは4画素なので、取り出して重みをかける形にしてある（0.09 秒）。
+  **大きな行列の積を前処理に持ち込まない**
 - **pytest の出力をシェルで数えない。** 端末では着色されるので、素の `grep` は
   必ず外れる。集計は `scripts/summarize_pytest.py` に任せる。
 - **`scripts/archive_worklog.py` は WORKLOG.md を丸ごと書き直す。**

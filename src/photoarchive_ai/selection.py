@@ -14,6 +14,7 @@ import yaml
 from . import appearance, db, expression, scoring, similar, strangers
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
+from .quality import MODEL_VERSION as QUALITY_VERSION
 
 
 def load_rule(rule_path: str) -> Dict[str, Any]:
@@ -319,8 +320,11 @@ class Candidates:
         assign_sources: Sequence[str],
         root_paths: Sequence[Path],
         progress_callback=None,
+        quality: Optional[Dict[int, Dict[str, Any]]] = None,
     ):
         self.connection = connection
+        #: 写真全体の良し悪し（`db.photo_quality`・#106）。測っていない写真は入っていない。
+        self.quality = quality or {}
         self.media = media
         self.rows = rows
         self.assign_sources = tuple(assign_sources)
@@ -364,7 +368,9 @@ def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Di
     sources = family_sources(rule)
     faces = [row for row in candidates.family_rows(sources) if row["media_id"] == media_id]
     weight = candidates.stranger_weights(sources).get(media_id, 0.0)
-    return scoring.photo_breakdown(faces, weight, rule_weights(rule))
+    return scoring.photo_breakdown(
+        faces, weight, rule_weights(rule), candidates.quality.get(media_id)
+    )
 
 
 def _filtered(
@@ -404,7 +410,7 @@ def prepare(
     rows = db.family_faces(connection, assign_sources=assign_sources)
     return Candidates(
         connection, get_media_with_analysis(connection), rows, assign_sources, root_paths,
-        progress_callback,
+        progress_callback, db.photo_quality(connection, QUALITY_VERSION),
     )
 
 
@@ -451,7 +457,9 @@ def _scores(
 ) -> Tuple[Dict[int, float], Dict[int, FrozenSet[int]]]:
     rows = candidates.family_rows(sources)
     return (
-        scoring.family_photo_scores(rows, candidates.stranger_weights(sources), weights),
+        scoring.family_photo_scores(
+            rows, candidates.stranger_weights(sources), weights, candidates.quality
+        ),
         _family_of(rows),
     )
 
