@@ -1016,7 +1016,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_report_keeps_the_assumption_visible` | 報告に「高めに出る」断り書きを残す |
 | `test_the_real_arcface_returns_512_dimensions`（`models`） | 実物の ONNX が 512次元を返す（環境依存・合否に含めない） |
 
-### `test_iqa_measurement.py` — 写真の良し悪しモデル（IQA）を試す道具（8件。#105）
+### `test_iqa_measurement.py` — 写真の良し悪しモデル（IQA）を試す道具（9件。#105）
 
 **採るモデルは、この道具の順位と見比べ画像を見て利用者が決めた。** PyTorch と pyiqa は要らない。
 
@@ -1028,7 +1028,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_ties_share_the_average_rank` | 同じ値には平均の順位 |
 | `test_best_first_respects_models_where_lower_is_better` | 点の低いほうが良いモデルは逆に並べる |
 | `test_disagreements_put_the_largest_rank_gap_first` | 2つのモデルの食い違いは順位の差が大きい順 |
-| `test_the_sample_is_family_photos_only_and_repeatable` | 手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。同じ DB なら同じ写真 |
+| `test_the_sample_is_family_photos_only_and_repeatable` | 手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。2回呼べば同じ写真 |
+| `test_the_sample_does_not_depend_on_the_order_sqlite_returns` | **SQLite の返す順に依存しない**（索引の無い表に逆順で入れて確かめる。実データの DB は索引で ID 順に返すので、上のテストでは `ORDER BY` を外しても気づけない） |
 | `test_sheets_are_written_for_each_model_and_each_pair` | 見比べ画像はモデルごとの上位・下位と、組ごとの食い違い。読めない写真があっても止めない |
 
 ### `test_worklog_archive.py` — 作業履歴の切り出し（16件）

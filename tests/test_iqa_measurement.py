@@ -7,6 +7,7 @@
 
 import importlib.util
 import json
+import random
 import sqlite3
 import sys
 from pathlib import Path
@@ -73,7 +74,7 @@ def test_disagreements_put_the_largest_rank_gap_first(measure_module):
 
 
 def test_the_sample_is_family_photos_only_and_repeatable(tmp_path, measure_module):
-    """手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。DB の並びに左右されず同じ写真を選ぶ。"""
+    """手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。2回呼べば同じ写真を選ぶ。"""
     path = tmp_path / "photoarchive.db"
     connection = db.ensure_database(str(path))
     try:
@@ -109,6 +110,26 @@ def test_the_sample_is_family_photos_only_and_repeatable(tmp_path, measure_modul
         assert len(measure_module.family_photo_ids(read_only, 1)) == 1
     finally:
         read_only.close()
+
+
+def test_the_sample_does_not_depend_on_the_order_sqlite_returns(measure_module):
+    """SQLite の返す順に依存しない。索引の無い表は挿入順で返すので、逆順に入れて確かめる。
+
+    実データの DB は ``Face.media_id`` に索引があり ID 順で返すので、``ORDER BY`` を外しても
+    上のテストは通ってしまう（PR #109 の指摘2）。
+    """
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE Media (id INTEGER PRIMARY KEY, type TEXT);"
+        "CREATE TABLE Face (id INTEGER PRIMARY KEY, media_id INTEGER, assign_source TEXT);"
+    )
+    for media_id in range(1, 21):
+        connection.execute("INSERT INTO Media VALUES (?, 'image')", (media_id,))
+    for media_id in range(20, 0, -1):
+        connection.execute("INSERT INTO Face (media_id, assign_source) VALUES (?, 'manual')", (media_id,))
+    expected = list(range(1, 21))
+    random.Random(0).shuffle(expected)
+    assert measure_module.family_photo_ids(connection, 20) == expected
 
 
 def test_sheets_are_written_for_each_model_and_each_pair(tmp_path, measure_module):

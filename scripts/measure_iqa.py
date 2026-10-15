@@ -10,11 +10,11 @@
     python3 -m venv <外>/venv
     <外>/venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
     <外>/venv/bin/pip install pyiqa
-    <外>/venv/bin/python -I scripts/measure_iqa.py --db data/photoarchive.db --out <リポジトリの外>
+    <外>/venv/bin/python -I scripts/measure_iqa.py --db data/photoarchive.db --out <リポジトリの外か data/ の下>
 
 ``--models`` で一部だけ測り直せる（前の ``result.json`` の点は残る）。見比べ画像だけを
 作り直すときは ``--sheets-only``（モデルを読まない）。**家族の写真なので、出力は
-リポジトリの外に置く。** 結果は ``docs/history/details/2026-10-13-iqa-trial-measured.md``。
+リポジトリの外か ``data/`` の下（git 管理外）に置く。** 結果は ``docs/history/details/2026-10-13-iqa-trial-measured.md``。
 """
 
 from __future__ import annotations
@@ -197,7 +197,7 @@ def write_sheets(result: dict, paths: dict[str, Path], out: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--db", required=True)
-    parser.add_argument("--out", required=True, help="リポジトリの外（家族の写真が出る）")
+    parser.add_argument("--out", required=True, help="リポジトリの外か data/ の下（家族の写真が出る。git に入れない）")
     parser.add_argument("--n", type=int, default=200)
     parser.add_argument("--models", nargs="*", default=list(MODELS), choices=MODELS)
     parser.add_argument("--sheets-only", action="store_true", help="モデルを読まず、見比べ画像だけ作る")
