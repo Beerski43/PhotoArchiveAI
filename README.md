@@ -466,6 +466,7 @@ PhotoArchiveAI/
     archive_worklog.py         作業履歴の切り出し
     check_private_terms.py     公開しない語（家族の名前・パスなど）の検査と置き換え
     measure_heic_duplicates.py convert-heic の「同じ写真」の閾値を実データで測る
+    measure_iqa.py             写真の良し悪しモデル（IQA）を試す（PyTorch と pyiqa は別の仮想環境に入れる）
     restore_heic_exif.py       撮影日時を落とした変換済み JPEG に EXIF を戻す（一度きりの修復）
   config/
     app_settings.sample.yml    アプリ設定のサンプル
