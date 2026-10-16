@@ -196,9 +196,13 @@ AESTHETIC_GOOD = 5.5
 CLIP_FULL = 0.25
 #: 顔の矩形が写真の縁からこの割合（長辺に対して）以内なら、見切れとみなす。
 CUTOFF_MARGIN = 0.005
-#: 写真の重みの既定（#106）。**利用者の決定で、実データの複製で測って決める。**
-WEIGHT_TECHNICAL = 0.0
-WEIGHT_AESTHETIC = 0.0
+#: 写真の重みの既定（#106・2026-10-16 に利用者が決めた）。実データの複製で `select` の出力 638 枚のうち
+#: 152 枚が入れ替わる（外れた写真の画質の平均 63.6 → 入った写真 74.5）。
+#: **白飛び・黒つぶれは 0**: 白背景の写真館の写真・ろうそくのケーキのような、わざとの白や黒を落とした。
+#: **見切れも 0**: 落ちるのは自撮りと寄りの写真が多く、切れていない写真と混ざった。どちらも GUI で動かせる。
+#: 測定は docs/history/details/2026-10-16-photo-quality-weights-measured.md。
+WEIGHT_TECHNICAL = 0.3
+WEIGHT_AESTHETIC = 0.1
 WEIGHT_HIGHLIGHTS = 0.0
 WEIGHT_SHADOWS = 0.0
 WEIGHT_CUTOFF = 0.0

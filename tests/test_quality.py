@@ -272,7 +272,17 @@ def test_zero_photo_weights_give_the_score_from_before():
                  eye_blink=0.0, mouth_smile=0.3)]
     measured = {1: {"technical": 20.0, "aesthetic": 3.0, "highlight_clip": 0.5, "shadow_clip": 0.5,
                     "width": 100, "height": 100}}
-    assert scoring.family_photo_scores(rows, quality=measured) == scoring.family_photo_scores(rows)
+    off = scoring.Weights.default()._replace(technical=0, aesthetic=0, highlights=0, shadows=0, cutoff=0)
+    assert scoring.family_photo_scores(rows, weights=off, quality=measured) == scoring.family_photo_scores(
+        rows, weights=off
+    )
+
+
+def test_the_default_weights_are_the_ones_the_user_chose():
+    """既定は画質 0.3・美しさ 0.1、白飛び・黒つぶれ・見切れは 0（2026-10-16・利用者の決定）。"""
+    weights = scoring.Weights.default()
+    assert (weights.technical, weights.aesthetic) == (0.3, 0.1)
+    assert (weights.highlights, weights.shadows, weights.cutoff) == (0.0, 0.0, 0.0)
 
 
 def test_the_breakdown_adds_up_to_the_score_with_photo_weights():
@@ -299,3 +309,17 @@ def test_the_real_models_give_scores_in_their_ranges():
     rgb = np.random.default_rng(0).random((240, 320, 3)).astype(np.float32)
     assert 0.0 <= models.technical(rgb) <= 100.0
     assert 1.0 <= models.aesthetic(rgb) <= 10.0
+
+
+def test_match_writes_the_same_score_as_select_with_the_photo_quality(connection, tmp_path):
+    """`match` の `family_score` も `PhotoQuality` を読む（`select` と同じ点・#106）。"""
+    from photoarchive_ai import selection
+
+    media_id = _photo(connection, tmp_path, "a.jpg")
+    db.save_photo_quality(connection, [(media_id, (20.0, 3.0, 0.5, 0.5, 40, 30))], quality.MODEL_VERSION)
+    db.recompute_family_scores(connection)
+    stored = db.get_analysis_result(connection, media_id)["family_score"]
+    scores, _ = selection.family_scores(connection)
+    assert stored == pytest.approx(scores[media_id])
+    faces = db.family_faces(connection)
+    assert stored < scoring.family_photo_scores(faces)[media_id]  # 画質が悪いぶん、未計測より低い

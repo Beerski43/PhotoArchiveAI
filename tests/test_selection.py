@@ -229,7 +229,9 @@ def test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo
     ])
     _add(connection, "crisp-manual.jpg", faces=[_face("${PERSON_4}", smile=0.0)])
 
-    selected = select_media(connection, {"include_auto_assigned": False})
+    # 顔の点だけを見る（写真全体の重みは 0。未計測の写真は画質・美しさが真ん中で足されるため・#106）
+    rule = {"include_auto_assigned": False, "weights": {"technical": 0, "aesthetic": 0}}
+    selected = select_media(connection, rule)
 
     assert _paths(selected) == ["crisp-manual.jpg", "blurred-manual.jpg"]
     assert selected[1]["family_score"] == 0.0
@@ -1133,8 +1135,9 @@ def test_select_reads_the_photo_quality_and_its_weight_changes_the_order(connect
     _measured(connection, first, 30.0)
     _measured(connection, second, 75.0)
     candidates = prepare(connection)
-    assert _paths(choose(candidates, {})) == ["first.jpg", "second.jpg"]
-    assert _paths(choose(candidates, {"weights": {"technical": 0.3}})) == ["second.jpg", "first.jpg"]
+    off = {"weights": {"technical": 0, "aesthetic": 0}}
+    assert _paths(choose(candidates, off)) == ["first.jpg", "second.jpg"]
+    assert _paths(choose(candidates, {})) == ["second.jpg", "first.jpg"]  # 既定は画質 0.3
 
 
 def test_the_explanation_includes_the_photo_parts(connection):

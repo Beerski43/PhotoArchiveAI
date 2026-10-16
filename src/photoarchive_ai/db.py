@@ -2688,7 +2688,12 @@ def recompute_family_scores(connection: sqlite3.Connection) -> None:
     from . import strangers
 
     rows = family_faces(connection)
-    scores = scoring.family_photo_scores(rows, strangers.weights(connection, rows))
+    from .quality import MODEL_VERSION
+
+    # 写真全体の良し悪し（`PhotoQuality`・#106）も `select` と同じく読む（既定の重みで同じ点になるように）
+    scores = scoring.family_photo_scores(
+        rows, strangers.weights(connection, rows), quality=photo_quality(connection, MODEL_VERSION)
+    )
     cursor = connection.cursor()
     cursor.execute("UPDATE AnalysisResult SET family_score = 0.0")
     cursor.executemany(

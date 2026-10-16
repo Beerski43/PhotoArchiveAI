@@ -11,6 +11,19 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
+## 2026-10-16 — 写真の良し悪しを測って残し、select の点に入れる
+
+**#106（親 #102・ROADMAP 4.9）。** 利用者の決定: **推論は ONNX**（アプリに PyTorch を入れない）・**既定の重みは実データの複製で測って決める**。
+- `quality.py`: MUSIQ（画質）・NIMA（美しさ）を ONNX Runtime で、白飛び・黒つぶれを明るさで測る。前処理は pyiqa の PyTorch の処理を numpy に写した。ONNX は `scripts/export_iqa_onnx.py` が別の仮想環境で書き出し、pyiqa と比べる（50 枚で差の最大 0.0001・順位の相関 1.0）
+- **スキーマ版11**: `PhotoQuality`（ハッシュが変わったら消す・`Media` と連鎖削除）。`photoarchive assess` が家族の写った写真を差分だけ測る（20 枚ごとに書く・次の写真を先読み）
+- 重みに `technical`・`aesthetic`・`highlights`・`shadows`・`cutoff`（GUI にも出す。内訳の下に測った値）。`match` の `family_score` も `PhotoQuality` を読む（`select` と同じ点）
+- 仕様書 1.18（§5.3.1・§7.5.2・§7.8・§9.2・§12.1）・README・GUI 利用手順・CLAUDE.md
+
+実データの複製で 16,330 枚を測った（1 枚 1.27 秒・5 時間 45 分）。**既定の重みは画質 0.3・美しさ 0.1**（利用者の決定）で、出力 638 枚のうち 152 枚が入れ替わる。白飛び・黒つぶれ・見切れは写真館の白背景・わざと暗い写真・自撮りを落としたので 0。測定は [details/2026-10-16-photo-quality-weights-measured.md](details/2026-10-16-photo-quality-weights-measured.md)。
+本筋の外: 前処理の3次補間を行列の積で書いていて、この PC の numpy では 1 枚 約 10 秒かかった → 4画素を取り出す形に（CLAUDE.md の落とし穴に書いた）。
+**利用者がやること**: マージ後に、モデルを `models/` に置く（この PC には置いてある。ほかの環境は README の手順）→ `photoarchive migrate`（版11）→ `photoarchive assess`（一晩）→ `photoarchive select`。
+次は、利用者が GUI の写真の選定タブで重みを調整する（#102 の C2 のあと）。
+
 ## 2026-10-15 — 写真の良し悪しモデルを決めた（MUSIQ と NIMA の両方）
 
 **#105（親 #102・ROADMAP 4.8）。** 2026-10-13 に測った 200 枚で、モデルごとの上位・下位と、NIMA と MUSIQ が食い違った写真を並べた画像を作り（`data/iqa-trial-2026-10-13/sheets/`・git 管理外）、利用者に見せた。
@@ -175,17 +188,6 @@ CLI は `Copying stopped: ...` の1行で止まる。`--source` は相対パス�
 書き換え前の履歴の控えは手元の `${HOME}/photoarchive-recovery/history-before-77-*.git`（公開しない）。
 **残り（利用者）**: PR の差分から辿れる古いコミットの削除を GitHub サポートへ依頼する。ほかの clone は作り直す。
 **プラン改版**: 進める順序の 2.8 に #83（`select` の出力方法の改善）を入れた（利用者の指定で #77 の次）。連写の検出はその後。
-
-## 2026-10-10 — 個人情報をリポジトリから消した（段1）
-
-**#77。** 家族の名前・姓・NFS のパス・誕生日・ホームディレクトリ・行事や地名入りのフォルダ名・GitHub のアカウント名を、
-`${PERSON_1}` などの変数に置き換えた（利用者が形式と範囲を決めた）。語の一覧は git に入らない `config/private_terms.yml`。
-`scripts/check_private_terms.py`（検査・`--fix`・履歴の書き換え用の式の書き出し）と `.githooks/`（pre-commit・commit-msg）、
-回帰テストの 6/6 で止める。テストは架空の名前と日付に（誕生日は同じ月の1日へ）。シェルの例は `${}` を使わない形に直した。
-**次は段2**: PR のマージ後、利用者に確認してから `git filter-repo` で履歴を書き換えて force-push。GitHub 上の Issue・PR の本文、
-古いコミット、コミットの作者名は書き換えでは消えないので、別に判断を仰ぐ。
-レビュー対応: 一覧を本体の checkout から引く（ワークツリーで検査が飛んでいた）。hook のときだけ一覧が無ければ止める（利用者の決定）。
-`git commit -v` の差分を見ない。壊れた一覧のエラーに語を出さない。
 
 ## 過去の履歴
 

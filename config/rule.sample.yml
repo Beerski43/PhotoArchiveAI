@@ -26,6 +26,11 @@ include_auto_assigned: true
 #   smile: 0.20
 #   member_bonus: 20
 #   stranger_penalty: 30
+#   technical: 0.3     # 写真の画質（ぶれ・ピンぼけ・暗さ。photoarchive assess で測る）
+#   aesthetic: 0.1     # 写真の美しさ（構図）
+#   highlights: 0      # 白飛びの減点
+#   shadows: 0         # 黒つぶれの減点
+#   cutoff: 0          # 家族の顔が写真の縁で切れているときの減点
 # 年ごとの枚数は年ごとにも書ける（書いていない年からは選ばない）。
 # count_per_year:
 #   2018: 50

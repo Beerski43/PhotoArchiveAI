@@ -787,7 +787,7 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
-### `test_quality.py` — 写真全体の良し悪し（19件＋`models` 1件。#106）
+### `test_quality.py` — 写真全体の良し悪し（21件＋`models` 1件。#106）
 
 **前処理は pyiqa（PyTorch）の処理を numpy に写したもの。** 正解値は PyTorch で作って埋め込んだ。写真の点まで一致することは `scripts/export_iqa_onnx.py` が実物のモデルで確かめる。
 
@@ -811,6 +811,8 @@
 | `test_unmeasured_photos_are_neither_good_nor_bad` | 未計測は画質・美しさが真ん中、欠点は引かない |
 | `test_zero_photo_weights_give_the_score_from_before` | **写真全体の重みが 0 なら、#106 の前と同じ点** |
 | `test_the_breakdown_adds_up_to_the_score_with_photo_weights` | 内訳の合計が並びの点と一致する |
+| `test_the_default_weights_are_the_ones_the_user_chose` | 既定は画質 0.3・美しさ 0.1、白飛び・黒つぶれ・見切れは 0（利用者の決定） |
+| `test_match_writes_the_same_score_as_select_with_the_photo_quality` | **`match` の `family_score` も `PhotoQuality` を読み、`select` と同じ点**（読まないと測った写真で食い違う） |
 | `test_the_real_models_give_scores_in_their_ranges`（`models`） | 実物の ONNX が範囲内の点を出す（環境依存・合否に含めない） |
 
 ### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（10件。#100）
