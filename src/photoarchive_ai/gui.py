@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -204,6 +205,10 @@ ACTION_NOT_THIS_PERSON = "この人物ではない"
 ACTION_REJECT = "誰でもない顔として除外…"
 ACTION_SET_AGE = "年齢を設定…"
 ACTION_UNDO_REJECTION = "「この人物ではない」を取り消す"
+ACTION_PENALIZE = "select で減点する"
+ACTION_UNPENALIZE = "減点をやめる"
+#: 減点する顔（#110）の一覧の印。
+PENALIZE_MARK = "減点"
 ASSIGN_MENU = "人物に割り当て"
 ASSIGN_MENU_OTHER = "別の人物に割り当て"
 
@@ -842,7 +847,9 @@ def ensure_migrated(database_path: str, parent=None) -> bool:
 class PersonDialog(QDialog):
     """人物の追加・編集。誕生日は任意で、入れると撮影時の年齢を出せる。"""
 
-    def __init__(self, parent=None, name="", relation="", memo="", birth_date=""):
+    def __init__(
+        self, parent=None, name="", relation="", memo="", birth_date="", close=False, weight=1.0
+    ):
         super().__init__(parent)
         self.setWindowTitle("人物情報")
         self.name_input = QLineEdit(name)
@@ -850,11 +857,23 @@ class PersonDialog(QDialog):
         self.memo_input = QTextEdit(memo)
         self.ok_button = QPushButton("OK")
         self.ok_button.clicked.connect(self.accept)
+        # 区分と重み（#110）。親しい人だけの写真は select で家族の写真に数えない
+        self.category_input = QComboBox()
+        self.category_input.addItem("家族", False)
+        self.category_input.addItem("親しい人（家族と一緒に写れば加点）", True)
+        self.category_input.setCurrentIndex(1 if close else 0)
+        self.weight_input = QDoubleSpinBox()
+        self.weight_input.setDecimals(2)
+        self.weight_input.setRange(0.0, 100.0)
+        self.weight_input.setSingleStep(0.1)
+        self.weight_input.setValue(float(weight))
 
         form = QFormLayout()
         form.addRow("名前", self.name_input)
         form.addRow("続柄", self.relation_input)
         form.addRow("誕生日", self._build_birth_date_row(birth_date))
+        form.addRow("区分", self.category_input)
+        form.addRow("select の重み", self.weight_input)
         form.addRow("メモ", self.memo_input)
         form.addWidget(self.ok_button)
         self.setLayout(form)
@@ -910,6 +929,10 @@ class PersonDialog(QDialog):
             self.memo_input.toPlainText().strip(),
             (self.birth_year.value(), self.birth_month.value(), self.birth_day.value()),
         )
+
+    def scoring_values(self):
+        """区分（親しい人なら True）と `select` の重み（#110）。"""
+        return bool(self.category_input.currentData()), float(self.weight_input.value())
 
 
 def summarize_selection(
@@ -1128,6 +1151,8 @@ def _repopulate_face_list(
         label = str(record["id"])
         if record.get("assign_source") == db.ASSIGN_AUTO:
             label = f"{label} (自動 {record.get('assign_score') or 0:.0f})"
+        if record.get("penalize"):
+            label = f"{label} [{PENALIZE_MARK}]"
         # **年齢の出し方は呼び出し側が決める。** 人物が決まっている画面だけが
         # 誕生日を持っているので、計算した年齢を出せるのもそこだけ。
         if age_labels is not None:
@@ -1998,6 +2023,18 @@ class MainWindow(QWidget):
         self.action_undo_rejection.setShortcut("Z")
         self.action_undo_rejection.triggered.connect(self._undo_rejection_selected)
 
+        # 除外した顔のうち、select で点を引く顔を選ぶ（#110）。印の無い除外の顔は引かない
+        self.action_penalize = QAction(ACTION_PENALIZE, self)
+        self.action_penalize.setShortcut("P")
+        self.action_penalize.setToolTip(
+            "この顔が大きく写った写真を select で後ろへ回す（家族の顔と比べた大きさ × 減点）。\n"
+            "印の無い除外の顔と未割当の顔は、点に入りません。"
+        )
+        self.action_penalize.triggered.connect(lambda: self._set_penalty_selected(True))
+        self.action_unpenalize = QAction(ACTION_UNPENALIZE, self)
+        self.action_unpenalize.setShortcut("Shift+P")
+        self.action_unpenalize.triggered.connect(lambda: self._set_penalty_selected(False))
+
         self.face_action_set = (
             self.action_confirm,
             self.action_unassign,
@@ -2005,6 +2042,8 @@ class MainWindow(QWidget):
             self.action_reject,
             self.action_set_age,
             self.action_undo_rejection,
+            self.action_penalize,
+            self.action_unpenalize,
         )
         for action in self.face_action_set:
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -2288,6 +2327,7 @@ class MainWindow(QWidget):
             # 名前は重複不可（#90）。同名の2人目を作ると、どちらに割り当てたのか見分けられない
             QMessageBox.warning(self, "入力エラー", str(error))
             return
+        db.set_person_scoring(self.connection, person_id, *dialog.scoring_values())
         self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
@@ -2300,6 +2340,8 @@ class MainWindow(QWidget):
             person.get("relation") or "",
             person.get("memo") or "",
             person.get("birth_date") or "",
+            close=person.get("category") == db.CATEGORY_CLOSE,
+            weight=db.DEFAULT_PERSON_WEIGHT if person.get("weight") is None else person["weight"],
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2314,6 +2356,7 @@ class MainWindow(QWidget):
         except db.DuplicatePersonName as error:
             QMessageBox.warning(self, "入力エラー", str(error))
             return
+        db.set_person_scoring(self.connection, person["id"], *dialog.scoring_values())
         # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
         self._reload_person_list(select_person_id=person["id"])
 
@@ -2458,7 +2501,7 @@ class MainWindow(QWidget):
                 self.action_reject,
             )
         if scope == SCOPE_REJECTED:
-            return (self.action_unassign,)
+            return (self.action_penalize, self.action_unpenalize, self.action_unassign)
         return (self.action_reject,)
 
     def _build_face_menu(self) -> QMenu:
@@ -2551,6 +2594,11 @@ class MainWindow(QWidget):
             has_selection and scope == SCOPE_PERSON and not unassigned
         )
         self.action_undo_rejection.setEnabled(has_selection)
+        # 減点の印は除外の顔にだけ付く（`db.set_face_penalty`）
+        marked = [bool(record.get("penalize")) for record in records]
+        rejected_view = scope == SCOPE_REJECTED
+        self.action_penalize.setEnabled(rejected_view and not all(marked) if records else False)
+        self.action_unpenalize.setEnabled(rejected_view and any(marked))
 
         # 割り当て先の人物に、**選んだ顔の撮影時の年齢**を添える。
         shooting_dates = (
@@ -3307,6 +3355,18 @@ class MainWindow(QWidget):
             face_ids,
             work,
             f"完了 — {len(face_ids)} 件を「この人物ではない」に記録しました",
+        )
+
+    def _set_penalty_selected(self, penalize: bool) -> None:
+        """除外した顔に「select で減点する」の印を付ける／外す（#110）。顔は一覧に残る。"""
+        face_ids = self._selected_face_ids()
+        if not face_ids:
+            return
+        self._run_with_progress(
+            "減点の印を付けています" if penalize else "減点の印を外しています",
+            face_ids,
+            lambda progress: db.set_face_penalty(self.connection, face_ids, penalize),
+            f"完了 — {len(face_ids)} 件の" + ("顔を select で減点します" if penalize else "減点をやめました"),
         )
 
     def _reject_selected(self):

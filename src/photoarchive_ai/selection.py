@@ -337,7 +337,10 @@ class Candidates:
         self.unreadable: set = set()
 
     def family_rows(self, sources: Sequence[str]) -> List[Dict[str, Any]]:
-        """``sources`` の種別の家族の顔の行。**用意していない種別は求めない。**"""
+        """``sources`` の種別の、割り当てのある顔の行（家族と親しい人・#110）。**用意していない種別は求めない。**
+
+        家族だけが要るところ（`family_only`・似た写真）は `_family_of` が親しい人を外す。
+        """
         missing = set(sources) - set(self.assign_sources)
         if missing:
             raise ValueError(
@@ -415,8 +418,11 @@ def prepare(
 
 
 def _family_of(rows: Iterable[Dict[str, Any]]) -> Dict[int, FrozenSet[int]]:
+    """写真ごとの写っている家族。**親しい人は入れない**（`family_only`・似た写真の「同じ家族」・#110）。"""
     people: Dict[int, set] = {}
     for row in rows:
+        if not db.is_family(row):
+            continue
         people.setdefault(row["media_id"], set()).add(row["person_id"])
     return {media_id: frozenset(found) for media_id, found in people.items()}
 

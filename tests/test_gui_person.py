@@ -52,20 +52,28 @@ def _accepting_age_dialog():
     return _Dialog
 
 
-def _make_dialog_class(accepted: bool, values=("新しい名前", "mother", "新しいメモ", (0, 0, 0))):
-    """`PersonDialog` の代わり。開いたときの初期値を記録する。"""
+def _make_dialog_class(
+    accepted: bool, values=("新しい名前", "mother", "新しいメモ", (0, 0, 0)), scoring=(False, 1.0)
+):
+    """`PersonDialog` の代わり。開いたときの初期値を記録する。``scoring`` は区分と重み（#110）。"""
 
     class _FakeDialog:
         opened_with = None
+        opened_scoring = None
 
-        def __init__(self, parent=None, name="", relation="", memo="", birth_date=""):
+        def __init__(self, parent=None, name="", relation="", memo="", birth_date="",
+                     close=False, weight=1.0):
             _FakeDialog.opened_with = (name, relation, memo, birth_date)
+            _FakeDialog.opened_scoring = (close, weight)
 
         def exec(self):
             return QDialog.Accepted if accepted else QDialog.Rejected
 
         def values(self):
             return values
+
+        def scoring_values(self):
+            return scoring
 
     return _FakeDialog
 
@@ -1344,3 +1352,25 @@ def test_persons_added_to_a_new_database_keep_their_registration_order(tmp_path)
         assert [p["name"] for p in db.list_persons(connection)] == ["父", "母", "あい"]
     finally:
         connection.close()
+
+
+def test_the_category_and_weight_are_saved_and_reopened(window, monkeypatch):
+    """区分と select の重み（#110）。保存した値で編集ダイアログが開く。"""
+    monkeypatch.setattr(photoarchive_gui, "PersonDialog", _make_dialog_class(True, scoring=(True, 0.5)))
+    _select_person(window)
+    window._edit_person()
+    person = db.list_persons(window.connection)[0]
+    assert (person["category"], person["weight"]) == (db.CATEGORY_CLOSE, 0.5)
+
+    dialog = _make_dialog_class(False)
+    monkeypatch.setattr(photoarchive_gui, "PersonDialog", dialog)
+    _select_person(window)
+    window._edit_person()
+    assert dialog.opened_scoring == (True, 0.5)
+
+
+def test_the_real_dialog_returns_the_category_and_weight(window):
+    dialog = photoarchive_gui.PersonDialog(window, close=True, weight=2.5)
+    assert dialog.scoring_values() == (True, 2.5)
+    dialog.category_input.setCurrentIndex(0)
+    assert dialog.scoring_values() == (False, 2.5)
