@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -166,7 +166,11 @@ SCHEMA = [
     "birth_date TEXT,"
     # 一覧に並べる順。**利用者が画面で入れ替えた順序**を持つ。
     # 未設定(NULL)は名前順の位置に置く（並べ替えたことのない人物）。
-    "display_order INTEGER"
+    "display_order INTEGER,"
+    # 区分（v12・#110）。NULL=家族 / 'close'=親しい人。親しい人だけの写真は家族の写真に数えない。
+    "category TEXT,"
+    # `select` の点の重み（v12・#110）。NULL=1.0。顔の良さと人数の加点にかける。
+    "weight REAL"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -208,6 +212,9 @@ SCHEMA = [
     "eye_blink REAL,"
     # mouth_smile: 笑顔（左右の平均・0〜1）。`smile_score`（scan が書く古い笑顔）とは別物。
     "mouth_smile REAL,"
+    # 減点する顔（v12・#110）。1=減点する。**除外（rejected）の顔にだけ付ける。** 割り当てを
+    # 変えたら消す（`select` の点から、家族と比べた大きさ × 減点を引く・`strangers.weights`）。
+    "penalize INTEGER,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
     ")",
@@ -427,6 +434,9 @@ ADDABLE_COLUMNS = {
     ("Media", "folder_date_from"): "TEXT",
     ("Media", "folder_date_to"): "TEXT",
     ("Media", "look_hash"): "TEXT",
+    ("Person", "category"): "TEXT",
+    ("Person", "weight"): "REAL",
+    ("Face", "penalize"): "INTEGER",
 }
 
 
@@ -930,7 +940,7 @@ def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
     """人物を削除する。紐づいていた顔は削除せず未割当に戻す。"""
     cursor = connection.cursor()
     cursor.execute(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL, penalize = NULL,"
         " assigned_at = NULL WHERE person_id = ?",
         (person_id,),
     )
@@ -1018,6 +1028,7 @@ FACE_LIST_COLUMNS = (
     "age",
     "quality_score",
     "smile_score",
+    "penalize",
 )
 
 
@@ -2007,13 +2018,13 @@ def assign_faces(
     if isinstance(age, _KeepAge):
         statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assign_rule = NULL, assigned_at = ? WHERE id = ?"
+            " assign_rule = NULL, penalize = NULL, assigned_at = ? WHERE id = ?"
         )
         rows = [(person_id, assign_source, assign_score, now, face_id) for face_id in face_ids]
     else:
         statement = (
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-            " assign_rule = NULL, assigned_at = ?, age = ? WHERE id = ?"
+            " assign_rule = NULL, penalize = NULL, assigned_at = ?, age = ? WHERE id = ?"
         )
         rows = [
             (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
@@ -2033,7 +2044,7 @@ def unassign_faces(
     cursor = connection.cursor()
     affected = _executemany_with_progress(
         cursor,
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL, penalize = NULL,"
         " assigned_at = NULL WHERE id = ?",
         [(face_id,) for face_id in face_ids],
         progress,
@@ -2078,7 +2089,7 @@ def reject_faces_for_person(
     )
     # その人物に割り当たっているものだけを外す。別の人物のものには触らない。
     cursor.executemany(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL, penalize = NULL,"
         " assigned_at = NULL WHERE id = ? AND person_id = ?",
         [(face_id, person_id) for face_id in face_ids],
     )
@@ -2139,7 +2150,9 @@ def reject_faces(
     cursor = connection.cursor()
     affected = _executemany_with_progress(
         cursor,
+        # 減点の印は、すでに除外だった顔なら残す（除外し直しただけで利用者の選択を消さない）
         "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL, assign_rule = NULL,"
+        " penalize = CASE WHEN assign_source = 'rejected' THEN penalize ELSE NULL END,"
         " assigned_at = ? WHERE id = ?",
         [(ASSIGN_REJECTED, now, face_id) for face_id in face_ids],
         progress,
@@ -2537,7 +2550,7 @@ def apply_auto_assignments(
     cursor = connection.cursor()
     cursor.executemany(
         "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
-        " assign_rule = ?, assigned_at = ? WHERE id = ?",
+        " assign_rule = ?, penalize = NULL, assigned_at = ? WHERE id = ?",
         [
             (person_id, ASSIGN_AUTO, assign_score, rule, now, face_id)
             for face_id, person_id, assign_score in updates
@@ -2567,7 +2580,7 @@ def reset_auto_assignments(
         params.append(person_id)
     cursor = connection.cursor()
     cursor.execute(
-        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL,"
+        "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL, penalize = NULL,"
         f" assigned_at = NULL WHERE {' AND '.join(clauses)}",
         tuple(params),
     )
@@ -2596,23 +2609,34 @@ def save_media_scores(
     )
 
 
+#: 人物の区分（`Person.category`・#110）。NULL は家族。
+CATEGORY_CLOSE = "close"
+#: 人物の重みの既定（`Person.weight` が NULL のとき）。
+DEFAULT_PERSON_WEIGHT = 1.0
+
+
 def family_faces(
     connection: sqlite3.Connection,
     media_ids: Optional[Sequence[int]] = None,
     assign_sources: Sequence[str] = (ASSIGN_MANUAL, ASSIGN_AUTO),
 ) -> List[Dict[str, Any]]:
-    """家族の顔（既定は手本と自動割り当て）の、写真の良さを決める列だけを読む。
+    """割り当てのある顔（既定は手本と自動割り当て）の、写真の良さを決める列だけを読む。
 
     **サムネイルも特徴量も読まない**（数万件になるため）。
     ``media_ids`` を渡すとその写真の顔だけ。``assign_sources`` で種別を絞る
     （`select` の `include_auto_assigned: false` は手本だけ・#89）。
+
+    **親しい人の顔も返す**（#110）。``close`` が真の行は親しい人で、家族には数えない
+    （`is_family` で分ける）。``person_weight`` は人物の重み（未設定は 1.0）。
     """
     sources = list(assign_sources)
     query = (
-        "SELECT media_id, person_id, assign_source, aligned, yaw, sharpness,"
-        " eye_blink, mouth_smile, bbox_top, bbox_right, bbox_bottom, bbox_left"
-        " FROM Face WHERE person_id IS NOT NULL"
-        f" AND assign_source IN ({','.join('?' for _ in sources)})"
+        "SELECT F.media_id, F.person_id, F.assign_source, F.aligned, F.yaw, F.sharpness,"
+        " F.eye_blink, F.mouth_smile, F.bbox_top, F.bbox_right, F.bbox_bottom, F.bbox_left,"
+        f" COALESCE(P.weight, {DEFAULT_PERSON_WEIGHT}) AS person_weight,"
+        f" COALESCE(P.category = '{CATEGORY_CLOSE}', 0) AS close"
+        " FROM Face F JOIN Person P ON P.id = F.person_id"
+        f" WHERE F.assign_source IN ({','.join('?' for _ in sources)})"
     )
     params: List[Any] = sources
     if media_ids is None:
@@ -2625,53 +2649,63 @@ def family_faces(
         found.extend(
             dict(row)
             for row in connection.execute(
-                f"{query} AND media_id IN ({placeholders})", params + chunk
+                f"{query} AND F.media_id IN ({placeholders})", params + chunk
             )
         )
     return found
 
 
-def family_embeddings(connection: sqlite3.Connection) -> Tuple[np.ndarray, np.ndarray]:
-    """家族の顔（手本と自動割り当て）の ``(人物 ID の配列, 特徴量の行列)``（#100）。
+def is_family(row: Dict[str, Any]) -> bool:
+    """`family_faces` の行が家族の顔か（親しい人なら False・#110）。"""
+    return not row.get("close")
 
-    「家族らしさ」の物差し（`strangers`）に使う。`embedding.ACTIVE` の版のものだけ。
-    """
-    rows = connection.execute(
-        "SELECT person_id, embedding FROM Face WHERE person_id IS NOT NULL"
-        " AND assign_source IN (?, ?) AND embedding IS NOT NULL AND embed_version = ?",
-        (ASSIGN_MANUAL, ASSIGN_AUTO, embedding_model.ACTIVE.version),
-    ).fetchall()
-    if not rows:
-        return np.empty((0,), dtype=np.int64), np.empty((0, EMBEDDING_DIM), dtype=EMBEDDING_DTYPE)
-    return (
-        np.asarray([row[0] for row in rows], dtype=np.int64),
-        np.vstack([decode_embedding(row[1]) for row in rows]),
+
+def set_person_scoring(
+    connection: sqlite3.Connection, person_id: int, close: bool, weight: float
+) -> None:
+    """人物の区分（家族か親しい人か）と重みを書く（#110）。重みは 0 以上。"""
+    if not (weight >= 0 and weight != float("inf")):
+        raise ValueError(f"人物の重みは 0 以上の数にしてください: {weight!r}")
+    connection.execute(
+        "UPDATE Person SET category = ?, weight = ? WHERE id = ?",
+        (CATEGORY_CLOSE if close else None, float(weight), person_id),
     )
+    connection.commit()
 
 
-def other_faces(
+def set_face_penalty(
+    connection: sqlite3.Connection, face_ids: Sequence[int], penalize: bool
+) -> int:
+    """除外した顔に「減点する」の印を付ける／外す（#110）。**除外の顔にだけ効く。** 変えた件数を返す。"""
+    if not face_ids:
+        return 0
+    cursor = connection.cursor()
+    cursor.executemany(
+        "UPDATE Face SET penalize = ? WHERE id = ? AND assign_source = ?",
+        [(1 if penalize else None, face_id, ASSIGN_REJECTED) for face_id in face_ids],
+    )
+    connection.commit()
+    return cursor.rowcount
+
+
+def penalized_faces(
     connection: sqlite3.Connection, media_ids: Iterable[int]
 ) -> List[Dict[str, Any]]:
-    """``media_ids`` の写真の、**家族でない顔**（未割当・除外）の矩形と特徴量（#100）。
-
-    サムネイルは読まない。特徴量は `embedding.ACTIVE` の版のものだけ（違えば None）。
-    """
+    """``media_ids`` の写真の、**減点する顔**（除外して印を付けた顔）の矩形（#110）。"""
     found: List[Dict[str, Any]] = []
     ids = list(media_ids)
     for start in range(0, len(ids), 500):
         chunk = ids[start : start + 500]
         placeholders = ",".join("?" for _ in chunk)
-        for row in connection.execute(
-            "SELECT id, media_id, assign_source, bbox_top, bbox_right, bbox_bottom, bbox_left,"
-            " embedding, embed_version FROM Face"
-            " WHERE (assign_source IS NULL OR assign_source = ?)"
-            f" AND media_id IN ({placeholders})",
-            [ASSIGN_REJECTED] + chunk,
-        ):
-            item = dict(row)
-            same_model = item.pop("embed_version") == embedding_model.ACTIVE.version
-            item["embedding"] = decode_embedding(item["embedding"]) if same_model else None
-            found.append(item)
+        found.extend(
+            dict(row)
+            for row in connection.execute(
+                "SELECT id, media_id, bbox_top, bbox_right, bbox_bottom, bbox_left FROM Face"
+                " WHERE assign_source = ? AND penalize = 1"
+                f" AND media_id IN ({placeholders})",
+                [ASSIGN_REJECTED] + chunk,
+            )
+        )
     return found
 
 

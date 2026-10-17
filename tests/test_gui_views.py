@@ -278,7 +278,11 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
     assert _menu_texts(window) == [photoarchive_gui.ACTION_REJECT]
 
     _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
-    assert _menu_texts(window) == [photoarchive_gui.ACTION_UNASSIGN]
+    assert _menu_texts(window) == [
+        photoarchive_gui.ACTION_PENALIZE,
+        photoarchive_gui.ACTION_UNPENALIZE,
+        photoarchive_gui.ACTION_UNASSIGN,
+    ]
 
     _select(window, scope=photoarchive_gui.SCOPE_AUTO)
     assert _menu_texts(window) == [
@@ -808,3 +812,22 @@ def test_the_person_view_is_sorted_by_the_shown_age_on_every_page(tmp_path, monk
         assert ages == [1, 5, 7, 9, 13], ages
     finally:
         window.connection.close()
+
+
+def test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark(seeded):
+    """除外の一覧で「select で減点する」を押すと印が付き、一覧に出る。外すと消える（#110）。"""
+    window, faces, _persons = seeded
+    _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
+    window.face_list.selectAll()
+    assert window.action_penalize.isEnabled() and not window.action_unpenalize.isEnabled()
+
+    window._set_penalty_selected(True)
+    row = window.connection.execute("SELECT penalize FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
+    assert row[0] == 1
+    assert any(photoarchive_gui.PENALIZE_MARK in label for label in _labels(window))
+
+    window.face_list.selectAll()
+    window._set_penalty_selected(False)
+    row = window.connection.execute("SELECT penalize FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
+    assert row[0] is None
+    assert not any(photoarchive_gui.PENALIZE_MARK in label for label in _labels(window))
