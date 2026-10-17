@@ -295,10 +295,27 @@ def measure(models: Models, image: Image.Image, size: Tuple[int, int]) -> Measur
 CHUNK_SIZE = 20
 
 
+#: ファイルに届かなかった（未マウント・NFS の読み損ね）。**記録せず、次の `assess` で測り直す**（PR #111 の指摘1）。
+MISSING = object()
+
+
+def _unreachable(error: Exception) -> bool:
+    """ファイルに届かなかったか（中身が壊れているのとは別）。
+
+    Pillow の「画像として読めない」（`UnidentifiedImageError`・途中で切れた JPEG）も `OSError` だが
+    ``errno`` を持たない。``errno`` を持つ `OSError`（ファイルが無い・権限・NFS の入出力エラー）は、
+    写真ではなく置き場の問題なので記録しない。
+    """
+    return isinstance(error, OSError) and getattr(error, "errno", None) is not None
+
+
 def _load(path: Path):
     try:
         return load_photo(path)
-    except Exception as error:  # 壊れた写真・NFS の読み損ね。1枚で止めない
+    except Exception as error:  # 1枚で止めない
+        if _unreachable(error):
+            logger.warning("Photo not reachable for assess (not recorded): %s: %s", path, error)
+            return MISSING
         logger.warning("Cannot read photo for assess: %s: %s", path, error)
         return None
 
@@ -313,20 +330,27 @@ def assess(
 ) -> dict:
     """家族の写った写真のうち、まだ測っていない写真を測って書く（`photoarchive assess`）。
 
-    **NFS の読み込みと推論を重ねる**（次の写真を別のスレッドで先に読む）。読めなかった写真は
-    ``readable=0`` で残し、次からは読まない。``limit`` は試しに数枚だけ測るとき。
-    返すのは ``{"total": 対象, "measured": 測れた, "unreadable": 読めなかった}``。
+    **NFS の読み込みと推論を重ねる**（次の写真を別のスレッドで先に読む）。中身が壊れていて読めなかった写真は
+    ``readable=0`` で残し、次からは読まない。**ファイルに届かなかった写真は記録しない**（未マウントのまま流しても、
+    マウントし直せば次で測る・PR #111 の指摘1）。``root_paths`` に**無い root があれば始める前に止める**
+    （`FileNotFoundError`。`scan` と同じ）。``limit`` は試しに数枚だけ測るとき。
+    返すのは ``{"total": 対象, "measured": 測れた, "unreadable": 読めなかった, "missing": 届かなかった}``。
     """
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
     from . import db  # noqa: PLC0415
 
+    absent = [str(root) for root in root_paths if not Path(root).is_dir()]
+    if absent:
+        raise FileNotFoundError(
+            f"写真の置き場が見つかりません: {', '.join(absent)}（マウントされていない可能性があります）"
+        )
     sources = assign_sources or (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
     targets = db.photos_to_assess(connection, MODEL_VERSION, sources)
     if limit is not None:
         targets = targets[:limit]
     total = len(targets)
-    summary = {"total": total, "measured": 0, "unreadable": 0}
+    summary = {"total": total, "measured": 0, "unreadable": 0, "missing": 0}
     if not total:
         return summary
 
@@ -345,7 +369,9 @@ def assess(
             loaded = upcoming.result()
             if index + 1 < total:
                 upcoming = reader.submit(_load, resolve(targets[index + 1][1]))
-            if loaded is None:
+            if loaded is MISSING:
+                summary["missing"] += 1
+            elif loaded is None:
                 pending.append((media_id, None))
                 summary["unreadable"] += 1
             else:

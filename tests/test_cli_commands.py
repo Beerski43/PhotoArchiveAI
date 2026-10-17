@@ -742,3 +742,29 @@ def test_assess_without_the_models_says_how_to_make_them(tmp_path, monkeypatch):
     monkeypatch.setattr(quality.Models, "load", classmethod(missing))
     with pytest.raises(SystemExit, match="export_iqa_onnx.py"):
         run_cli(["assess", "--db", str(database)], tmp_path)
+
+
+def test_assess_reports_photos_it_could_not_reach(tmp_path, monkeypatch, capsys):
+    """見つからなかった写真は記録せず、マウントを確かめるよう案内する（PR #111 の指摘1）。"""
+    from photoarchive_ai import quality
+    from tests.test_quality import FakeModels
+
+    database = tmp_path / "photoarchive.db"
+    connection = db.ensure_database(str(database))
+    media_id = db.save_media(connection, {
+        "path": str(tmp_path / "gone.jpg"), "filename": "gone.jpg", "type": "image",
+        "file_hash": "h", "file_size": 1, "created_time": "2020-01-01T00:00:00",
+    })
+    db.add_face(
+        connection, media_id=media_id, bbox=(0, 10, 10, 0), embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        person_id=db.add_person(connection, "${PERSON_1}"), assign_source=db.ASSIGN_MANUAL,
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(quality.Models, "load", classmethod(lambda cls: FakeModels()))
+
+    run_cli(["assess", "--db", str(database)], tmp_path)
+    assert "見つからなかった写真: 1 枚" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="マウント"):
+        run_cli(["assess", "--db", str(database), "--source", str(tmp_path / "unmounted")], tmp_path)

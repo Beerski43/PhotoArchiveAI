@@ -326,15 +326,18 @@ def _run_assess(args, settings, db_path: str) -> None:
     with ensure_database(db_path) as connection:
         source_roots = _source_roots(args, settings, connection)
         logger.info("Assess started. Log file: %s", log_file)
-        summary = quality.assess(
-            connection,
-            models,
-            root_paths=source_roots,
-            progress_callback=lambda current, total, detail: _emit_progress(
-                current, total, detail, prefix="Assessing"
-            ),
-            limit=args.limit,
-        )
+        try:
+            summary = quality.assess(
+                connection,
+                models,
+                root_paths=source_roots,
+                progress_callback=lambda current, total, detail: _emit_progress(
+                    current, total, detail, prefix="Assessing"
+                ),
+                limit=args.limit,
+            )
+        except FileNotFoundError as error:  # 写真の置き場が無い（未マウント）
+            raise SystemExit(str(error)) from error
     _reset_progress_state()
     if summary["total"] == 0:
         print("測る写真はありません（家族の写った写真はすべて測ってあります）。")
@@ -343,6 +346,11 @@ def _run_assess(args, settings, db_path: str) -> None:
         f"測った写真: {summary['measured']} 枚 / 読めなかった写真: {summary['unreadable']} 枚"
         f"（対象 {summary['total']} 枚）。"
     )
+    if summary["missing"]:
+        print(
+            f"見つからなかった写真: {summary['missing']} 枚（記録していません。"
+            "マウントを確かめて、もう一度 photoarchive assess を流してください）。"
+        )
 
 
 def _run_reembed(args, db_path: str) -> None:

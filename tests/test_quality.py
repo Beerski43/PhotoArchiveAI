@@ -142,7 +142,7 @@ def test_assess_measures_only_family_photos_and_only_once(connection, tmp_path):
     models = FakeModels()
 
     first = quality.assess(connection, models)
-    assert first == {"total": 1, "measured": 1, "unreadable": 0}
+    assert first == {"total": 1, "measured": 1, "unreadable": 0, "missing": 0}
     stored = db.photo_quality(connection, quality.MODEL_VERSION)
     assert list(stored) == [family]
     assert stored[family]["technical"] == 41.0
@@ -177,10 +177,35 @@ def test_assess_continues_where_it_stopped(connection, tmp_path, monkeypatch):
 
 
 def test_an_unreadable_photo_is_recorded_and_not_read_again(connection, tmp_path):
-    _photo(connection, tmp_path, "missing.jpg", write=False)
-    assert quality.assess(connection, FakeModels()) == {"total": 1, "measured": 0, "unreadable": 1}
+    """**中身が壊れた写真**は `readable=0` で残し、次からは読まない（差し替えればハッシュが変わって消える）。"""
+    _photo(connection, tmp_path, "broken.jpg", write=False)
+    (tmp_path / "broken.jpg").write_bytes(b"not a jpeg")
+    assert quality.assess(connection, FakeModels()) == {
+        "total": 1, "measured": 0, "unreadable": 1, "missing": 0,
+    }
     assert db.photo_quality(connection, quality.MODEL_VERSION) == {}
     assert quality.assess(connection, FakeModels())["total"] == 0
+
+
+def test_a_missing_photo_is_not_recorded_and_is_measured_after_remount(connection, tmp_path):
+    """**ファイルに届かない写真は記録しない**（PR #111 の指摘1）。NFS が未マウントのまま流しても、
+    マウントし直せば次で測る。以前は `readable=0` が書かれ、二度と測られなかった。"""
+    for i in range(5):
+        _photo(connection, tmp_path, f"p{i}.jpg", write=False)
+    first = quality.assess(connection, FakeModels())
+    assert first == {"total": 5, "measured": 0, "unreadable": 0, "missing": 5}
+    assert connection.execute("SELECT COUNT(*) FROM PhotoQuality").fetchone()[0] == 0
+    for i in range(5):
+        Image.new("RGB", (40, 30)).save(tmp_path / f"p{i}.jpg")
+    assert quality.assess(connection, FakeModels())["measured"] == 5
+
+
+def test_assess_stops_before_starting_when_a_root_is_missing(connection, tmp_path):
+    """写真の置き場（root）が無ければ始める前に止める（`scan` と同じ・一晩の空振りを防ぐ）。"""
+    _photo(connection, tmp_path, "a.jpg")
+    with pytest.raises(FileNotFoundError, match="マウント"):
+        quality.assess(connection, FakeModels(), root_paths=[str(tmp_path / "unmounted")])
+    assert connection.execute("SELECT COUNT(*) FROM PhotoQuality").fetchone()[0] == 0
 
 
 def test_a_new_model_version_measures_everything_again(connection, tmp_path, monkeypatch):

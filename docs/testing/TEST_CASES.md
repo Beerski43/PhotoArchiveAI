@@ -787,7 +787,7 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
-### `test_quality.py` — 写真全体の良し悪し（21件＋`models` 1件。#106）
+### `test_quality.py` — 写真全体の良し悪し（23件＋`models` 1件。#106）
 
 **前処理は pyiqa（PyTorch）の処理を numpy に写したもの。** 正解値は PyTorch で作って埋め込んだ。写真の点まで一致することは `scripts/export_iqa_onnx.py` が実物のモデルで確かめる。
 
@@ -802,7 +802,9 @@
 | `test_the_models_are_required_with_how_to_make_them` | モデルが無ければ書き出し方を示して落ちる |
 | `test_assess_measures_only_family_photos_and_only_once` | 家族の写った写真だけ・**測った写真は二度と読まない** |
 | `test_assess_continues_where_it_stopped` | **途中で止めても続きから測る**（塊ごとに書く） |
-| `test_an_unreadable_photo_is_recorded_and_not_read_again` | 読めなかった写真は `readable=0` で残し、読み直さない |
+| `test_an_unreadable_photo_is_recorded_and_not_read_again` | **中身が壊れた**写真は `readable=0` で残し、読み直さない |
+| `test_a_missing_photo_is_not_recorded_and_is_measured_after_remount` | **ファイルに届かない写真は記録しない。** マウントし直せば次で測る（未マウントで全部が二度と測られなくなっていた。PR #111 の指摘1） |
+| `test_assess_stops_before_starting_when_a_root_is_missing` | 写真の置き場が無ければ始める前に止める（`scan` と同じ） |
 | `test_a_new_model_version_measures_everything_again` | 版が変われば測り直す |
 | `test_a_changed_file_loses_its_old_measurement` | **ハッシュが変わったら消す**。属性だけの変化では消さない |
 | `test_deleting_the_media_deletes_its_measurement` | `Media` を消すと連鎖して消える |
@@ -867,7 +869,7 @@
 | `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
 | `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
-### `test_cli_commands.py` — サブコマンドの配線（33件）
+### `test_cli_commands.py` — サブコマンドの配線（34件）
 
 | テスト | 内容 |
 |---|---|
@@ -891,6 +893,7 @@
 | `test_select_warns_about_old_automatic_assignments_only_when_it_uses_them`（2件） | 自動割り当てを使わない `select` は、その規則が古いという知らせを出さない（#89） |
 | `test_assess_measures_with_the_models_and_reports_the_counts` | `assess` が測って件数を出し、2回目は「測る写真はありません」（#106） |
 | `test_assess_without_the_models_says_how_to_make_them` | モデルが無ければ置き方を示して止まる |
+| `test_assess_reports_photos_it_could_not_reach` | 見つからなかった写真の数とマウントの案内を出す。置き場が無ければ止まる（PR #111 の指摘1） |
 
 ### `test_config.py` — 設定の探索（25件）
 
