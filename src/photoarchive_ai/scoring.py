@@ -185,6 +185,28 @@ STRANGER_PENALTY = 30.0
 #: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
 UNKNOWN = 0.5
 
+# --- 写真全体の良し悪し（#106・`photoarchive assess` が測る `PhotoQuality`）-----------------
+#: 画質（MUSIQ・KonIQ）をこの範囲で 0〜1 に直す。
+TECHNICAL_POOR = 40.0
+TECHNICAL_GOOD = 75.0
+#: 美しさ（NIMA・AVA）をこの範囲で 0〜1 に直す。
+AESTHETIC_POOR = 4.0
+AESTHETIC_GOOD = 5.5
+#: 白飛び・黒つぶれの画素の割合がこれ以上で 1（減点いっぱい）。
+CLIP_FULL = 0.25
+#: 顔の矩形が写真の縁からこの割合（長辺に対して）以内なら、見切れとみなす。
+CUTOFF_MARGIN = 0.005
+#: 写真の重みの既定（#106・2026-10-16 に利用者が決めた）。実データの複製で `select` の出力 638 枚のうち
+#: 152 枚が入れ替わる（外れた写真の画質の平均 63.6 → 入った写真 74.5）。
+#: **白飛び・黒つぶれは 0**: 白背景の写真館の写真・ろうそくのケーキのような、わざとの白や黒を落とした。
+#: **見切れも 0**: 落ちるのは自撮りと寄りの写真が多く、切れていない写真と混ざった。どちらも GUI で動かせる。
+#: 測定は docs/history/details/2026-10-16-photo-quality-weights-measured.md。
+WEIGHT_TECHNICAL = 0.3
+WEIGHT_AESTHETIC = 0.1
+WEIGHT_HIGHLIGHTS = 0.0
+WEIGHT_SHADOWS = 0.0
+WEIGHT_CUTOFF = 0.0
+
 
 def sharpness_level(sharpness: Optional[float]) -> float:
     """鮮明さを 0〜1 に直す（対数目盛り）。未計測は `UNKNOWN`。"""
@@ -243,6 +265,12 @@ class Weights(NamedTuple):
     smile: float
     member_bonus: float
     stranger_penalty: float
+    #: 写真全体（#106）。画質・美しさは足し、白飛び・黒つぶれ・顔の見切れは引く（どれも 100 × 重み × 0〜1）。
+    technical: float = WEIGHT_TECHNICAL
+    aesthetic: float = WEIGHT_AESTHETIC
+    highlights: float = WEIGHT_HIGHLIGHTS
+    shadows: float = WEIGHT_SHADOWS
+    cutoff: float = WEIGHT_CUTOFF
 
     @classmethod
     def default(cls) -> "Weights":
@@ -250,7 +278,60 @@ class Weights(NamedTuple):
         return cls(
             WEIGHT_SHARPNESS, WEIGHT_FRONTAL, WEIGHT_EYES, WEIGHT_SMILE,
             MEMBER_BONUS, STRANGER_PENALTY,
+            WEIGHT_TECHNICAL, WEIGHT_AESTHETIC, WEIGHT_HIGHLIGHTS, WEIGHT_SHADOWS, WEIGHT_CUTOFF,
         )
+
+
+def _between(value: float, low: float, high: float) -> float:
+    return max(0.0, min(1.0, (value - low) / (high - low)))
+
+
+def technical_level(technical: Optional[float]) -> float:
+    """画質（MUSIQ）を 0〜1 に。未計測は `UNKNOWN`。"""
+    return UNKNOWN if technical is None else _between(technical, TECHNICAL_POOR, TECHNICAL_GOOD)
+
+
+def aesthetic_level(aesthetic: Optional[float]) -> float:
+    """美しさ（NIMA）を 0〜1 に。未計測は `UNKNOWN`。"""
+    return UNKNOWN if aesthetic is None else _between(aesthetic, AESTHETIC_POOR, AESTHETIC_GOOD)
+
+
+def clip_level(share: Optional[float]) -> float:
+    """白飛び・黒つぶれの割合を 0〜1 に。**未計測は 0**（分からない欠点で引かない）。"""
+    return 0.0 if share is None else _between(share, 0.0, CLIP_FULL)
+
+
+def is_cut_off(face, width: Optional[int], height: Optional[int]) -> bool:
+    """顔の矩形が写真の縁に接しているか。``face`` は `db.family_faces` の行。大きさが分からなければ False。"""
+    if not width or not height:
+        return False
+    margin = CUTOFF_MARGIN * max(width, height)
+    return (
+        face["bbox_left"] <= margin
+        or face["bbox_top"] <= margin
+        or face["bbox_right"] >= width - margin
+        or face["bbox_bottom"] >= height - margin
+    )
+
+
+def cutoff_level(faces, quality) -> float:
+    """家族の顔のうち、写真の縁で切れている顔の割合（0〜1）。未計測は 0。"""
+    if not faces or not quality:
+        return 0.0
+    cut = sum(is_cut_off(face, quality.get("width"), quality.get("height")) for face in faces)
+    return cut / len(faces)
+
+
+def photo_parts(faces, quality, weights: "Weights") -> dict:
+    """写真全体の点（#106）。``quality`` は `db.photo_quality` の1行（未計測は None）。"""
+    quality = quality or {}
+    return {
+        "technical": 100.0 * weights.technical * technical_level(quality.get("technical")),
+        "aesthetic": 100.0 * weights.aesthetic * aesthetic_level(quality.get("aesthetic")),
+        "highlights": -100.0 * weights.highlights * clip_level(quality.get("highlight_clip")),
+        "shadows": -100.0 * weights.shadows * clip_level(quality.get("shadow_clip")),
+        "cutoff": -100.0 * weights.cutoff * cutoff_level(faces, quality),
+    }
 
 
 def family_face_score(
@@ -313,15 +394,24 @@ def family_photo_score(faces, weights: Optional[Weights] = None) -> float:
     return best + weights.member_bonus * max(0, len(members) - 1)
 
 
-def photo_breakdown(faces, stranger_weight: float = 0.0, weights: Optional[Weights] = None) -> dict:
+#: 内訳の項目（`photo_breakdown`）。顔・人数・他人のあとに写真全体（#106）。
+BREAKDOWN_KEYS = (
+    "sharpness", "frontal", "eyes", "smile", "members", "strangers",
+    "technical", "aesthetic", "highlights", "shadows", "cutoff",
+)
+
+
+def photo_breakdown(
+    faces, stranger_weight: float = 0.0, weights: Optional[Weights] = None, quality=None
+) -> dict:
     """写真1枚の点の**内訳**（#104。GUI で「なぜこの順位か」を見せる）。
 
-    ``family_photo_score(faces, weights) - weights.stranger_penalty * stranger_weight`` と
-    同じ式を項目に分けたもの。``total`` は各項目の和で、`family_photo_scores` の点と一致する。
-    家族の顔が無ければ全部 0。
+    ``family_photo_score(faces, weights) - weights.stranger_penalty * stranger_weight`` に
+    写真全体の点（`photo_parts`・#106）を足した式を項目に分けたもの。``total`` は各項目の和で、
+    `family_photo_scores` の点と一致する。家族の顔が無ければ全部 0。
     """
     weights = weights or Weights.default()
-    parts = {key: 0.0 for key in ("sharpness", "frontal", "eyes", "smile", "members", "strangers")}
+    parts = {key: 0.0 for key in BREAKDOWN_KEYS}
     if faces:
         best = max(
             faces,
@@ -341,24 +431,30 @@ def photo_breakdown(faces, stranger_weight: float = 0.0, weights: Optional[Weigh
         }
         parts["members"] = weights.member_bonus * max(0, len(members) - 1)
         parts["strangers"] = -weights.stranger_penalty * stranger_weight
+        parts.update(photo_parts(faces, quality, weights))
     parts["total"] = sum(parts.values())
     return parts
 
 
-def family_photo_scores(rows, strangers=None, weights: Optional[Weights] = None) -> dict:
+def family_photo_scores(
+    rows, strangers=None, weights: Optional[Weights] = None, quality=None
+) -> dict:
     """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。
 
     ``strangers`` は写真ごとの目立つ他人の重み（`strangers.weights`。1人で最大 1）。
     重み 1 につき `STRANGER_PENALTY` を引く（#100。利用者の要望「家族以外の顔がある場合は、
-    select の対象になりにくいように」）。
+    select の対象になりにくいように」）。``quality`` は写真ごとの良し悪し（`db.photo_quality`・#106）。
+    写真全体の重みがすべて 0 なら、#106 の前と同じ点になる。
     """
     strangers = strangers or {}
+    quality = quality or {}
     weights = weights or Weights.default()
     by_media: dict = {}
     for row in rows:
         by_media.setdefault(row["media_id"], []).append(row)
-    return {
-        media_id: family_photo_score(faces, weights)
-        - weights.stranger_penalty * strangers.get(media_id, 0)
-        for media_id, faces in by_media.items()
-    }
+    scores = {}
+    for media_id, faces in by_media.items():
+        score = family_photo_score(faces, weights) - weights.stranger_penalty * strangers.get(media_id, 0)
+        score += sum(photo_parts(faces, quality.get(media_id), weights).values())
+        scores[media_id] = score
+    return scores

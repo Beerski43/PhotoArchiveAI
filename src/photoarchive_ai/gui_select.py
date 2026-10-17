@@ -68,6 +68,12 @@ WEIGHT_FIELDS = (
     ("smile", "笑顔", 0.05),
     ("member_bonus", "家族1人ごとの加点", 1.0),
     ("stranger_penalty", "目立つ他人の減点", 1.0),
+    # 写真全体（#106・`photoarchive assess` で測る）
+    ("technical", "画質（ぶれ・ピンぼけ・暗さ）", 0.05),
+    ("aesthetic", "美しさ（構図）", 0.05),
+    ("highlights", "白飛びの減点", 0.05),
+    ("shadows", "黒つぶれの減点", 0.05),
+    ("cutoff", "顔の見切れの減点", 0.05),
 )
 #: 重みの入力の桁と上限。**ルールの値を丸めない・頭打ちにしない**（PR #108 のレビュー指摘3。
 #: 画面の値が CLI と黙ってずれ、保存すると丸めた値が残っていた）。`load_rule` は 0 以上なら受け付ける。
@@ -99,6 +105,11 @@ BREAKDOWN_LABELS = (
     ("smile", "笑顔"),
     ("members", "家族の人数"),
     ("strangers", "目立つ他人"),
+    ("technical", "画質"),
+    ("aesthetic", "美しさ"),
+    ("highlights", "白飛び"),
+    ("shadows", "黒つぶれ"),
+    ("cutoff", "顔の見切れ"),
 )
 
 YEAR_UNKNOWN = "年不明"
@@ -170,11 +181,21 @@ def _pixmap(image: Image.Image) -> QPixmap:
     return QPixmap.fromImage(qimage.copy())
 
 
-def format_breakdown(parts: Dict[str, float]) -> str:
-    """点の内訳を1行ずつの文字に。"""
+def format_breakdown(parts: Dict[str, float], measured: Optional[Dict[str, Any]] = None) -> str:
+    """点の内訳を1行ずつの文字に。``measured`` は写真の測定値（`db.photo_quality` の1行・#106）。
+
+    重みが 0 でも測った値は見せる（重みを決める手がかりにする）。測っていなければそう書く。
+    """
     lines = [f"点 {parts['total']:.1f}"]
     for key, label in BREAKDOWN_LABELS:
         lines.append(f"  {label}: {parts[key] + 0.0:+.1f}")  # -0.0 を出さない
+    if measured:
+        lines.append(
+            f"測定値: 画質 {measured['technical']:.1f}・美しさ {measured['aesthetic']:.2f}"
+            f"・白飛び {measured['highlight_clip']:.1%}・黒つぶれ {measured['shadow_clip']:.1%}"
+        )
+    else:
+        lines.append("測定値: まだ測っていません（photoarchive assess）")
     return "\n".join(lines)
 
 
@@ -587,7 +608,8 @@ class SelectionPanel(QWidget):
         path = Path(media.get("path", ""))
         place = f"{format_folder(str(path.parent), self.source_roots or None)}/{path.name}"
         taken = media.get("shooting_date") or "撮影日時なし"
-        self.detail.setText(f"{place}\n{taken}\n{format_breakdown(parts)}")
+        measured = self.candidates.quality.get(media_id)
+        self.detail.setText(f"{place}\n{taken}\n{format_breakdown(parts, measured)}")
 
     # ------------------------------------------------------------------
     # 保存と出力

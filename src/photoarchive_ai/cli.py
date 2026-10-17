@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from . import db
+from . import db, quality
 from .config import (
     find_legacy_settings_path,
     get_database_path,
@@ -173,6 +173,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_log_level(reembed_parser)
 
+    assess_parser = subparsers.add_parser(
+        "assess",
+        help="家族の写った写真の良し悪し（画質・美しさ・白飛び・黒つぶれ）を測る。まだ測っていない写真だけ。",
+    )
+    assess_parser.add_argument("--db", help="SQLite database path.")
+    assess_parser.add_argument(
+        "--source",
+        action="append",
+        help="相対パスで登録されたメディアを解く root。何度でも書ける。",
+    )
+    assess_parser.add_argument(
+        "--limit", type=int, help="先頭 N 枚だけ測る（動作確認用）。"
+    )
+    _add_log_level(assess_parser)
+
     convert_parser = subparsers.add_parser("convert-heic", help="Convert HEIC/HEIF files to JPEG.")
     convert_parser.add_argument(
         "--source", action="append", help="変換するディレクトリ（再帰）。何度でも書ける。"
@@ -294,6 +309,48 @@ def _run_migrate(args, db_path: str) -> None:
     )
     if rebuilt:
         print("次の手順: photoarchive scan → photoarchive-gui で顔を割り当て → photoarchive match")
+
+
+def _run_assess(args, settings, db_path: str) -> None:
+    """写真の良し悪しを測る（#106）。**元写真を NFS から読む**ので、初回は一晩かかる。
+
+    途中で止めてよい（20 枚ごとに書くので、次は続きから測る）。
+    """
+    log_file = Path("data/logs") / f"assess_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = _setup_logging(log_file, args.log_level)
+    _reset_progress_state()
+    try:
+        models = quality.Models.load()
+    except FileNotFoundError as error:
+        raise SystemExit(str(error)) from error
+    with ensure_database(db_path) as connection:
+        source_roots = _source_roots(args, settings, connection)
+        logger.info("Assess started. Log file: %s", log_file)
+        try:
+            summary = quality.assess(
+                connection,
+                models,
+                root_paths=source_roots,
+                progress_callback=lambda current, total, detail: _emit_progress(
+                    current, total, detail, prefix="Assessing"
+                ),
+                limit=args.limit,
+            )
+        except FileNotFoundError as error:  # 写真の置き場が無い（未マウント）
+            raise SystemExit(str(error)) from error
+    _reset_progress_state()
+    if summary["total"] == 0:
+        print("測る写真はありません（家族の写った写真はすべて測ってあります）。")
+        return
+    print(
+        f"測った写真: {summary['measured']} 枚 / 読めなかった写真: {summary['unreadable']} 枚"
+        f"（対象 {summary['total']} 枚）。"
+    )
+    if summary["missing"]:
+        print(
+            f"見つからなかった写真: {summary['missing']} 枚（記録していません。"
+            "マウントを確かめて、もう一度 photoarchive assess を流してください）。"
+        )
 
 
 def _run_reembed(args, db_path: str) -> None:
@@ -569,6 +626,10 @@ def main() -> None:
 
         if args.command == "reembed":
             _run_reembed(args, db_path)
+            return
+
+        if args.command == "assess":
+            _run_assess(args, settings, db_path)
             return
 
         if args.command == "convert-heic":

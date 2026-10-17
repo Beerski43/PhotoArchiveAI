@@ -22,7 +22,8 @@ PhotoArchiveAI は、長期間保存された家族の写真・動画アーカ�
 6. `photoarchive match` で、割り当てきれなかった顔を自動で紐づけます。結果が
    信用できなければ `photoarchive unassign-auto` で取り消せます。
 7. `photoarchive evaluate` で、`match` の取りこぼしと誤りの割合を確かめます（任意）。
-8. `config/rule.yml` を編集し、`photoarchive select` でコピー先へ出力します。
+8. `photoarchive assess` で、家族の写った写真の良し悪し（画質・美しさ・白飛び・黒つぶれ）を測ります（任意。初回は一晩）。
+9. `config/rule.yml` を編集し、`photoarchive select` でコピー先へ出力します。
 
 設計・仕様の詳細は [仕様書](docs/spec/Specification.md)、開発の道筋は [実装プラン](docs/plan/ROADMAP.md)、これまでの経緯は [作業履歴](docs/history/WORKLOG.md) にあります。文書の索引は [docs/README.md](docs/README.md)。
 
@@ -117,6 +118,27 @@ python scripts/fetch_models.py
 69.8% → 95.2%。測定は
 [docs/history/details/2026-10-02-embedding-model-comparison.md](docs/history/details/2026-10-02-embedding-model-comparison.md)。
 比べ直すときは `python scripts/measure_embedding_models.py --db data/photoarchive.db`。
+
+### 写真の良し悪しのモデル（MUSIQ・NIMA）の書き出し — `assess` を使うなら
+
+`photoarchive assess` は、写真の画質（MUSIQ）と美しさ（NIMA）を ONNX のモデルで測ります。**配布元が無いので、
+pyiqa の学習済みモデルから一度だけ書き出します。** 書き出しには PyTorch と pyiqa が要りますが、**アプリの仮想環境には
+入れません**（約 2.4GB。アプリは今ある `onnxruntime` だけで測ります）。リポジトリの外に別の仮想環境を作って流します。
+
+```bash
+cd PhotoArchiveAI   # clone したリポジトリの直下
+python3 -m venv ../iqa-venv
+../iqa-venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+../iqa-venv/bin/pip install pyiqa onnx onnxruntime
+../iqa-venv/bin/python -I scripts/export_iqa_onnx.py --out models
+```
+
+- `models/iqa_musiq_koniq.onnx`（104MB）と `models/iqa_nima_ava.onnx`（208MB）ができます。学習済みの重みは初回に
+  pyiqa が Hugging Face から落とします
+- 書き出したあと、アプリの前処理（numpy）+ ONNX が pyiqa と同じ値を出すかを確かめます。写真でも比べるときは
+  `--db data/photoarchive.db`（読み取り専用で開きます）
+- 書き出したら、その仮想環境は消してかまいません
+- **無くても `select` は動きます**（測っていない写真は、良いとも悪いとも扱いません）
 
 SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` などはPython標準ライブラリのため、個別インストールは不要です。
 
@@ -336,6 +358,23 @@ photoarchive evaluate --keep-same-media
 
 **1人につき、別の写真から2枚以上**割り当てていないと測れません（その顔を抜くと手本が残らないため、評価から外れます）。測り方の詳細は [仕様書 §8.5](docs/spec/Specification.md)。
 
+### 補足. 写真の良し悪しを測る（`assess`・任意）
+
+```bash
+photoarchive assess
+```
+
+**家族の写った写真**（手本か自動割り当ての顔がある写真）の**画質**（ぶれ・ピンぼけ・暗さ。MUSIQ）・**美しさ**（構図。NIMA）・
+**白飛び・黒つぶれ**を測って、データベースに残します。`select` はその値を並びに使います（重みはルールの `weights` か、
+GUI の「写真の選定」タブで変えます）。
+
+- **元写真を読むので、初回は一晩かかります**（実データで 1 枚 約 1.5 秒・約 1.6 万枚で約 7 時間）。2回目からは、
+  まだ測っていない写真だけを測ります
+- **途中で止めてかまいません**（Ctrl+C）。20 枚ごとに書くので、もう一度流せば続きから測ります
+- 中身が壊れていて読めなかった写真は記録して、次からは読みません。**見つからなかった写真は記録しません**（NFS が外れていても、マウントし直してもう一度流せば測ります）。写真の置き場が無ければ始める前に止まります
+- モデルが無ければ、置き方を示して止まります（上の「写真の良し悪しのモデルの書き出し」）
+- 試しに数枚だけ測るときは `--limit 10`
+
 ### 8. 抽出ルールに基づく選択とコピー
 
 `config/rule.sample.yml` をコピーして `config/rule.yml` とし、必要に応じて編集します。
@@ -367,6 +406,11 @@ include_auto_assigned: true  # 自動割り当ての顔も家族として数え�
 #   smile: 0.20        # 笑顔
 #   member_bonus: 20   # はっきり写った家族が1人増えるごとの加点
 #   stranger_penalty: 30  # 目立つ他人1人ぶんの減点
+#   technical: 0.3     # 写真の画質（ぶれ・ピンぼけ・暗さ。photoarchive assess で測る）
+#   aesthetic: 0.1     # 写真の美しさ（構図）
+#   highlights: 0      # 白飛びの減点
+#   shadows: 0         # 黒つぶれの減点
+#   cutoff: 0          # 家族の顔が写真の縁で切れているときの減点
 ```
 
 **年ごとの枚数は、年ごとに書くこともできます。** そのときは**書いていない年からは選びません**（撮影時期の分からない写真も選びません）。
@@ -385,7 +429,7 @@ count_per_year:
 photoarchive select
 ```
 
-**家族の写真としての良さで並べます。** 家族の顔がボケていない・正面を向いている・笑顔であるほど上に来て、はっきり写った家族が多いほど優先します（他人の顔は点に入れません）。点は実行のたびにいまの割り当てから計算するので、GUI で直した割り当てもすぐ効きます。家族の顔の写り方をまだ測っていなければ、先に測ります（初回は数分）。
+**家族の写真としての良さで並べます。** 家族の顔がボケていない・正面を向いている・笑顔であるほど上に来て、はっきり写った家族が多いほど優先します（他人の顔は点に入れません）。点は実行のたびにいまの割り当てから計算するので、GUI で直した割り当てもすぐ効きます。`photoarchive assess` で測った写真は、**写真全体の画質と美しさ**も点に入ります（測っていない写真と動画は、良いとも悪いとも扱いません）。家族の顔の写り方をまだ測っていなければ、先に測ります（初回は数分）。
 
 **同じ場面の連写や見た目の似た写真は、いちばん上の1枚だけを残します。** 同じフォルダで同じ日に撮られ（時間は問いません）、写っている家族が1人でも重なり、見た目も近い写真を同じ場面とみなします。さらに、**同じ年に選んだ写真と見た目がほぼ同じ写真**（別の端末のフォルダにある写しや、送られてきて保存し直した写真）は、フォルダや撮影日時が無くても外します（両方に撮影日時があって日付が違えば外しません）。見た目は候補の写真だけ測ってデータベースに残すので、元写真を読むのは初回だけです（JPEG はふつう先頭の数十KBだけ読みます。ただし写しを比べるとき、片方に EXIF のサムネイルが無ければ、両方を元写真から丸ごと読んで比べます。その値も残すので2回目からは読みません。`count_per_year` を書かないルールでは、初回にこの読み直しが多くなることがあります）。束ねたくなければ `remove_similar: false` にします。
 
@@ -467,6 +511,7 @@ PhotoArchiveAI/
     check_private_terms.py     公開しない語（家族の名前・パスなど）の検査と置き換え
     measure_heic_duplicates.py convert-heic の「同じ写真」の閾値を実データで測る
     measure_iqa.py             写真の良し悪しモデル（IQA）を試す（PyTorch と pyiqa は別の仮想環境に入れる）
+    export_iqa_onnx.py         MUSIQ・NIMA を ONNX に書き出して models/ に置く（同じく別の仮想環境で）
     restore_heic_exif.py       撮影日時を落とした変換済み JPEG に EXIF を戻す（一度きりの修復）
   config/
     app_settings.sample.yml    アプリ設定のサンプル
@@ -491,6 +536,7 @@ PhotoArchiveAI/
       reembed.py               保存済みサムネイルから特徴量を作り直す
       dates.py                 日付の読み取りと年齢の計算
       scoring.py               笑顔・画質のスコアと、家族写真としての良さ
+      quality.py               写真全体の良し悪し(画質・美しさ・白飛び・黒つぶれ)を測る(photoarchive assess)
       appearance.py            顔の写り方(整列できるか・向き・鮮明さ)をサムネイルから測る
       matcher.py               自動紐づけ
       recommend.py             顔を「この人物に似た順」に並べる(GUI の顔候補の推薦)

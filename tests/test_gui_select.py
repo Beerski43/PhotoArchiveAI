@@ -305,3 +305,20 @@ def test_the_later_row_covers_years_after_this_one(tmp_path):
     later = gui_select.later_year()
     limit = selection.year_limits({"count_per_year": {2019: 1, f"{later}+": 3, "unknown": 2}})
     assert (limit(2019), limit(2020), limit(later), limit(later + 5), limit(None)) == (1, 0, 3, 3, 2)
+
+
+def test_every_weight_has_a_field_on_the_screen(window):
+    """重みを足したら画面にも出す（#106 の5つ）。順は `scoring.Weights` と同じ。"""
+    assert [key for key, _, _ in gui_select.WEIGHT_FIELDS] == list(scoring.Weights._fields)
+    assert set(window.selection.weight_spins) == set(scoring.Weights._fields)
+    assert [key for key, _ in gui_select.BREAKDOWN_LABELS] == list(scoring.BREAKDOWN_KEYS)
+
+
+def test_the_breakdown_shows_the_measured_values_or_says_they_are_missing():
+    """重みが 0 でも測った値は見せる（重みを決める手がかり）。測っていなければそう書く。"""
+    parts = {key: 0.0 for key, _ in gui_select.BREAKDOWN_LABELS}
+    parts["total"] = 0.0
+    measured = {"technical": 72.34, "aesthetic": 5.123, "highlight_clip": 0.031, "shadow_clip": 0.0}
+    text = gui_select.format_breakdown(parts, measured)
+    assert "画質 72.3" in text and "美しさ 5.12" in text and "白飛び 3.1%" in text
+    assert "photoarchive assess" in gui_select.format_breakdown(parts)

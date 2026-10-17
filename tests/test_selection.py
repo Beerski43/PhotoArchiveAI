@@ -229,7 +229,9 @@ def test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo
     ])
     _add(connection, "crisp-manual.jpg", faces=[_face("${PERSON_4}", smile=0.0)])
 
-    selected = select_media(connection, {"include_auto_assigned": False})
+    # 顔の点だけを見る（写真全体の重みは 0。未計測の写真は画質・美しさが真ん中で足されるため・#106）
+    rule = {"include_auto_assigned": False, "weights": {"technical": 0, "aesthetic": 0}}
+    selected = select_media(connection, rule)
 
     assert _paths(selected) == ["crisp-manual.jpg", "blurred-manual.jpg"]
     assert selected[1]["family_score"] == 0.0
@@ -928,7 +930,7 @@ def test_the_full_image_is_read_only_once_without_count_per_year(
 # 重みと年ごとの枚数をルールに出す・候補の用意と選ぶを分ける（#103）
 # ---------------------------------------------------------------------------
 
-from photoarchive_ai.selection import choose, prepare, rule_weights, year_limits  # noqa: E402
+from photoarchive_ai.selection import choose, explain, prepare, rule_weights, year_limits  # noqa: E402
 
 
 def _blurred_smile_and_sharp_straight(connection):
@@ -1111,3 +1113,44 @@ def test_an_earlier_choice_keeps_its_scores(connection):
     score = first[0]["family_score"]
     choose(candidates, {"weights": {"smile": 0.0}})
     assert first[0]["family_score"] == score
+
+
+# ---------------------------------------------------------------------------
+# 写真全体の良し悪し（#106）
+# ---------------------------------------------------------------------------
+
+
+def _measured(connection, media_id, technical, *, highlight=0.0):
+    from photoarchive_ai import quality
+
+    db.save_photo_quality(
+        connection, [(media_id, (technical, 5.0, highlight, 0.0, 1000, 800))], quality.MODEL_VERSION
+    )
+
+
+def test_select_reads_the_photo_quality_and_its_weight_changes_the_order(connection):
+    """`prepare` が `PhotoQuality` を読み、`choose` が画質の重みで並べる。重み 0 では並びが変わらない。"""
+    first = _add(connection, "first.jpg", faces=[_face("${PERSON_4}")])
+    second = _add(connection, "second.jpg", faces=[_face("${PERSON_4}")])
+    _measured(connection, first, 30.0)
+    _measured(connection, second, 75.0)
+    candidates = prepare(connection)
+    off = {"weights": {"technical": 0, "aesthetic": 0}}
+    assert _paths(choose(candidates, off)) == ["first.jpg", "second.jpg"]
+    assert _paths(choose(candidates, {})) == ["second.jpg", "first.jpg"]  # 既定は画質 0.3
+
+
+def test_the_explanation_includes_the_photo_parts(connection):
+    media_id = _add(connection, "blown.jpg", faces=[_face("${PERSON_4}")])
+    _measured(connection, media_id, 75.0, highlight=0.25)
+    candidates = prepare(connection)
+    parts = explain(candidates, {"weights": {"technical": 0.3, "highlights": 0.4}}, media_id)
+    assert parts["technical"] == pytest.approx(30.0)
+    assert parts["highlights"] == pytest.approx(-40.0)
+
+
+def test_the_photo_weights_can_be_written_in_the_rule(tmp_path: Path):
+    path = tmp_path / "rule.yml"
+    path.write_text("weights:\n  technical: 0.3\n  aesthetic: 0.1\n  cutoff: 0.2\n", encoding="utf-8")
+    weights = rule_weights(load_rule(str(path)))
+    assert (weights.technical, weights.aesthetic, weights.cutoff) == (0.3, 0.1, 0.2)

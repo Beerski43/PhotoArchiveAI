@@ -35,7 +35,7 @@ import numpy as np
 from . import embedding as embedding_model
 from .dates import Taken, age_at, calculate_age, folder_date_range, parse_date, taken_at
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 #: 特徴量の次元数。**書き写さない。** いま使うモデルの記述から引く
 #: （`embedding_model.ACTIVE`）。モデルを替えると変わる（dlib 128 / ArcFace 512）。
@@ -245,6 +245,25 @@ SCHEMA = [
     "quality_score REAL,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE"
     ")",
+    # **写真全体の良し悪し**（v11・#106）。`photoarchive assess` が家族の写った写真を測って書く。
+    # `technical` は MUSIQ（画質・おおむね 0〜100）、`aesthetic` は NIMA（美しさ・1〜10）、
+    # `highlight_clip` / `shadow_clip` は白飛び・黒つぶれの画素の割合（0〜1）。
+    # `width` / `height` は元写真の大きさ（**EXIF の向きを直す前**。顔の矩形と同じ座標）。
+    # `readable` = 0 は読めなかった写真（次からは読まない。`model_version` が変われば測り直す）。
+    # **中身から測った値なので、ファイルのハッシュが変わったら `save_media` が消す。**
+    "CREATE TABLE IF NOT EXISTS PhotoQuality ("
+    "media_id INTEGER PRIMARY KEY,"
+    "model_version TEXT NOT NULL,"
+    "readable INTEGER NOT NULL,"
+    "technical REAL,"
+    "aesthetic REAL,"
+    "highlight_clip REAL,"
+    "shadow_clip REAL,"
+    "width INTEGER,"
+    "height INTEGER,"
+    "measured_at TEXT NOT NULL,"
+    "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE"
+    ")",
     # **人物の名前は重複不可**（v9・#90）。SQLite は既存の列に制約を足せないので、
     # 一意索引で持つ（効き目は UNIQUE 制約と同じ）。比べ方は完全一致。
     # 同名のある既存DBには張れないので、`migrate` が先に調べて止める
@@ -271,7 +290,9 @@ SCHEMA = [
     f"CREATE INDEX IF NOT EXISTS idx_media_event ON Media({folder_expression()}, {day_expression()})",
 ]
 
-KNOWN_TABLES = ("Media", "Person", "Face", "FaceEmbedding", "AnalysisResult", "ScanRoot")
+KNOWN_TABLES = (
+    "Media", "Person", "Face", "FaceEmbedding", "AnalysisResult", "ScanRoot", "PhotoQuality",
+)
 
 
 class SchemaVersionError(RuntimeError):
@@ -618,6 +639,9 @@ def save_media(connection: sqlite3.Connection, media: Dict[str, Any]) -> int:
         f"UPDATE Media SET {assignments} WHERE path = ?",
         tuple(media.get(column) for column in columns) + (media["path"],),
     )
+    if row["file_hash"] != media["file_hash"]:
+        # 写真の良し悪しも中身から測った値（#106）。別の写真の値で並べない。
+        cursor.execute("DELETE FROM PhotoQuality WHERE media_id = ?", (row["id"],))
     connection.commit()
     return row["id"]
 
@@ -632,6 +656,70 @@ def save_look_hashes(connection: sqlite3.Connection, rows: Sequence[Tuple[int, s
     )
     connection.commit()
     return cursor.rowcount
+
+
+#: `photoarchive assess` の測定値の列（`quality.Measured` と同じ順）。
+PHOTO_QUALITY_COLUMNS = ("technical", "aesthetic", "highlight_clip", "shadow_clip", "width", "height")
+
+
+def photos_to_assess(
+    connection: sqlite3.Connection,
+    model_version: str,
+    assign_sources: Sequence[str] = (ASSIGN_MANUAL, ASSIGN_AUTO),
+) -> List[Tuple[int, str]]:
+    """写真の良し悪しをまだ測っていない、家族の写った画像の ``(media_id, path)``（#106）。
+
+    **差分だけ。** ``model_version`` で測った行（読めなかった行も）があれば外す。版が違えば測り直す。
+    """
+    sources = list(assign_sources)
+    rows = connection.execute(
+        "SELECT M.id, M.path FROM Media M"
+        " WHERE M.type = 'image'"
+        "   AND EXISTS (SELECT 1 FROM Face F WHERE F.media_id = M.id AND F.person_id IS NOT NULL"
+        f"               AND F.assign_source IN ({','.join('?' for _ in sources)}))"
+        "   AND NOT EXISTS (SELECT 1 FROM PhotoQuality Q WHERE Q.media_id = M.id"
+        "                   AND Q.model_version = ?)"
+        " ORDER BY M.id",
+        sources + [model_version],
+    ).fetchall()
+    return [(row[0], row[1]) for row in rows]
+
+
+def save_photo_quality(
+    connection: sqlite3.Connection,
+    rows: Sequence[Tuple[int, Optional[Sequence[Any]]]],
+    model_version: str,
+) -> int:
+    """``(media_id, 測定値)`` を書く。測定値が None なら「読めなかった」として残す（#106）。
+
+    **塊ごとに呼んで確定する**（`assess` を途中で止めても、書いた分は残る）。
+    """
+    if not rows:
+        return 0
+    now = _utc_now()
+    values = []
+    for media_id, measured in rows:
+        readable = measured is not None
+        numbers = tuple(measured) if readable else (None,) * len(PHOTO_QUALITY_COLUMNS)
+        values.append((media_id, model_version, int(readable)) + numbers + (now,))
+    columns = ("media_id", "model_version", "readable") + PHOTO_QUALITY_COLUMNS + ("measured_at",)
+    connection.executemany(
+        f"INSERT OR REPLACE INTO PhotoQuality ({','.join(columns)})"
+        f" VALUES ({','.join('?' for _ in columns)})",
+        values,
+    )
+    connection.commit()
+    return len(values)
+
+
+def photo_quality(connection: sqlite3.Connection, model_version: str) -> Dict[int, Dict[str, Any]]:
+    """``model_version`` で測れた写真の良し悪し（media_id → 列）。**読めなかった行・別の版は返さない。**"""
+    rows = connection.execute(
+        f"SELECT media_id, {','.join(PHOTO_QUALITY_COLUMNS)} FROM PhotoQuality"
+        " WHERE model_version = ? AND readable = 1",
+        (model_version,),
+    )
+    return {row[0]: dict(zip(PHOTO_QUALITY_COLUMNS, row[1:])) for row in rows}
 
 
 def list_media(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
@@ -2600,7 +2688,12 @@ def recompute_family_scores(connection: sqlite3.Connection) -> None:
     from . import strangers
 
     rows = family_faces(connection)
-    scores = scoring.family_photo_scores(rows, strangers.weights(connection, rows))
+    from .quality import MODEL_VERSION
+
+    # 写真全体の良し悪し（`PhotoQuality`・#106）も `select` と同じく読む（既定の重みで同じ点になるように）
+    scores = scoring.family_photo_scores(
+        rows, strangers.weights(connection, rows), quality=photo_quality(connection, MODEL_VERSION)
+    )
     cursor = connection.cursor()
     cursor.execute("UPDATE AnalysisResult SET family_score = 0.0")
     cursor.executemany(
