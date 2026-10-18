@@ -781,7 +781,7 @@
 | `test_a_face_the_landmarker_cannot_find_is_recorded_and_not_measured_again` | **取れなかった顔は 0 を書き、測り直さない** |
 | `test_nothing_is_written_when_the_model_is_missing` | **モデルが無いときは書かない**（「測れない」と「取れなかった」を混ぜない） |
 | `test_the_real_loader_gives_up_quietly_without_the_model_file` | 実物の読み込み口はモデルが無ければ None |
-| `test_closed_eyes_lower_the_face_and_an_open_smile_raises_it` | 目閉じは下げ、笑顔は上げる（重みどおり） |
+| `test_closed_eyes_lower_the_face_and_an_open_smile_raises_it` | 目閉じは下げ、笑顔は上げる（重みどおり）。目を閉じた家族は人数に数えないので、1人目からの加点も付かない |
 | `test_a_family_member_with_closed_eyes_is_not_counted_as_clearly_pictured` | **目を閉じた家族は人数に数えない**（利用者の決定） |
 | `test_an_unmeasured_expression_neither_helps_nor_excludes` | 未計測は 0.5・人数からも外さない |
 | `test_half_closed_eyes_are_scored_between_open_and_closed` | 0.3〜0.5 は直線 |
@@ -834,12 +834,14 @@
 | `test_select_and_match_use_the_same_penalty` | `select` の並びと `match` の `family_score` は同じ式 |
 | `test_a_family_photo_with_a_penalized_face_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
 
-### `test_person_weights.py` — 人物ごとの重みと親しい人（7件。#110）
+### `test_person_weights.py` — 人物ごとの重みと親しい人（9件。#110）
 
 | テスト | 内容 |
 |---|---|
-| `test_with_every_weight_at_one_the_score_is_the_one_from_before` | **全員 1.0・区分なしなら #110 の前と同じ点** |
-| `test_a_person_weight_scales_the_face_and_the_member_bonus` | 人物の重みは顔の点と人数の加点の両方にかかる（人数は「重みの和 − いちばん小さい重み」） |
+| `test_with_every_weight_at_one_the_score_is_the_one_from_before` | 全員 1.0・区分なし: いちばん良い顔の点 ＋ はっきり写った家族1人につき 20（**1人目から**・PR #112 の指摘1） |
+| `test_a_person_weight_scales_the_face_and_the_member_bonus` | 人物の重みは顔の点と人数の加点の両方にかかる（人数は重みの和） |
+| `test_a_person_with_weight_zero_adds_no_member_bonus` | **重み 0 の人物は加点しない**（「重みの和 − 最小」では写るだけで +20 だった・PR #112 の指摘1） |
+| `test_a_lighter_person_adds_their_own_weight_not_the_heavier_one` | 軽い人物は自分の重みぶんだけ足す（重い人物ぶんを足さない） |
 | `test_a_close_person_adds_only_when_family_is_in_the_photo` | 親しい人は家族と一緒のときだけ加点。親しい人だけの写真には点が付かない |
 | `test_family_only_drops_a_photo_with_only_a_close_person` | **親しい人だけの写真は `family_only` で外れる** |
 | `test_the_breakdown_shows_the_close_person_and_adds_up` | 内訳に親しい人の項目が出て、合計が並びの点と一致する |

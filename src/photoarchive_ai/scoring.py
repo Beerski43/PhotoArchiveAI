@@ -176,10 +176,9 @@ CLEAR_SHARPNESS = 0.4
 #: なると（最大 20）、**1人だけ写った笑顔の写真が家族のそろった写真を押しのけた**
 #: （実データの複製で出力 638 枚のうち1人の写真が 97 → 240 枚）。20 で 127 枚。
 MEMBER_BONUS = 20.0
-#: **目立つ他人**の重み 1 あたりに引く点（#100・利用者の決定）。家族に似ていない・家族と
-#: 同じくらい大きく写った他人1人で、この点を引く（`strangers.weights`）。家族1人の加点
-#: （`MEMBER_BONUS`）より重い。実データの複製で、出力 638 枚のうち重みのある写真が
-#: 146 → 37 枚、入れ替わり 112 枚（2026-10-12・#98 を含む develop と比べた値）。
+#: **減点する顔**の重み 1 あたりに引く点（#100・利用者の決定）。除外した顔のうち利用者が印を付けた顔
+#: （`Face.penalize`・#110）が家族と同じくらい大きく写っていると、この点を引く（`strangers.weights`）。
+#: 家族1人の加点（`MEMBER_BONUS`）より重い。
 #: **点は負になりうる**ので、`select` は家族の写った写真を先に並べる（`selection.select_media`）。
 STRANGER_PENALTY = 30.0
 #: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
@@ -398,11 +397,13 @@ def _weighted_face_score(face, weights: "Weights") -> float:
 def _member_parts(family, close, weights: "Weights") -> Tuple[float, float]:
     """人数の加点（家族・親しい人）。
 
-    家族は ``MEMBER_BONUS ×（はっきり写った家族の重みの和 − その中のいちばん小さい重み）``。全員 1.0 なら
-    「2人目から1人につき 20」と同じ。親しい人は ``MEMBER_BONUS × 重みの和``（家族に足す人なので1人目から）。
+    家族も親しい人も ``MEMBER_BONUS × はっきり写った人の重みの和``（**1人目から**。PR #112 の指摘1・利用者の決定）。
+    以前（#66〜#110 の途中）は「2人目から」で、重みを入れたときに「重みの和 − いちばん小さい重み」と書いたため、
+    重み 0 の人物が写るだけで +20 になった。1人目から足しても、全員 1.0 なら家族の写った写真がそろって +20 されるだけで
+    並びは変わらない。
     """
     people = _clear_people(family)
-    members = weights.member_bonus * (sum(people.values()) - min(people.values())) if people else 0.0
+    members = weights.member_bonus * sum(people.values())
     friends = weights.member_bonus * sum(_clear_people(close).values())
     return members, friends
 

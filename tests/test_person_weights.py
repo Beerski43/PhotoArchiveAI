@@ -50,7 +50,10 @@ def people(connection):
 
 
 def test_with_every_weight_at_one_the_score_is_the_one_from_before(connection, people):
-    """**全員 1.0・区分なしなら以前と同じ**: いちばん良い顔の点 ＋ 2人目から1人につき 20。"""
+    """全員 1.0・区分なし: いちばん良い顔の点 ＋ はっきり写った家族1人につき 20（**1人目から**・PR #112 の指摘1）。
+
+    以前は2人目からだったが、家族の写った写真がそろって 20 ずれるだけなので並びは変わらない。
+    """
     father, mother, _ = people
     photo = _media(connection, 1)
     _face(connection, photo, father)
@@ -58,11 +61,11 @@ def test_with_every_weight_at_one_the_score_is_the_one_from_before(connection, p
     rows = db.family_faces(connection)
     assert {row["person_weight"] for row in rows} == {1.0}
     face = scoring.family_face_score(1, 0.0, 200.0, None, None)
-    assert _scores(connection)[photo] == pytest.approx(face + scoring.MEMBER_BONUS)
+    assert _scores(connection)[photo] == pytest.approx(face + 2 * scoring.MEMBER_BONUS)
 
 
 def test_a_person_weight_scales_the_face_and_the_member_bonus(connection, people):
-    """顔の点と人数の加点の両方にかける。人数の加点は「重みの和 − いちばん小さい重み」。"""
+    """顔の点と人数の加点の両方にかける。人数の加点は「はっきり写った家族の重みの和」。"""
     father, mother, _ = people
     db.set_person_scoring(connection, mother, close=False, weight=2.0)
     alone = _media(connection, 1)
@@ -72,8 +75,8 @@ def test_a_person_weight_scales_the_face_and_the_member_bonus(connection, people
     _face(connection, together, mother)
     face = scoring.family_face_score(1, 0.0, 200.0, None, None)
     scores = _scores(connection)
-    assert scores[alone] == pytest.approx(2.0 * face)
-    assert scores[together] == pytest.approx(2.0 * face + 2.0 * scoring.MEMBER_BONUS)
+    assert scores[alone] == pytest.approx(2.0 * face + 2.0 * scoring.MEMBER_BONUS)
+    assert scores[together] == pytest.approx(2.0 * face + 3.0 * scoring.MEMBER_BONUS)
 
 
 def test_a_close_person_adds_only_when_family_is_in_the_photo(connection, people):
@@ -86,8 +89,34 @@ def test_a_close_person_adds_only_when_family_is_in_the_photo(connection, people
     _face(connection, friend_only, friend)
     scores = _scores(connection)
     face = scoring.family_face_score(1, 0.0, 200.0, None, None)
-    assert scores[with_family] == pytest.approx(face + 0.5 * scoring.MEMBER_BONUS)
+    assert scores[with_family] == pytest.approx(face + 1.5 * scoring.MEMBER_BONUS)
     assert friend_only not in scores  # 親しい人だけの写真は家族の写真ではない
+
+
+def test_a_person_with_weight_zero_adds_no_member_bonus(connection, people):
+    """**重み 0 の人物は加点しない**（PR #112 の指摘1。「重みの和 − 最小」では写るだけで +20 だった）。"""
+    father, mother, _ = people
+    db.set_person_scoring(connection, mother, close=False, weight=0.0)
+    alone = _media(connection, 1)
+    _face(connection, alone, father)
+    together = _media(connection, 2)
+    _face(connection, together, father)
+    _face(connection, together, mother)
+    scores = _scores(connection)
+    assert scores[together] == pytest.approx(scores[alone])
+
+
+def test_a_lighter_person_adds_their_own_weight_not_the_heavier_one(connection, people):
+    """軽い人物は**自分の重みぶん**だけ足す（重い人物ぶんを足さない・PR #112 の指摘1）。"""
+    father, mother, _ = people
+    db.set_person_scoring(connection, mother, close=False, weight=2.0)
+    photo = _media(connection, 1)
+    _face(connection, photo, father)
+    _face(connection, photo, mother)
+    weights = scoring.Weights.default()._replace(technical=0, aesthetic=0)
+    parts = scoring.photo_breakdown(db.family_faces(connection), 0.0, weights)
+    alone_members = 2.0 * scoring.MEMBER_BONUS
+    assert parts["members"] - alone_members == pytest.approx(1.0 * scoring.MEMBER_BONUS)
 
 
 def test_family_only_drops_a_photo_with_only_a_close_person(connection, people):
@@ -113,7 +142,7 @@ def test_the_breakdown_shows_the_close_person_and_adds_up(connection, people):
     weights = scoring.Weights.default()._replace(technical=0, aesthetic=0)
     parts = scoring.photo_breakdown(db.family_faces(connection), 0.0, weights)
     assert parts["close"] == pytest.approx(1.5 * scoring.MEMBER_BONUS)
-    assert parts["members"] == pytest.approx((3.0 + 1.0 - 1.0) * scoring.MEMBER_BONUS)
+    assert parts["members"] == pytest.approx((3.0 + 1.0) * scoring.MEMBER_BONUS)
     assert parts["total"] == pytest.approx(_scores(connection)[photo])
 
 

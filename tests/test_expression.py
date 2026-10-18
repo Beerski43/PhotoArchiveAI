@@ -141,7 +141,8 @@ def test_closed_eyes_lower_the_face_and_an_open_smile_raises_it():
     smiling = scoring.family_photo_score([_row(1, mouth_smile=0.4)])
     assert closed < open_neutral < smiling
     assert smiling - open_neutral == pytest.approx(100.0 * scoring.WEIGHT_SMILE)
-    assert open_neutral - closed == pytest.approx(100.0 * scoring.WEIGHT_EYES)
+    # 目を閉じた家族は人数に数えないので、1人目からの加点（PR #112 の指摘1）も付かない
+    assert open_neutral - closed == pytest.approx(100.0 * scoring.WEIGHT_EYES + scoring.MEMBER_BONUS)
 
 
 def test_a_family_member_with_closed_eyes_is_not_counted_as_clearly_pictured():

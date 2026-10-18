@@ -404,7 +404,7 @@ include_auto_assigned: true  # 自動割り当ての顔も家族として数え�
 #   frontal: 0.25      # 正面を向いている
 #   eyes: 0.20         # 目を開けている
 #   smile: 0.20        # 笑顔
-#   member_bonus: 20   # はっきり写った家族が1人増えるごとの加点
+#   member_bonus: 20   # はっきり写った家族1人ごとの加点（1人目から）
 #   stranger_penalty: 30  # 減点する顔（GUI で除外した顔のうち印を付けた顔）1つぶんの減点
 #   technical: 0.3     # 写真の画質（ぶれ・ピンぼけ・暗さ。photoarchive assess で測る）
 #   aesthetic: 0.1     # 写真の美しさ（構図）
