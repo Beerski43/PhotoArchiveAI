@@ -383,6 +383,37 @@ def test_bulk_reject_covers_the_whole_event_but_not_other_days(seeded, monkeypat
         window.connection.close()
 
 
+def test_bulk_unpenalize_keeps_the_faces_rejected(seeded, monkeypatch):
+    """減点対象のまとめ処理は**印だけを外す**（#113）。除外は消さず、別の日の印は残す。"""
+    connection, faces, path = seeded
+    marked = faces["near"] + faces["next_day"]
+    db.reject_faces(connection, marked + faces["far"])
+    db.set_face_penalty(connection, marked, True)
+    connection.commit()
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    window = photoarchive_gui.MainWindow(path)
+    try:
+        for row in range(window.person_list.count()):
+            if (
+                window.person_list.item(row).data(photoarchive_gui.SCOPE_ROLE)
+                == photoarchive_gui.SCOPE_PENALIZED
+            ):
+                window.person_list.setCurrentRow(row)
+                break
+        window.event = ("/photos/wedding", "2011-04-16")
+        window._reset_page()
+        window._bulk_event_action()
+        for face_id in faces["near"] + faces["far"]:
+            face = db.get_face(window.connection, face_id)
+            assert face["assign_source"] == db.ASSIGN_REJECTED
+            assert not face["penalize"]
+        assert db.get_face(window.connection, faces["next_day"][0])["penalize"] == 1
+    finally:
+        window.connection.close()
+
+
 def test_bulk_buttons_stay_disabled_until_an_event_is_chosen(seeded):
     """**行事を選ばないと押せない。** 選ばないと対象が未割当の全件になる。"""
     connection, _faces, path = seeded
@@ -419,6 +450,16 @@ def test_the_bulk_button_changes_meaning_with_the_view(seeded):
                 window.person_list.setCurrentRow(row)
                 break
         assert "除外をすべて取り消す" in window.bulk_event_button.text()
+
+        # 減点対象では未割当へ戻さず、印だけを外す（#113）。
+        for row in range(window.person_list.count()):
+            if (
+                window.person_list.item(row).data(photoarchive_gui.SCOPE_ROLE)
+                == photoarchive_gui.SCOPE_PENALIZED
+            ):
+                window.person_list.setCurrentRow(row)
+                break
+        assert "減点をすべてやめる" in window.bulk_event_button.text()
     finally:
         window.connection.close()
 

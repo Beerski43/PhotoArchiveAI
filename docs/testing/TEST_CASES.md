@@ -78,7 +78,7 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（40件）
+### `test_db.py` — スキーマと永続化（41件）
 
 | テスト | 内容 |
 |---|---|
@@ -105,6 +105,7 @@
 | `test_every_list_filter_also_works_for_counting_and_for_bulk` | **一覧・件数・まとめて処理が、同じ絞り込みを受け取ること**（`_face_filter` の引数が正本） |
 | `test_bulk_face_ids_can_be_narrowed_by_the_month_range` | まとめて処理する対象が撮影年月の絞り込みに従う |
 | `test_face_counts_are_gathered_in_one_query` | 左の一覧の件数を**1回の問い合わせ**で数える（人数ぶんの問い合わせにしない） |
+| `test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize` | 「減点対象」の絞り込みが一覧・件数・まとめて処理・左の件数で同じ顔を指す。**除外でない顔に残った印は数えない**（#113） |
 | `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「誰でもない顔」は外す・記録は消さない） |
 | `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
 | `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
@@ -422,9 +423,8 @@
 | `test_unassigning_is_blocked_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
-| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付け外しでき、一覧に `[減点]` と出る（#110） |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（29件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（30件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -432,12 +432,12 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_the_left_list_puts_the_views_above_the_persons` | 表示3つ → 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
+| `test_the_left_list_puts_the_views_above_the_persons` | 表示4つ（未割当・自動割当・除外済み・減点対象）→ 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
 | `test_the_left_list_shows_how_much_work_is_left` | 残りの件数が出て、操作のたびに数え直す |
 | `test_selecting_a_person_shows_the_faces_assigned_to_them` | **人物を選ぶことが、旧「割り当て済みを確認」。** 別ウィンドウは開かない |
 | `test_the_person_filters_only_appear_for_a_person` | 種別・年齢は人物のときだけ出す（誕生日が無いと年齢は計算できない） |
 | `test_each_view_starts_with_the_order_that_suits_it` | 表示ごとに既定の並びへ戻す。**同じ表示のあいだは選んだ並びを変えない** |
-| `test_dragging_a_person_above_the_views_does_not_move_them` | 表示3行はドラッグで動かない。人物の並び順だけを保存する |
+| `test_dragging_a_person_above_the_views_does_not_move_them` | 表示の行はドラッグで動かない。人物の並び順だけを保存する |
 | `test_the_menu_only_offers_what_the_view_can_do` | **その表示でできることだけ**をメニューに出す |
 | `test_the_menu_lists_every_person_as_an_assign_target` | 割り当て先はメニューが持つ |
 | `test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth` | 人物名に撮影時の年齢を添え、**誕生前の写真が混ざっていたら印を付ける** |
@@ -460,6 +460,8 @@
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
 | `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
+| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付け外しでき、一覧に `[減点]` と出る（#110） |
+| `test_the_penalized_view_lists_only_the_faces_marked_to_penalize` | 左の `減点対象` に印のある除外の顔だけが出て、件数がその場で増減する。減点をやめた顔は一覧から消え、除外のまま残る（#113） |
 
 ### `test_recommend.py` — 顔を「この人物に似た順」に並べる（13件）
 
@@ -539,7 +541,7 @@
 | `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
 | `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
 
-### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
+### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（24件）
 
 **1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。
 
@@ -563,6 +565,7 @@
 | `test_people_without_a_birth_date_stay_in_the_list` | 誕生日が未設定の人物は残す |
 | `test_too_many_faces_is_reported_instead_of_truncated` | 上限超過を黙って切らない |
 | `test_bulk_reject_covers_the_whole_event_but_not_other_days` | 行事まるごとの処理が別の日に漏れない |
+| `test_bulk_unpenalize_keeps_the_faces_rejected` | 減点対象のまとめ処理は**印だけを外す**（未割当へ戻さない）。別の日の印は残す（#113） |
 | `test_bulk_buttons_stay_disabled_until_an_event_is_chosen` | **行事を選ぶまで押せない**（押し間違いで全件に効くのを防ぐ） |
 | `test_the_bulk_button_changes_meaning_with_the_view` | 表示に応じてボタンの意味が変わる |
 | `test_splitting_a_cluster_uses_a_tighter_distance` | 大きい束を割れる（実データは 380 件の束を作る） |

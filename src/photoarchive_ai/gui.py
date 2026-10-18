@@ -83,6 +83,7 @@ MONTH_UNDATED = "撮影日時なしのみ"
 FILTER_UNASSIGNED = "未割当"
 FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "除外済み"
+FILTER_PENALIZED = "減点対象"
 
 #: 左の一覧が表す「いま何を見ているか」。
 #:
@@ -92,6 +93,8 @@ FILTER_REJECTED = "除外済み"
 SCOPE_UNASSIGNED = "unassigned"
 SCOPE_AUTO = "auto"
 SCOPE_REJECTED = "rejected"
+#: 除外した顔のうち、`select` で減点する印を付けた顔（#110）。除外済みの一部（#113）。
+SCOPE_PENALIZED = "penalized"
 SCOPE_PERSON = "person"
 #: 人物を選び、種別を「未割当」にしたとき（#69）。**左の一覧の項目ではない**
 #: （`_view_key` が作る）。並びの既定と、意味を持たない並びを決めるのに使う。
@@ -123,6 +126,12 @@ VIEW_SCOPES = (
         FILTER_REJECTED,
         "「家族の誰でもない顔」として外した顔。未割当に戻せる。",
     ),
+    (
+        SCOPE_PENALIZED,
+        FILTER_PENALIZED,
+        "除外した顔のうち、写っている写真を select で減点する顔。"
+        "減点をやめると除外済みに戻る。",
+    ),
 )
 
 #: 並び順の選択肢。``(表示名, 並び)``。
@@ -145,7 +154,7 @@ ORDER_CHOICES = (
 
 #: 表示ごとの既定の並び。**その表示で何をするかで決まる。**
 #:
-#: - 未割当・除外済み: 撮影日時の新しい順。**同じ行事の写真が固まる**ので、
+#: - 未割当・除外済み・減点対象: 撮影日時の新しい順。**同じ行事の写真が固まる**ので、
 #:   まとめて選んで一度に割り当てられる（#53）
 #: - 自動割当: 確信度の低い順。**誤りに早く当たる**
 #: - 人物: 年齢の若い順。**成長の順に並ぶ**ので、年齢の入れ間違いや
@@ -156,6 +165,7 @@ DEFAULT_ORDER = {
     SCOPE_UNASSIGNED: db.ORDER_SHOT_DESC,
     SCOPE_AUTO: db.ORDER_SCORE_ASC,
     SCOPE_REJECTED: db.ORDER_SHOT_DESC,
+    SCOPE_PENALIZED: db.ORDER_SHOT_DESC,
     SCOPE_PERSON: db.ORDER_AGE,
     SCOPE_PERSON_UNASSIGNED: recommend.ORDER_SIMILAR,
 }
@@ -170,6 +180,14 @@ _NO_PERSON_TO_COMPARE = (
     "似ているかを比べる人物がいません。左で人物を選んでください"
     "（未割当の顔は、人物を選んで種別を「未割当」にすると似た順に並びます）"
 )
+_REJECTED_UNUSABLE = {
+    db.ORDER_AGE: "除外した顔は人物を持たないので、年齢を出せません",
+    db.ORDER_AGE_DESC: "除外した顔は人物を持たないので、年齢を出せません",
+    db.ORDER_SCORE_ASC: "除外した顔は自動割り当ての確信度を持ちません",
+    db.ORDER_SCORE_DESC: "除外した顔は自動割り当ての確信度を持ちません",
+    recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
+    recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
+}
 ORDER_UNUSABLE = {
     SCOPE_UNASSIGNED: {
         db.ORDER_AGE: "未割当の顔は人物が決まっていないので、年齢を出せません",
@@ -183,14 +201,9 @@ ORDER_UNUSABLE = {
         recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
         recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
     },
-    SCOPE_REJECTED: {
-        db.ORDER_AGE: "除外した顔は人物を持たないので、年齢を出せません",
-        db.ORDER_AGE_DESC: "除外した顔は人物を持たないので、年齢を出せません",
-        db.ORDER_SCORE_ASC: "除外した顔は自動割り当ての確信度を持ちません",
-        db.ORDER_SCORE_DESC: "除外した顔は自動割り当ての確信度を持ちません",
-        recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
-        recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
-    },
+    SCOPE_REJECTED: _REJECTED_UNUSABLE,
+    # 減点対象は除外済みの一部なので、押せない並びも同じ。
+    SCOPE_PENALIZED: _REJECTED_UNUSABLE,
     SCOPE_PERSON_UNASSIGNED: {
         db.ORDER_SCORE_ASC: "未割当の顔は自動割り当ての確信度を持ちません",
         db.ORDER_SCORE_DESC: "未割当の顔は自動割り当ての確信度を持ちません",
@@ -1683,7 +1696,7 @@ class EventClusterDialog(QDialog):
 class MainWindow(QWidget):
     """1枚の画面で、人物の登録から割り当て・見直しまでを済ませる。
 
-    **左の一覧が「いま何を見ているか」。** 未割当・自動割当・除外済みと、
+    **左の一覧が「いま何を見ているか」。** 未割当・自動割当・除外済み・減点対象と、
     登録した人物が同じ一覧に並ぶ。人物を選ぶと、その人物に割り当て済みの顔が
     右に出る（**以前は別ウィンドウだった**。開き直しの往復が要り、未割当の
     割り当てと見直しが同じ作業の表裏なのに画面が分かれていた）。
@@ -2091,7 +2104,7 @@ class MainWindow(QWidget):
                 item.setData(Qt.UserRole, None)
                 item.setData(SCOPE_ROLE, scope)
                 item.setData(DESCRIPTION_ROLE, description)
-                # **先頭の3つはドラッグで動かさない。** 人物の並び順だけを
+                # **先頭の表示はドラッグで動かさない。** 人物の並び順だけを
                 # 保存するので、混ざると並びの意味が崩れる。
                 item.setFlags(
                     (item.flags() | Qt.ItemFlag.ItemIsSelectable)
@@ -2151,6 +2164,7 @@ class MainWindow(QWidget):
             SCOPE_UNASSIGNED: counts["unassigned"],
             SCOPE_AUTO: counts["auto"],
             SCOPE_REJECTED: counts["rejected"],
+            SCOPE_PENALIZED: counts["penalized"],
         }
         by_person = counts["by_person"]
         for row in range(self.person_list.count()):
@@ -2500,7 +2514,7 @@ class MainWindow(QWidget):
                 self.action_not_this_person,
                 self.action_reject,
             )
-        if scope == SCOPE_REJECTED:
+        if scope in (SCOPE_REJECTED, SCOPE_PENALIZED):
             return (self.action_penalize, self.action_unpenalize, self.action_unassign)
         return (self.action_reject,)
 
@@ -2596,7 +2610,7 @@ class MainWindow(QWidget):
         self.action_undo_rejection.setEnabled(has_selection)
         # 減点の印は除外の顔にだけ付く（`db.set_face_penalty`）
         marked = [bool(record.get("penalize")) for record in records]
-        rejected_view = scope == SCOPE_REJECTED
+        rejected_view = scope in (SCOPE_REJECTED, SCOPE_PENALIZED)
         self.action_penalize.setEnabled(rejected_view and not all(marked) if records else False)
         self.action_unpenalize.setEnabled(rejected_view and any(marked))
 
@@ -2802,6 +2816,8 @@ class MainWindow(QWidget):
             filters = {"assign_source": db.ASSIGN_AUTO}
         elif scope == SCOPE_REJECTED:
             filters = {"assign_source": db.ASSIGN_REJECTED}
+        elif scope == SCOPE_PENALIZED:
+            filters = {"penalized": True}
         else:
             filters = {"unassigned": True}
         # **行事を選んでいないときは `folder` / `day` を渡さない。** 渡すと
@@ -2887,6 +2903,12 @@ class MainWindow(QWidget):
         if self._showing_rejections() or self._showing_unassigned_for_person():
             return ("", "")
         scope = self._current_scope()
+        if scope == SCOPE_PENALIZED:
+            # **未割当へは戻さない。** 戻すと除外まで消える。減点の印だけを外す。
+            return (
+                "この行事の減点をすべてやめる",
+                "この行事で減点する顔の印を、ページをまたいで外します（除外のまま残ります）。",
+            )
         if scope == SCOPE_REJECTED:
             return (
                 "この行事の除外をすべて取り消す",
@@ -2953,6 +2975,7 @@ class MainWindow(QWidget):
             return
 
         rejecting = self._current_scope() == SCOPE_UNASSIGNED
+        unpenalizing = self._current_scope() == SCOPE_PENALIZED
         if rejecting:
             question = (
                 f"{name}\n\n未割当の顔 {len(face_ids):,} 件をまとめて除外します。\n\n"
@@ -2960,6 +2983,12 @@ class MainWindow(QWidget):
                 "除外したあとは、表示を「除外済み」にして取り消せます。"
             )
             title = "まとめて除外"
+        elif unpenalizing:
+            question = (
+                f"{name}\n\n減点する顔 {len(face_ids):,} 件の印をまとめて外します。\n\n"
+                "除外のまま残ります。"
+            )
+            title = "まとめて減点をやめる"
         else:
             question = f"{name}\n\n{len(face_ids):,} 件をまとめて未割当へ戻します。"
             title = "まとめて取り消し"
@@ -2979,6 +3008,13 @@ class MainWindow(QWidget):
                 face_ids,
                 lambda progress: db.reject_faces(self.connection, face_ids, progress=progress),
                 f"完了 — {name} の {len(face_ids):,} 件を除外しました",
+            )
+        elif unpenalizing:
+            self._run_with_progress(
+                "まとめて減点の印を外しています",
+                face_ids,
+                lambda progress: db.set_face_penalty(self.connection, face_ids, False),
+                f"完了 — {name} の {len(face_ids):,} 件の減点をやめました",
             )
         else:
             self._run_with_progress(
@@ -3358,7 +3394,10 @@ class MainWindow(QWidget):
         )
 
     def _set_penalty_selected(self, penalize: bool) -> None:
-        """除外した顔に「select で減点する」の印を付ける／外す（#110）。顔は一覧に残る。"""
+        """除外した顔に「select で減点する」の印を付ける／外す（#110）。
+
+        除外済みでは顔は一覧に残る。減点対象では、印を外した顔が一覧から消える（#113）。
+        """
         face_ids = self._selected_face_ids()
         if not face_ids:
             return

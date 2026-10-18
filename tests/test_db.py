@@ -949,9 +949,33 @@ def test_face_counts_are_gathered_in_one_query(tmp_path: Path):
         assert counts["manual"] == 1
         assert counts["auto"] == 1
         assert counts["rejected"] == 1
+        assert counts["penalized"] == 0
         assert counts["by_person"][person_id] == {"manual": 1, "auto": 0}
         assert counts["by_person"][other] == {"manual": 0, "auto": 1}
         assert sum("SELECT" in text.upper() for text in statements) == 1, statements
+    finally:
+        connection.close()
+
+
+def test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize(tmp_path: Path):
+    """「減点対象」（#113）の絞り込みと件数が、**除外 かつ 印あり**の顔だけを見ること。
+
+    一覧・件数・まとめて処理・左の件数が同じ顔を指す。印が除外でない顔に
+    残っていても（移行の途中など）数えない。
+    """
+    connection = db.ensure_database(str(tmp_path / "penalized.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        db.reject_faces(connection, [faces["古い"], faces["中間"]])
+        db.set_face_penalty(connection, [faces["古い"]], True)
+        # 除外でない顔に印が残っている形を作る（画面からは作れない）。
+        connection.execute("UPDATE Face SET penalize = 1 WHERE id = ?", (faces["新しい"],))
+
+        assert [face["id"] for face in db.list_faces(connection, penalized=True)] == [faces["古い"]]
+        assert db.count_faces(connection, penalized=True) == 1
+        assert db.face_ids(connection, penalized=True) == [faces["古い"]]
+        assert db.face_counts(connection)["penalized"] == 1
+        assert db.face_counts(connection)["rejected"] == 2
     finally:
         connection.close()
 

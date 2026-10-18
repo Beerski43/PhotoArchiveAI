@@ -151,16 +151,18 @@ def test_the_left_list_puts_the_views_above_the_persons(seeded):
 
     rows = _rows(window)
 
-    assert [scope for scope, _ in rows[:3]] == [
+    # 減点対象は除外済みの下（#113・利用者の指定）
+    assert [scope for scope, _ in rows[:4]] == [
         photoarchive_gui.SCOPE_UNASSIGNED,
         photoarchive_gui.SCOPE_AUTO,
         photoarchive_gui.SCOPE_REJECTED,
+        photoarchive_gui.SCOPE_PENALIZED,
     ]
-    assert rows[3][0] is None, "4行目は区切り線"
+    assert rows[4][0] is None, "5行目は区切り線"
     assert not (
-        window.person_list.item(3).flags() & Qt.ItemFlag.ItemIsSelectable
+        window.person_list.item(4).flags() & Qt.ItemFlag.ItemIsSelectable
     ), "区切り線は選べない"
-    assert [scope for scope, _ in rows[4:]] == [photoarchive_gui.SCOPE_PERSON] * 2
+    assert [scope for scope, _ in rows[5:]] == [photoarchive_gui.SCOPE_PERSON] * 2
     assert not hasattr(window, "filter_box"), "表示の combo は残さない"
 
 
@@ -172,7 +174,8 @@ def test_the_left_list_shows_how_much_work_is_left(seeded):
     assert rows[photoarchive_gui.SCOPE_UNASSIGNED].endswith("2")
     assert rows[photoarchive_gui.SCOPE_AUTO].endswith("2")
     assert rows[photoarchive_gui.SCOPE_REJECTED].endswith("1")
-    person4 = window.person_list.item(4).text()
+    assert rows[photoarchive_gui.SCOPE_PENALIZED].endswith("0")
+    person4 = window.person_list.item(5).text()
     assert "手本 1" in person4 and "自動 1" in person4
 
     # 操作したら、その場で数え直す。
@@ -239,25 +242,27 @@ def test_each_view_starts_with_the_order_that_suits_it(seeded):
 
 
 def test_dragging_a_person_above_the_views_does_not_move_them(seeded):
-    """**表示の3行はドラッグで動かない。** 人物の並び順だけを保存する。"""
+    """**表示の行はドラッグで動かない。** 人物の並び順だけを保存する。"""
     window, _faces, persons = seeded
 
     # 2人目（${PERSON_3}）を一覧の先頭へ落としたのと同じこと。
-    moved = window.person_list.model().moveRow(QModelIndex(), 5, QModelIndex(), 0)
+    moved = window.person_list.model().moveRow(QModelIndex(), 6, QModelIndex(), 0)
     assert moved
 
     rows = _rows(window)
-    assert [scope for scope, _ in rows[:3]] == [
+    assert [scope for scope, _ in rows[:4]] == [
         photoarchive_gui.SCOPE_UNASSIGNED,
         photoarchive_gui.SCOPE_AUTO,
         photoarchive_gui.SCOPE_REJECTED,
+        photoarchive_gui.SCOPE_PENALIZED,
     ], "表示は必ず先頭へ戻る"
     # **表示の行は掴めない。人物の行は掴める。**
     assert not (window.person_list.item(0).flags() & Qt.ItemFlag.ItemIsDragEnabled)
     assert not (window.person_list.item(0).flags() & Qt.ItemFlag.ItemIsDropEnabled)
-    assert window.person_list.item(4).flags() & Qt.ItemFlag.ItemIsDragEnabled
+    assert not (window.person_list.item(3).flags() & Qt.ItemFlag.ItemIsDragEnabled)
+    assert window.person_list.item(5).flags() & Qt.ItemFlag.ItemIsDragEnabled
     # 区切り線は選べない・掴めない・落とせない
-    assert window.person_list.item(3).flags() == Qt.ItemFlag.NoItemFlags
+    assert window.person_list.item(4).flags() == Qt.ItemFlag.NoItemFlags
     # 人物の並びは入れ替わっている（${PERSON_3}が先頭）。
     assert [person["name"] for person in db.list_persons(window.connection)] == [
         "${PERSON_3}",
@@ -831,3 +836,43 @@ def test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark(seeded):
     row = window.connection.execute("SELECT penalize FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
     assert row[0] is None
     assert not any(photoarchive_gui.PENALIZE_MARK in label for label in _labels(window))
+
+
+def test_the_penalized_view_lists_only_the_faces_marked_to_penalize(seeded):
+    """左の「減点対象」に、減点の印を付けた除外の顔だけが出る（#113）。
+
+    除外済みの中から印を目で探さずに済むようにする。件数はその場で増減し、
+    減点をやめた顔は一覧から消える（除外のまま残る）。
+    """
+    window, faces, _persons = seeded
+    connection = window.connection
+    another = _add_face(connection, _media(connection, "/photos/2019/c.jpg", "2019-01-01T10:00:00", "h3"))
+    db.reject_faces(connection, [another])
+    window._refresh_counts()
+
+    _select(window, scope=photoarchive_gui.SCOPE_PENALIZED)
+    assert _ids(window) == []
+
+    _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
+    window.face_list.clearSelection()
+    window.face_list.item(_ids(window).index(faces["除外"])).setSelected(True)
+    window._set_penalty_selected(True)
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_PENALIZED].endswith("1")
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_REJECTED].endswith("2")
+
+    _select(window, scope=photoarchive_gui.SCOPE_PENALIZED)
+    assert _ids(window) == [faces["除外"]]
+    assert window._current_order() == db.ORDER_SHOT_DESC
+    assert _menu_texts(window) == [
+        photoarchive_gui.ACTION_PENALIZE,
+        photoarchive_gui.ACTION_UNPENALIZE,
+        photoarchive_gui.ACTION_UNASSIGN,
+    ]
+    window.face_list.selectAll()
+    assert window.action_unpenalize.isEnabled() and not window.action_penalize.isEnabled()
+
+    window._set_penalty_selected(False)
+    assert _ids(window) == []
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_PENALIZED].endswith("0")
+    row = connection.execute("SELECT assign_source FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
+    assert row[0] == db.ASSIGN_REJECTED, "減点をやめても除外のまま"

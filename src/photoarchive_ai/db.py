@@ -1110,6 +1110,7 @@ def count_faces(
     rejected_for_person: Optional[int] = None,
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
+    penalized: bool = False,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -1128,6 +1129,7 @@ def count_faces(
         rejected_for_person=rejected_for_person,
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
+        penalized=penalized,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -1140,6 +1142,7 @@ def face_counts(connection: sqlite3.Connection) -> Dict[str, Any]:
 
     ```
     {"unassigned": 31275, "manual": 10577, "auto": 15467, "rejected": 1287,
+     "penalized": 40,
      "by_person": {3: {"manual": 3325, "auto": 6208}, ...}}
     ```
 
@@ -1152,17 +1155,22 @@ def face_counts(connection: sqlite3.Connection) -> Dict[str, Any]:
     進み具合が見えること自体が作業の支えになる。
     """
     totals = {None: 0, ASSIGN_MANUAL: 0, ASSIGN_AUTO: 0, ASSIGN_REJECTED: 0}
+    penalized = 0
     by_person: Dict[int, Dict[str, int]] = {}
+    # 減点する顔（#113）も同じ問い合わせで数える。条件は `_face_filter` の
+    # ``penalized`` と同じ（除外 かつ ``penalize = 1``）。
     rows = connection.execute(
-        "SELECT person_id, assign_source, COUNT(*) FROM Face"
+        "SELECT person_id, assign_source, COUNT(*), SUM(penalize = 1) FROM Face"
         " GROUP BY person_id, assign_source"
     )
-    for person_id, source, count in rows:
+    for person_id, source, count, marked in rows:
         count = int(count)
         if source not in totals:
             # 知らない種別が入っていても落とさない（移行の途中など）。
             continue
         totals[source] += count
+        if source == ASSIGN_REJECTED:
+            penalized += int(marked or 0)
         if source in (ASSIGN_MANUAL, ASSIGN_AUTO) and person_id is not None:
             entry = by_person.setdefault(int(person_id), {"manual": 0, "auto": 0})
             entry["manual" if source == ASSIGN_MANUAL else "auto"] += count
@@ -1171,6 +1179,7 @@ def face_counts(connection: sqlite3.Connection) -> Dict[str, Any]:
         "manual": totals[ASSIGN_MANUAL],
         "auto": totals[ASSIGN_AUTO],
         "rejected": totals[ASSIGN_REJECTED],
+        "penalized": penalized,
         "by_person": by_person,
     }
 
@@ -1192,6 +1201,7 @@ def face_ids(
     rejected_for_person: Optional[int] = None,
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
+    penalized: bool = False,
 ) -> List[int]:
     """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
 
@@ -1222,6 +1232,7 @@ def face_ids(
         rejected_for_person=rejected_for_person,
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
+        penalized=penalized,
     )
     rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
     return [int(row[0]) for row in rows]
@@ -1583,6 +1594,7 @@ def _face_filter(
     rejected_for_person: Optional[int] = None,
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
+    penalized: bool = False,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -1626,9 +1638,17 @@ def _face_filter(
       読めない顔と、誕生日が読めない場合は外さない（**分からないものを弾かない**）
     - ``not_rejected_for_person``: その人物について「この人物ではない」と
       記録した顔を外す。``rejected_for_person`` の**逆**で、別の指示
+
+    ``penalized`` は「**減点する顔**」（除外して `select` で減点する印を付けた顔・
+    #110）だけを見る指示（#113）。条件は `penalized_faces` と同じ
+    （除外 かつ ``penalize = 1``）。印は除外の顔にしか付かないが、移行の途中などで
+    ほかの顔に残っていても出さない。
     """
     clauses: List[str] = []
     params: List[Any] = []
+    if penalized:
+        clauses.append(f"{prefix}assign_source = ? AND {prefix}penalize = 1")
+        params.append(ASSIGN_REJECTED)
     if unassigned:
         clauses.append(f"{prefix}assign_source IS NULL")
     elif assign_source is not None:
@@ -1757,6 +1777,7 @@ def list_faces(
     rejected_for_person: Optional[int] = None,
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
+    penalized: bool = False,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1802,6 +1823,7 @@ def list_faces(
         rejected_for_person=rejected_for_person,
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
+        penalized=penalized,
     )
     if order in (ORDER_AGE, ORDER_AGE_DESC):
         # **年齢順だけは SQL で並べない。** 下の `_ids_in_age_order` を見ること。
