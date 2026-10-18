@@ -25,7 +25,7 @@ include_auto_assigned: true
 #   eyes: 0.20
 #   smile: 0.20
 #   member_bonus: 20
-#   stranger_penalty: 30
+#   stranger_penalty: 30  # 減点する顔（GUI で除外した顔のうち印を付けた顔）1つぶんの減点
 #   technical: 0.3     # 写真の画質（ぶれ・ピンぼけ・暗さ。photoarchive assess で測る）
 #   aesthetic: 0.1     # 写真の美しさ（構図）
 #   highlights: 0      # 白飛びの減点

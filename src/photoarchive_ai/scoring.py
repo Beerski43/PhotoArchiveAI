@@ -176,10 +176,9 @@ CLEAR_SHARPNESS = 0.4
 #: なると（最大 20）、**1人だけ写った笑顔の写真が家族のそろった写真を押しのけた**
 #: （実データの複製で出力 638 枚のうち1人の写真が 97 → 240 枚）。20 で 127 枚。
 MEMBER_BONUS = 20.0
-#: **目立つ他人**の重み 1 あたりに引く点（#100・利用者の決定）。家族に似ていない・家族と
-#: 同じくらい大きく写った他人1人で、この点を引く（`strangers.weights`）。家族1人の加点
-#: （`MEMBER_BONUS`）より重い。実データの複製で、出力 638 枚のうち重みのある写真が
-#: 146 → 37 枚、入れ替わり 112 枚（2026-10-12・#98 を含む develop と比べた値）。
+#: **減点する顔**の重み 1 あたりに引く点（#100・利用者の決定）。除外した顔のうち利用者が印を付けた顔
+#: （`Face.penalize`・#110）が家族と同じくらい大きく写っていると、この点を引く（`strangers.weights`）。
+#: 家族1人の加点（`MEMBER_BONUS`）より重い。
 #: **点は負になりうる**ので、`select` は家族の写った写真を先に並べる（`selection.select_media`）。
 STRANGER_PENALTY = 30.0
 #: 見え方が測れなかった顔（未計測）の値。**良いとも悪いとも言わない。**
@@ -367,36 +366,70 @@ def is_clear_face(
     )
 
 
-def family_photo_score(faces, weights: Optional[Weights] = None) -> float:
-    """写真1枚の家族写真としての良さ。``faces`` はその写真の**家族の顔だけ**。
+def _person_weight(face) -> float:
+    """顔の人物の重み（`Person.weight`・#110）。行に無ければ 1.0（重みを付けていない人物）。"""
+    value = face.get("person_weight")
+    return 1.0 if value is None else float(value)
 
-    いちばん良い家族の顔の点に、はっきり写った家族の人数ぶん（2人目から）
-    `MEMBER_BONUS` を足す。家族の顔が無ければ 0。
 
-    各要素は ``person_id`` / ``aligned`` / ``yaw`` / ``sharpness`` / ``eye_blink`` /
-    ``mouth_smile`` を持つ辞書（`db.family_faces` の行）。
-    """
-    if not faces:
-        return 0.0
-    weights = weights or Weights.default()
-    best = max(
-        family_face_score(
-            face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"],
-            face["mouth_smile"], weights,
-        )
-        for face in faces
-    )
-    members = {
-        face["person_id"]
+def _split(faces):
+    """家族の顔と親しい人の顔に分ける（`db.family_faces` の ``close``・#110）。"""
+    family = [face for face in faces if not face.get("close")]
+    close = [face for face in faces if face.get("close")]
+    return family, close
+
+
+def _clear_people(faces) -> dict:
+    """はっきり写った人物と、その重み（``{person_id: 重み}``）。"""
+    return {
+        face["person_id"]: _person_weight(face)
         for face in faces
         if is_clear_face(face["aligned"], face["sharpness"], face["eye_blink"])
     }
-    return best + weights.member_bonus * max(0, len(members) - 1)
 
 
-#: 内訳の項目（`photo_breakdown`）。顔・人数・他人のあとに写真全体（#106）。
+def _weighted_face_score(face, weights: "Weights") -> float:
+    return _person_weight(face) * family_face_score(
+        face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"], face["mouth_smile"], weights,
+    )
+
+
+def _member_parts(family, close, weights: "Weights") -> Tuple[float, float]:
+    """人数の加点（家族・親しい人）。
+
+    家族も親しい人も ``MEMBER_BONUS × はっきり写った人の重みの和``（**1人目から**。PR #112 の指摘1・利用者の決定）。
+    以前（#66〜#110 の途中）は「2人目から」で、重みを入れたときに「重みの和 − いちばん小さい重み」と書いたため、
+    重み 0 の人物が写るだけで +20 になった。1人目から足しても、全員 1.0 なら家族の写った写真がそろって +20 されるだけで
+    並びは変わらない。
+    """
+    people = _clear_people(family)
+    members = weights.member_bonus * sum(people.values())
+    friends = weights.member_bonus * sum(_clear_people(close).values())
+    return members, friends
+
+
+def family_photo_score(faces, weights: Optional[Weights] = None) -> float:
+    """写真1枚の家族写真としての良さ。``faces`` はその写真の割り当てのある顔（家族と親しい人）。
+
+    **人物の重み × 顔の良さ**がいちばん大きい家族の顔の点に、人数の加点（`_member_parts`）を足す。
+    家族の顔が無ければ 0（親しい人だけの写真は家族の写真ではない・#110）。
+
+    各要素は ``person_id`` / ``aligned`` / ``yaw`` / ``sharpness`` / ``eye_blink`` /
+    ``mouth_smile`` を持つ辞書（`db.family_faces` の行）。``person_weight`` と ``close`` は無ければ
+    1.0・家族とみなす。
+    """
+    family, close = _split(faces)
+    if not family:
+        return 0.0
+    weights = weights or Weights.default()
+    best = max(_weighted_face_score(face, weights) for face in family)
+    members, friends = _member_parts(family, close, weights)
+    return best + members + friends
+
+
+#: 内訳の項目（`photo_breakdown`）。顔・人数・親しい人・他人のあとに写真全体（#106）。
 BREAKDOWN_KEYS = (
-    "sharpness", "frontal", "eyes", "smile", "members", "strangers",
+    "sharpness", "frontal", "eyes", "smile", "members", "close", "strangers",
     "technical", "aesthetic", "highlights", "shadows", "cutoff",
 )
 
@@ -408,30 +441,22 @@ def photo_breakdown(
 
     ``family_photo_score(faces, weights) - weights.stranger_penalty * stranger_weight`` に
     写真全体の点（`photo_parts`・#106）を足した式を項目に分けたもの。``total`` は各項目の和で、
-    `family_photo_scores` の点と一致する。家族の顔が無ければ全部 0。
+    `family_photo_scores` の点と一致する。家族の顔が無ければ全部 0。顔の項目には、いちばん良い
+    家族の顔の人物の重みをかけてある（#110）。
     """
     weights = weights or Weights.default()
     parts = {key: 0.0 for key in BREAKDOWN_KEYS}
-    if faces:
-        best = max(
-            faces,
-            key=lambda face: family_face_score(
-                face["aligned"], face["yaw"], face["sharpness"], face["eye_blink"],
-                face["mouth_smile"], weights,
-            ),
-        )
-        parts["sharpness"] = 100.0 * weights.sharpness * sharpness_level(best["sharpness"])
-        parts["frontal"] = 100.0 * weights.frontal * frontal_level(best["aligned"], best["yaw"])
-        parts["eyes"] = 100.0 * weights.eyes * eyes_level(best["eye_blink"])
-        parts["smile"] = 100.0 * weights.smile * smile_level(best["mouth_smile"])
-        members = {
-            face["person_id"]
-            for face in faces
-            if is_clear_face(face["aligned"], face["sharpness"], face["eye_blink"])
-        }
-        parts["members"] = weights.member_bonus * max(0, len(members) - 1)
+    family, close = _split(faces)
+    if family:
+        best = max(family, key=lambda face: _weighted_face_score(face, weights))
+        scale = 100.0 * _person_weight(best)
+        parts["sharpness"] = scale * weights.sharpness * sharpness_level(best["sharpness"])
+        parts["frontal"] = scale * weights.frontal * frontal_level(best["aligned"], best["yaw"])
+        parts["eyes"] = scale * weights.eyes * eyes_level(best["eye_blink"])
+        parts["smile"] = scale * weights.smile * smile_level(best["mouth_smile"])
+        parts["members"], parts["close"] = _member_parts(family, close, weights)
         parts["strangers"] = -weights.stranger_penalty * stranger_weight
-        parts.update(photo_parts(faces, quality, weights))
+        parts.update(photo_parts(family, quality, weights))
     parts["total"] = sum(parts.values())
     return parts
 
@@ -439,12 +464,13 @@ def photo_breakdown(
 def family_photo_scores(
     rows, strangers=None, weights: Optional[Weights] = None, quality=None
 ) -> dict:
-    """``{media_id: 点}``。``rows`` は `db.family_faces` の結果。
+    """``{media_id: 点}``。``rows`` は `db.family_faces` の結果（家族と親しい人の顔）。
 
-    ``strangers`` は写真ごとの目立つ他人の重み（`strangers.weights`。1人で最大 1）。
-    重み 1 につき `STRANGER_PENALTY` を引く（#100。利用者の要望「家族以外の顔がある場合は、
-    select の対象になりにくいように」）。``quality`` は写真ごとの良し悪し（`db.photo_quality`・#106）。
-    写真全体の重みがすべて 0 なら、#106 の前と同じ点になる。
+    **家族の顔のある写真だけ**に点を付ける（親しい人だけの写真は入らない・#110）。
+    ``strangers`` は写真ごとの減点する顔の重み（`strangers.weights`。1人で最大 1）。
+    重み 1 につき `STRANGER_PENALTY` を引く（#100・#110。減点するのは利用者が選んだ顔だけ）。
+    ``quality`` は写真ごとの良し悪し（`db.photo_quality`・#106）。写真全体の重みがすべて 0 なら、
+    #106 の前と同じ点になる。
     """
     strangers = strangers or {}
     quality = quality or {}
@@ -454,7 +480,10 @@ def family_photo_scores(
         by_media.setdefault(row["media_id"], []).append(row)
     scores = {}
     for media_id, faces in by_media.items():
+        family, _ = _split(faces)
+        if not family:
+            continue  # 親しい人だけの写真は家族の写真ではない（#110）
         score = family_photo_score(faces, weights) - weights.stranger_penalty * strangers.get(media_id, 0)
-        score += sum(photo_parts(faces, quality.get(media_id), weights).values())
+        score += sum(photo_parts(family, quality.get(media_id), weights).values())
         scores[media_id] = score
     return scores

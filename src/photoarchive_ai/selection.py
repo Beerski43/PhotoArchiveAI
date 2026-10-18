@@ -337,7 +337,10 @@ class Candidates:
         self.unreadable: set = set()
 
     def family_rows(self, sources: Sequence[str]) -> List[Dict[str, Any]]:
-        """``sources`` の種別の家族の顔の行。**用意していない種別は求めない。**"""
+        """``sources`` の種別の、割り当てのある顔の行（家族と親しい人・#110）。**用意していない種別は求めない。**
+
+        家族だけが要るところ（`family_only`・似た写真）は `_family_of` が親しい人を外す。
+        """
         missing = set(sources) - set(self.assign_sources)
         if missing:
             raise ValueError(
@@ -346,7 +349,7 @@ class Candidates:
         return [row for row in self.rows if row["assign_source"] in sources]
 
     def stranger_weights(self, sources: Sequence[str]) -> Dict[int, float]:
-        """写真ごとの目立つ他人の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
+        """写真ごとの減点する顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
         key = tuple(sorted(sources))
         if key not in self._strangers:
             self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
@@ -415,8 +418,11 @@ def prepare(
 
 
 def _family_of(rows: Iterable[Dict[str, Any]]) -> Dict[int, FrozenSet[int]]:
+    """写真ごとの写っている家族。**親しい人は入れない**（`family_only`・似た写真の「同じ家族」・#110）。"""
     people: Dict[int, set] = {}
     for row in rows:
+        if not db.is_family(row):
+            continue
         people.setdefault(row["media_id"], set()).add(row["person_id"])
     return {media_id: frozenset(found) for media_id, found in people.items()}
 
@@ -710,7 +716,7 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     if limit_of is not None:
         filtered = [m for m in filtered if limit_of(_get_media_year(m)) != 0]
 
-    # **家族の写った写真が先。** 目立つ他人の重みを引くと点が負になりうる（#100）ので、
+    # **家族の写った写真が先。** 減点する顔の重みを引くと点が負になりうる（#100・#110）ので、
     # 点だけで並べると、家族の写った写真が家族のいない写真（点 0）より後ろに来る
     # （`family_only: false` のとき。PR #101 のレビュー指摘1・利用者の決定）。
     filtered.sort(key=lambda m: (

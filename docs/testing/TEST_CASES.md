@@ -422,8 +422,9 @@
 | `test_unassigning_is_blocked_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
+| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付け外しでき、一覧に `[減点]` と出る（#110） |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（28件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（29件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -568,12 +569,14 @@
 | `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
 | `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（62件）
+### `test_gui_person.py` — 人物編集とプレビュー（64件）
 
 | テスト | 内容 |
 |---|---|
 | `test_editing_a_person_saves_the_new_values` | 今の値でダイアログを開き、保存で一覧まで入れ替わる |
 | `test_cancelling_the_edit_changes_nothing` | 取り消しで何も変えない |
+| `test_the_category_and_weight_are_saved_and_reopened` | 人物の区分（家族／親しい人）と select の重みが保存され、編集で今の値が開く（#110） |
+| `test_the_real_dialog_returns_the_category_and_weight` | 本物のダイアログが区分と重みを返す（#110） |
 | `test_an_empty_name_is_rejected` | 名前は必須。空で上書きしない |
 | `test_adding_a_person_with_an_existing_name_is_refused` | 同名の人物を追加しようとすると警告を出し、作らない（#90） |
 | `test_renaming_a_person_to_another_persons_name_is_refused` | 他人の名前への改名は警告を出し、変えない |
@@ -778,7 +781,7 @@
 | `test_a_face_the_landmarker_cannot_find_is_recorded_and_not_measured_again` | **取れなかった顔は 0 を書き、測り直さない** |
 | `test_nothing_is_written_when_the_model_is_missing` | **モデルが無いときは書かない**（「測れない」と「取れなかった」を混ぜない） |
 | `test_the_real_loader_gives_up_quietly_without_the_model_file` | 実物の読み込み口はモデルが無ければ None |
-| `test_closed_eyes_lower_the_face_and_an_open_smile_raises_it` | 目閉じは下げ、笑顔は上げる（重みどおり） |
+| `test_closed_eyes_lower_the_face_and_an_open_smile_raises_it` | 目閉じは下げ、笑顔は上げる（重みどおり）。目を閉じた家族は人数に数えないので、1人目からの加点も付かない |
 | `test_a_family_member_with_closed_eyes_is_not_counted_as_clearly_pictured` | **目を閉じた家族は人数に数えない**（利用者の決定） |
 | `test_an_unmeasured_expression_neither_helps_nor_excludes` | 未計測は 0.5・人数からも外さない |
 | `test_half_closed_eyes_are_scored_between_open_and_closed` | 0.3〜0.5 は直線 |
@@ -817,20 +820,33 @@
 | `test_match_writes_the_same_score_as_select_with_the_photo_quality` | **`match` の `family_score` も `PhotoQuality` を読み、`select` と同じ点**（読まないと測った写真で食い違う） |
 | `test_the_real_models_give_scores_in_their_ranges`（`models`） | 実物の ONNX が範囲内の点を出す（環境依存・合否に含めない） |
 
-### `test_strangers.py` — 目立つ他人の写った写真の点を下げる（10件。#100）
+### `test_strangers.py` — 減点する顔の写った写真の点を下げる（9件。#100・#110）
 
 | テスト | 内容 |
 |---|---|
-| `test_the_levels_are_straight_lines_between_their_bounds` | 目立ち具合・家族らしくなさは境の間を直線で結ぶ。分からなければ家族らしくなさ 0 |
-| `test_a_large_stranger_weighs_one_and_a_small_one_nothing` | 家族と同じ大きさの他人は重み 1、背景の小さな人は 0 |
-| `test_a_face_like_a_family_member_missing_from_the_photo_is_not_counted` | **写真にいない家族の手本に似た未割当の顔は引かない**（取りこぼした家族。実データで 1,876 個） |
-| `test_a_face_like_someone_already_in_the_photo_is_a_stranger` | **写っている人物に似ていても家族ではない**（同じ人は1枚に1人）。家族全員が写っていれば重み 1 |
-| `test_a_rejected_face_counts_and_a_face_without_features_does_not` | 除外の顔は引く。特徴量の無い顔は引かない |
+| `test_the_prominence_is_a_straight_line_between_its_bounds` | 目立ち具合は境の間を直線で結ぶ |
+| `test_only_the_faces_marked_to_penalize_count` | **印を付けた除外の顔だけを引く。** 未割当の顔と印の無い除外の顔は引かない（#110 の利用者の決定） |
+| `test_a_small_marked_face_weighs_little` | 印があっても、背景に小さく写っただけなら重みは小さい |
 | `test_photos_without_family_are_not_looked_at` | 家族の写っていない写真は見ない |
-| `test_without_any_family_face_to_compare_unassigned_faces_are_not_counted` | 比べる家族の顔が無ければ引かない |
+| `test_a_close_persons_face_is_not_the_yardstick` | 大きさの物差しは家族の顔だけ（親しい人の大きな顔で減点が薄まらない） |
+| `test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves` | **印は除外の顔にだけ付く。** 除外し直しても残り、未割当に戻すと消える |
 | `test_the_penalty_is_subtracted_from_the_photo_score` | 重み 1 あたり 30 点（利用者の決定） |
 | `test_select_and_match_use_the_same_penalty` | `select` の並びと `match` の `family_score` は同じ式 |
-| `test_a_family_photo_with_a_stranger_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
+| `test_a_family_photo_with_a_penalized_face_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
+
+### `test_person_weights.py` — 人物ごとの重みと親しい人（9件。#110）
+
+| テスト | 内容 |
+|---|---|
+| `test_with_every_weight_at_one_the_score_is_the_one_from_before` | 全員 1.0・区分なし: いちばん良い顔の点 ＋ はっきり写った家族1人につき 20（**1人目から**・PR #112 の指摘1） |
+| `test_a_person_weight_scales_the_face_and_the_member_bonus` | 人物の重みは顔の点と人数の加点の両方にかかる（人数は重みの和） |
+| `test_a_person_with_weight_zero_adds_no_member_bonus` | **重み 0 の人物は加点しない**（「重みの和 − 最小」では写るだけで +20 だった・PR #112 の指摘1） |
+| `test_a_lighter_person_adds_their_own_weight_not_the_heavier_one` | 軽い人物は自分の重みぶんだけ足す（重い人物ぶんを足さない） |
+| `test_a_close_person_adds_only_when_family_is_in_the_photo` | 親しい人は家族と一緒のときだけ加点。親しい人だけの写真には点が付かない |
+| `test_family_only_drops_a_photo_with_only_a_close_person` | **親しい人だけの写真は `family_only` で外れる** |
+| `test_the_breakdown_shows_the_close_person_and_adds_up` | 内訳に親しい人の項目が出て、合計が並びの点と一致する |
+| `test_a_negative_or_infinite_weight_is_refused` | 負・無限大・NaN の重みは受け付けない |
+| `test_a_version_11_database_gains_the_columns_and_keeps_everything` | **v11 → v12 で人物・手本・除外が減らない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0 |
 
 ### `test_converter.py` — HEIC → JPEG（16件）
 
