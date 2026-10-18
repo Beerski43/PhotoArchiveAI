@@ -285,6 +285,11 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
     _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
     assert _menu_texts(window) == [
         photoarchive_gui.ACTION_PENALIZE,
+        photoarchive_gui.ACTION_UNASSIGN,
+    ]
+
+    _select(window, scope=photoarchive_gui.SCOPE_PENALIZED)
+    assert _menu_texts(window) == [
         photoarchive_gui.ACTION_UNPENALIZE,
         photoarchive_gui.ACTION_UNASSIGN,
     ]
@@ -820,7 +825,7 @@ def test_the_person_view_is_sorted_by_the_shown_age_on_every_page(tmp_path, monk
 
 
 def test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark(seeded):
-    """除外の一覧で「select で減点する」を押すと印が付き、一覧に出る。外すと消える（#110）。"""
+    """除外の一覧で「select で減点する」を押すと印が付き、減点対象に印つきで出る。外すと除外済みへ戻る（#110・#113）。"""
     window, faces, _persons = seeded
     _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
     window.face_list.selectAll()
@@ -829,20 +834,24 @@ def test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark(seeded):
     window._set_penalty_selected(True)
     row = window.connection.execute("SELECT penalize FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
     assert row[0] == 1
+    _select(window, scope=photoarchive_gui.SCOPE_PENALIZED)
     assert any(photoarchive_gui.PENALIZE_MARK in label for label in _labels(window))
 
     window.face_list.selectAll()
     window._set_penalty_selected(False)
     row = window.connection.execute("SELECT penalize FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
     assert row[0] is None
+    _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
+    assert _ids(window) == [faces["除外"]]
     assert not any(photoarchive_gui.PENALIZE_MARK in label for label in _labels(window))
 
 
 def test_the_penalized_view_lists_only_the_faces_marked_to_penalize(seeded):
     """左の「減点対象」に、減点の印を付けた除外の顔だけが出る（#113）。
 
-    除外済みの中から印を目で探さずに済むようにする。件数はその場で増減し、
-    減点をやめた顔は一覧から消える（除外のまま残る）。
+    除外済みと減点対象は印の有無で分かれる（利用者の指定「減点対象になった顔は
+    除外済み選択時は表示しないで」）。件数はその場で増減し、減点をやめた顔は
+    除外済みへ戻る。
     """
     window, faces, _persons = seeded
     connection = window.connection
@@ -858,13 +867,14 @@ def test_the_penalized_view_lists_only_the_faces_marked_to_penalize(seeded):
     window.face_list.item(_ids(window).index(faces["除外"])).setSelected(True)
     window._set_penalty_selected(True)
     assert dict(_rows(window))[photoarchive_gui.SCOPE_PENALIZED].endswith("1")
-    assert dict(_rows(window))[photoarchive_gui.SCOPE_REJECTED].endswith("2")
+    # **減点対象に移った顔は除外済みに出さない**（利用者の指定）。件数からも引く。
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_REJECTED].endswith("1")
+    assert _ids(window) == [another]
 
     _select(window, scope=photoarchive_gui.SCOPE_PENALIZED)
     assert _ids(window) == [faces["除外"]]
     assert window._current_order() == db.ORDER_SHOT_DESC
     assert _menu_texts(window) == [
-        photoarchive_gui.ACTION_PENALIZE,
         photoarchive_gui.ACTION_UNPENALIZE,
         photoarchive_gui.ACTION_UNASSIGN,
     ]
@@ -876,3 +886,6 @@ def test_the_penalized_view_lists_only_the_faces_marked_to_penalize(seeded):
     assert dict(_rows(window))[photoarchive_gui.SCOPE_PENALIZED].endswith("0")
     row = connection.execute("SELECT assign_source FROM Face WHERE id = ?", (faces["除外"],)).fetchone()
     assert row[0] == db.ASSIGN_REJECTED, "減点をやめても除外のまま"
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_REJECTED].endswith("2")
+    _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
+    assert sorted(_ids(window)) == sorted([faces["除外"], another]), "除外済みに戻る"

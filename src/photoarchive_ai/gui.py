@@ -124,7 +124,8 @@ VIEW_SCOPES = (
     (
         SCOPE_REJECTED,
         FILTER_REJECTED,
-        "「家族の誰でもない顔」として外した顔。未割当に戻せる。",
+        "「家族の誰でもない顔」として外した顔。未割当に戻せる。"
+        "select で減点する印を付けた顔は、下の減点対象へ移る。",
     ),
     (
         SCOPE_PENALIZED,
@@ -2163,7 +2164,8 @@ class MainWindow(QWidget):
         totals = {
             SCOPE_UNASSIGNED: counts["unassigned"],
             SCOPE_AUTO: counts["auto"],
-            SCOPE_REJECTED: counts["rejected"],
+            # 減点対象に移った顔は除外済みに出さない（#113）ので、件数からも引く。
+            SCOPE_REJECTED: counts["rejected"] - counts["penalized"],
             SCOPE_PENALIZED: counts["penalized"],
         }
         by_person = counts["by_person"]
@@ -2514,8 +2516,12 @@ class MainWindow(QWidget):
                 self.action_not_this_person,
                 self.action_reject,
             )
-        if scope in (SCOPE_REJECTED, SCOPE_PENALIZED):
-            return (self.action_penalize, self.action_unpenalize, self.action_unassign)
+        # **除外済みと減点対象は印の有無で分かれている**（#113）ので、
+        # それぞれ効く側の操作だけを出す。
+        if scope == SCOPE_REJECTED:
+            return (self.action_penalize, self.action_unassign)
+        if scope == SCOPE_PENALIZED:
+            return (self.action_unpenalize, self.action_unassign)
         return (self.action_reject,)
 
     def _build_face_menu(self) -> QMenu:
@@ -2815,7 +2821,8 @@ class MainWindow(QWidget):
         elif scope == SCOPE_AUTO:
             filters = {"assign_source": db.ASSIGN_AUTO}
         elif scope == SCOPE_REJECTED:
-            filters = {"assign_source": db.ASSIGN_REJECTED}
+            # 減点対象に移った顔は出さない（#113・利用者の指定）。
+            filters = {"assign_source": db.ASSIGN_REJECTED, "penalized": False}
         elif scope == SCOPE_PENALIZED:
             filters = {"penalized": True}
         else:
@@ -2898,7 +2905,8 @@ class MainWindow(QWidget):
         """いま表示している一覧に対して、まとめて何ができるか。
 
         **表示を切り替えたらボタンの意味も変える。** 未割当を見ているときは
-        「まとめて除外」、それ以外は「まとめて未割当へ戻す」。
+        「まとめて除外」、減点対象では「減点の印だけを外す」（除外は残す・#113）、
+        それ以外は「まとめて未割当へ戻す」。
         """
         if self._showing_rejections() or self._showing_unassigned_for_person():
             return ("", "")
@@ -3396,7 +3404,8 @@ class MainWindow(QWidget):
     def _set_penalty_selected(self, penalize: bool) -> None:
         """除外した顔に「select で減点する」の印を付ける／外す（#110）。
 
-        除外済みでは顔は一覧に残る。減点対象では、印を外した顔が一覧から消える（#113）。
+        **どちらの向きでも顔は一覧から消える**（#113）。除外済みで印を付けた顔は減点対象へ、
+        減点対象で印を外した顔は除外済みへ移る。
         """
         face_ids = self._selected_face_ids()
         if not face_ids:

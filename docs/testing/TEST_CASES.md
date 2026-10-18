@@ -105,7 +105,7 @@
 | `test_every_list_filter_also_works_for_counting_and_for_bulk` | **一覧・件数・まとめて処理が、同じ絞り込みを受け取ること**（`_face_filter` の引数が正本） |
 | `test_bulk_face_ids_can_be_narrowed_by_the_month_range` | まとめて処理する対象が撮影年月の絞り込みに従う |
 | `test_face_counts_are_gathered_in_one_query` | 左の一覧の件数を**1回の問い合わせ**で数える（人数ぶんの問い合わせにしない） |
-| `test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize` | 「減点対象」の絞り込みが一覧・件数・まとめて処理・左の件数で同じ顔を指す。**除外でない顔に残った印は数えない**（#113） |
+| `test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize` | 「減点対象」の絞り込みが一覧・件数・まとめて処理・左の件数で同じ顔を指す。**除外でない顔に残った印は数えない**。逆向き（`penalized=False`）は印の無い顔だけ（#113） |
 | `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「誰でもない顔」は外す・記録は消さない） |
 | `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
 | `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
@@ -460,8 +460,8 @@
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
 | `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
-| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付け外しでき、一覧に `[減点]` と出る（#110） |
-| `test_the_penalized_view_lists_only_the_faces_marked_to_penalize` | 左の `減点対象` に印のある除外の顔だけが出て、件数がその場で増減する。減点をやめた顔は一覧から消え、除外のまま残る（#113） |
+| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付けると減点対象へ `[減点]` つきで移り、外すと除外済みへ戻る（#110・#113） |
+| `test_the_penalized_view_lists_only_the_faces_marked_to_penalize` | 左の `減点対象` に印のある除外の顔だけが出て、**除外済みには出ない**（件数からも引く・利用者の指定）。減点をやめた顔は除外済みへ戻る（#113） |
 
 ### `test_recommend.py` — 顔を「この人物に似た順」に並べる（13件）
 

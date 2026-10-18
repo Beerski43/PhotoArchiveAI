@@ -960,6 +960,8 @@ def test_face_counts_are_gathered_in_one_query(tmp_path: Path):
 def test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize(tmp_path: Path):
     """「減点対象」（#113）の絞り込みと件数が、**除外 かつ 印あり**の顔だけを見ること。
 
+    逆向き（``penalized=False``）は印の無い顔だけで、除外済みの表示が使う。
+
     一覧・件数・まとめて処理・左の件数が同じ顔を指す。印が除外でない顔に
     残っていても（移行の途中など）数えない。
     """
@@ -976,6 +978,11 @@ def test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize(tmp_p
         assert db.face_ids(connection, penalized=True) == [faces["古い"]]
         assert db.face_counts(connection)["penalized"] == 1
         assert db.face_counts(connection)["rejected"] == 2
+        # 除外済みの表示は印の無い除外の顔だけを読む（#113）。
+        unmarked = dict(assign_source=db.ASSIGN_REJECTED, penalized=False)
+        assert [face["id"] for face in db.list_faces(connection, **unmarked)] == [faces["中間"]]
+        assert db.count_faces(connection, **unmarked) == 1
+        assert db.face_ids(connection, **unmarked) == [faces["中間"]]
     finally:
         connection.close()
 
