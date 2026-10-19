@@ -154,8 +154,7 @@ def test_the_results_are_paged(window, monkeypatch):
     monkeypatch.setattr(gui_select, "RESULT_PAGE_SIZE", 1)
     panel = window.selection
     panel.choose()
-    index = [panel.year_combo.itemData(i) for i in range(panel.year_combo.count())].index(2019)
-    panel.year_combo.setCurrentIndex(index)
+    panel.set_year_range(2019, 2019)
     assert panel.result_list.count() == 1 and panel.page_label.text() == "1 / 2"
     panel._turn(1)
     assert panel.page_label.text() == "2 / 2"
@@ -292,7 +291,7 @@ def test_reloading_clears_the_previous_results(mixed, tmp_path, monkeypatch):
     コピーしていた。#113 で「候補を読み込む」を無くしたので、出力の前に割り当ての変化を見る。"""
     window, panel = _panel(mixed, tmp_path, "remove_similar: false\n")
     panel.choose()
-    assert panel.result_list.count() > 0 or panel.year_combo.count() > 0
+    assert panel.result_list.count() > 0 or panel.year_from_combo.count() > 0
     # 選んだあとに割り当てを変えた（1枚目のタブでの操作と同じ）。
     face_id = panel.connection.execute("SELECT id FROM Face WHERE person_id IS NOT NULL").fetchone()[0]
     db.unassign_faces(panel.connection, [face_id])
@@ -377,3 +376,22 @@ def test_the_year_counts_from_the_database_match_the_prepared_candidates(mixed):
         candidates = selection.prepare(connection, selection.family_sources(rule))
         assert selection.year_counts(connection, rule) == selection.candidate_counts(candidates, rule)
     connection.close()
+
+
+def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
+    """結果は「何年〜何年」で絞る（#113・利用者の指定）。初めは全部の年。年不明は最後。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+    assert [panel.year_from_combo.itemData(i) for i in range(panel.year_from_combo.count())] == [
+        2016, 2017, 2019, None
+    ]
+    assert len(shown()) == 4, "初めは全部の年"
+
+    panel.set_year_range(2016, 2017)
+    assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg"]
+    panel.set_year_range(2019, 2017)
+    assert shown() == ["2017 auto2017.jpg", "2019 dated.jpg"], "逆に選んでも同じ範囲"
+    panel.set_year_range(2019, None)
+    assert shown() == ["2019 dated.jpg", "年不明 undated.jpg"]
+    window.close()

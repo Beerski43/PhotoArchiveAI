@@ -516,7 +516,7 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（25件。#104・#106・#113）
+### `test_gui_select.py` — 写真の選定タブ（26件。#104・#106・#113）
 
 | テスト | 内容 |
 |---|---|
@@ -540,6 +540,7 @@
 | `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
 | `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
 | `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
+| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は「何年〜何年」で絞る。初めは全部の年・年不明は最後・逆に選んでも同じ範囲（#113） |
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
 | `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
 | `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |

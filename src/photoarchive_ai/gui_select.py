@@ -377,15 +377,20 @@ class SelectionPanel(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         top = QHBoxLayout()
-        self.year_combo = QComboBox()
-        self.year_combo.currentIndexChanged.connect(self._year_changed)
+        # **年は「何年〜何年」で選ぶ**（#113・利用者の指定）。並びは年の古い順で、年不明は最後。
+        self.year_from_combo = QComboBox()
+        self.year_to_combo = QComboBox()
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.currentIndexChanged.connect(self._year_changed)
         self.previous_button = QPushButton("前へ")
         self.previous_button.clicked.connect(lambda: self._turn(-1))
         self.next_button = QPushButton("次へ")
         self.next_button.clicked.connect(lambda: self._turn(1))
         self.page_label = QLabel("")
         top.addWidget(QLabel("年"))
-        top.addWidget(self.year_combo, 1)
+        top.addWidget(self.year_from_combo, 1)
+        top.addWidget(QLabel("〜"))
+        top.addWidget(self.year_to_combo, 1)
         top.addWidget(self.previous_button)
         top.addWidget(self.page_label)
         top.addWidget(self.next_button)
@@ -609,11 +614,16 @@ class SelectionPanel(QWidget):
         self.by_year = {}
         for media in self.selected:
             self.by_year.setdefault(selection._get_media_year(media), []).append(media)
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        for year in sorted(self.by_year, key=lambda y: (y is None, y or 0)):
-            self.year_combo.addItem(f"{year_label(year)}（{len(self.by_year[year])} 枚）", year)
-        self.year_combo.blockSignals(False)
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            for year in self._years_in_order():
+                combo.addItem(f"{year_label(year)}（{len(self.by_year[year])} 枚）", year)
+        # 初めは全部の年（最初の年〜最後の年）。
+        self.year_from_combo.setCurrentIndex(0)
+        self.year_to_combo.setCurrentIndex(self.year_to_combo.count() - 1)
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.blockSignals(False)
         self.page = 0
         self._show_page()
 
@@ -621,10 +631,23 @@ class SelectionPanel(QWidget):
         self.page = 0
         self._show_page()
 
+    def _years_in_order(self) -> List[Optional[int]]:
+        """年の古い順。年不明は最後。"""
+        return sorted(self.by_year, key=lambda y: (y is None, y or 0))
+
+    def set_year_range(self, first: Optional[int], last: Optional[int]) -> None:
+        """「何年〜何年」を選ぶ（年不明は ``None``）。"""
+        self.year_from_combo.setCurrentIndex(self.year_from_combo.findData(first))
+        self.year_to_combo.setCurrentIndex(self.year_to_combo.findData(last))
+
     def _current_year_media(self) -> List[Dict[str, Any]]:
-        if self.year_combo.count() == 0:
+        """選んだ年の範囲の写真。年の古い順に、年の中は選んだ順。**始めと終わりが逆でも同じ範囲。**"""
+        years = self._years_in_order()
+        start, end = self.year_from_combo.currentIndex(), self.year_to_combo.currentIndex()
+        if not years or start < 0 or end < 0:
             return []
-        return self.by_year.get(self.year_combo.currentData(), [])
+        start, end = sorted((start, end))
+        return [media for year in years[start : end + 1] for media in self.by_year[year]]
 
     def _turn(self, step: int) -> None:
         pages = max(1, -(-len(self._current_year_media()) // RESULT_PAGE_SIZE))
@@ -644,7 +667,9 @@ class SelectionPanel(QWidget):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             for media in page:
-                item = QListWidgetItem(self._thumbnail_icon(media), Path(media["path"]).name)
+                # 年をまたいで並ぶので、どの年の写真かを添える。
+                year = year_label(selection._get_media_year(media))
+                item = QListWidgetItem(self._thumbnail_icon(media), f"{year} {Path(media['path']).name}")
                 item.setData(Qt.UserRole, media["id"])
                 item.setToolTip(media["path"])
                 self.result_list.addItem(item)
