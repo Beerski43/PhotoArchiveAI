@@ -349,7 +349,7 @@ class Candidates:
         return [row for row in self.rows if row["assign_source"] in sources]
 
     def stranger_weights(self, sources: Sequence[str]) -> Dict[int, float]:
-        """写真ごとの減点する顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
+        """写真ごとの他人(減点)の顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
         key = tuple(sorted(sources))
         if key not in self._strangers:
             self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
@@ -716,7 +716,7 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     if limit_of is not None:
         filtered = [m for m in filtered if limit_of(_get_media_year(m)) != 0]
 
-    # **家族の写った写真が先。** 減点する顔の重みを引くと点が負になりうる（#100・#110）ので、
+    # **家族の写った写真が先。** 他人(減点)の顔の重みを引くと点が負になりうる（#100・#110）ので、
     # 点だけで並べると、家族の写った写真が家族のいない写真（点 0）より後ろに来る
     # （`family_only: false` のとき。PR #101 のレビュー指摘1・利用者の決定）。
     filtered.sort(key=lambda m: (

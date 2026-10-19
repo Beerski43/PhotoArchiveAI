@@ -395,7 +395,7 @@ def test_a_threshold_that_is_not_a_positive_finite_number_stops(tmp_path, value)
 
 
 def _database_with_mixed_assignments(tmp_path):
-    """手本・自動・除外・未割当を1件ずつ持つDB。``family_score`` も入れる。"""
+    """手本・自動・顔認証外・未分類を1件ずつ持つDB。``family_score`` も入れる。"""
     import numpy as np
 
     database = tmp_path / "photoarchive.db"
@@ -437,7 +437,7 @@ def _database_with_mixed_assignments(tmp_path):
 
 
 def test_unassign_auto_removes_only_the_automatic_assignments(tmp_path, capsys):
-    """**手本と除外には触らない。** 触ると GUI で積み上げた判断が消える。"""
+    """**手本と顔認証外には触らない。** 触ると GUI で積み上げた判断が消える。"""
     database, connection, face_ids = _database_with_mixed_assignments(tmp_path)
     connection.close()
     capsys.readouterr()

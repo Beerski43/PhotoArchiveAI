@@ -1,4 +1,4 @@
-"""人物の画面で、未割当の顔を「この人物に似た順」に並べる（#69）。
+"""人物の画面で、未分類の顔を「この人物に似た順」に並べる（#69）。
 
 **探す時間を削るための画面。** 他人の顔の 99.1% が家族の写真に混ざっていて
 まとめて消せない（2026-10-08 実測）ので、本人を1ページ目に集める。
@@ -56,7 +56,7 @@ def _face(connection, name, angle, shooting_date="2020-01-01T00:00:00"):
 
 @pytest.fixture()
 def window_and_faces(tmp_path):
-    """${PERSON_4}（手本2件・2011年生まれ）と${PERSON_5}（手本なし）、未割当の顔。"""
+    """${PERSON_4}（手本2件・2011年生まれ）と${PERSON_5}（手本なし）、未分類の顔。"""
     database = tmp_path / "recommend.db"
     connection = db.ensure_database(str(database))
     person4 = db.add_person(connection, "${PERSON_4}", "長女", birth_date="2011-05-03")
@@ -108,7 +108,7 @@ def _choose_order(window, order):
 
 
 def test_unassigned_faces_of_a_person_are_listed_most_similar_first(window_and_faces):
-    """**種別「未割当」を選ぶと、この人物に似た順に並ぶ。** 選び直さなくてよい。"""
+    """**種別「未分類」を選ぶと、この人物に似た順に並ぶ。** 選び直さなくてよい。"""
     window, faces, persons = window_and_faces
 
     _show_unassigned(window, persons["${PERSON_4}"])
@@ -207,7 +207,7 @@ def test_similarity_orders_need_a_person(window_and_faces):
         i for i, (_, value) in enumerate(photoarchive_gui.ORDER_CHOICES)
         if value == db.ORDER_SCORE_ASC
     )
-    assert model.item(score).isEnabled() is False, "未割当の顔は確信度を持たない"
+    assert model.item(score).isEnabled() is False, "未分類の顔は確信度を持たない"
 
 
 def test_a_persons_own_faces_can_be_listed_least_similar_first(window_and_faces):
@@ -224,8 +224,8 @@ def test_a_persons_own_faces_can_be_listed_least_similar_first(window_and_faces)
 
 
 def test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense(window_and_faces):
-    """**未割当の顔には戻す先が無い。** 出すのは「この人物ではない ▸ 行き先」（#113）。
-    未割当の顔なので、1つ目は「未割当のまま」。割り当て先は「人物に割り当て」（1〜9）。"""
+    """**未分類の顔には戻す先が無い。** 出すのは「この人物ではない ▸ 行き先」（#113）。
+    未分類の顔なので、1つ目は「未分類のまま」。割り当て先は「人物に割り当て」（1〜9）。"""
     window, faces, persons = window_and_faces
     _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)
@@ -254,7 +254,7 @@ def test_not_this_person_removes_the_face_from_the_candidates(window_and_faces):
 def test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation(
     window_and_faces, monkeypatch
 ):
-    """未割当の除外は毎件通る操作で、**確認を挟むと作業そのものが遅くなる。**"""
+    """未分類の顔認証外は毎件通る操作で、**確認を挟むと作業そのものが遅くなる。**"""
     window, faces, persons = window_and_faces
     _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)

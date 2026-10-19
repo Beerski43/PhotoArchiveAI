@@ -89,7 +89,7 @@ def test_the_same_input_always_gives_the_same_clusters():
 def test_every_face_lands_in_exactly_one_cluster():
     """**顔を落とさない。** 束の合計が渡した顔の数と合うこと。
 
-    合わないと「束ねたつもりの行事に未割当が残っている」ことに気づけない。
+    合わないと「束ねたつもりの行事に未分類が残っている」ことに気づけない。
     """
     rng = np.random.default_rng(20261004)
     vectors = [rng.normal(size=8).astype(np.float32) for _ in range(40)]
@@ -156,7 +156,7 @@ def test_mismatched_lengths_are_refused():
 def test_too_many_faces_is_refused_instead_of_truncated(monkeypatch):
     """**上限を超えたら黙って捨てずに上げる。**
 
-    先頭だけ束ねて残りを落とすと、画面に出ていない顔が未割当のまま残る。
+    先頭だけ束ねて残りを落とすと、画面に出ていない顔が未分類のまま残る。
     """
     monkeypatch.setattr(clustering, "MAX_FACES", 3)
     with pytest.raises(clustering.TooManyFacesError):

@@ -528,14 +528,14 @@ CONFUSION_THRESHOLDS = (0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80)
 #: ペアの分類。
 LABELLED_DIFFERENT = "手本どうし・別人"
 LABELLED_SAME = "手本どうし・同一人物"
-ASSUMED_DIFFERENT = "片方以上が未割当（別人と仮定）"
+ASSUMED_DIFFERENT = "片方以上が未分類（別人と仮定）"
 
 
 def same_photo_pairs(database_path: str, version: str, metric: str) -> Dict[str, List[float]]:
     """**同じ写真に写る2つの顔**のペアの距離を、分類ごとに集める。
 
     仕様書 §8.3 の dlib の表と**同じ数え方**。本番の `match` が解くのは
-    「未割当（大半が他人）を手本と照合する」問題なので、**手本どうしの測定では
+    「未分類（大半が他人）を手本と照合する」問題なので、**手本どうしの測定では
     実害が出る誤りを測れない。** ここが他人誤認率のいちばん近い代理。
 
     **「同じ写真なら別人」は仮定で、外れることがある**（鏡・ポスター・壁の

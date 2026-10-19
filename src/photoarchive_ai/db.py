@@ -212,7 +212,7 @@ SCHEMA = [
     "eye_blink REAL,"
     # mouth_smile: 笑顔（左右の平均・0〜1）。`smile_score`（scan が書く古い笑顔）とは別物。
     "mouth_smile REAL,"
-    # 減点する顔（v12・#110）。1=減点する。**除外（rejected）の顔にだけ付ける。** 割り当てを
+    # 他人(減点)の顔（v12・#110）。1=減点する。**顔認証外（rejected）の顔にだけ付ける。** 割り当てを
     # 変えたら消す（`select` の点から、家族と比べた大きさ × 減点を引く・`strangers.weights`）。
     "penalize INTEGER,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
@@ -220,10 +220,10 @@ SCHEMA = [
     ")",
     # **「この顔はこの人物ではない」という否定の記録。**
     #
-    # `Face.assign_source='rejected'` は「**誰でもない顔**」で、どの人物にも
+    # `Face.assign_source='rejected'` は「**顔認証外**」で、どの人物にも
     # 二度と自動で付かなくなる。それとは別に「**この人物ではない**（ほかの人
     # かもしれない）」が要る。兄弟の赤ん坊の顔は互いによく似ており、
-    # **解除（未割当へ戻す）だけでは `match` を流すたびに同じ誤りが戻る**
+    # **解除（未分類へ戻す）だけでは `match` を流すたびに同じ誤りが戻る**
     # （実データで${PERSON_4}の 1,785 件で起きた）。
     #
     # 1つの顔が複数の人物を否定できるので (face_id, person_id) の対で持つ。
@@ -284,7 +284,7 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_face_manual ON Face(person_id) WHERE assign_source = 'manual'",
     "CREATE INDEX IF NOT EXISTS idx_face_unassigned ON Face(quality_score DESC, id) WHERE assign_source IS NULL",
     # 撮影日時の新しい順に顔を並べるため（§10.4）。**この索引が無いと、ページを
-    # 送るたびに未割当の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
+    # 送るたびに未分類の顔を全件並べ直す**（実データ 58,547 件で 220〜435ms）。
     f"CREATE INDEX IF NOT EXISTS idx_media_shooting ON Media({SHOOTING_DATE_SORT_KEY} DESC, id)",
     # 行事（フォルダ×日）で顔を絞るため（§10.4）。**無いと、ページを送るたびに
     # Media を全件走査する**（実データ 70,297 件で 1ページ 0.407秒 → 0.014秒）。
@@ -937,7 +937,7 @@ def update_person(
 
 
 def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
-    """人物を削除する。紐づいていた顔は削除せず未割当に戻す。"""
+    """人物を削除する。紐づいていた顔は削除せず未分類に戻す。"""
     cursor = connection.cursor()
     cursor.execute(
         "UPDATE Face SET person_id = NULL, assign_source = NULL, assign_score = NULL, assign_rule = NULL, penalize = NULL,"
@@ -1009,7 +1009,7 @@ ORDER_AGE = "age"
 #: `assign_score` は距離から作った 0〜100 で、低いほど「似ていないのに
 #: 割り当てた」顔。見直しは低いほうから見るのがいちばん効く
 #: （実データで自動割り当て 15,467 件。2026-10-08）。
-#: **確信度を持たない顔（手本・未割当）は最後**に置く。
+#: **確信度を持たない顔（手本・未分類）は最後**に置く。
 ORDER_SCORE_ASC = "score_asc"
 #: **上の4つの逆向き**（#69 のコメント「高い順があるなら低い順もあるべき」）。
 #: **値を持たない顔は、どちらの向きでも最後。** 逆にしたとたんに撮影日時の
@@ -1157,8 +1157,8 @@ def face_counts(connection: sqlite3.Connection) -> Dict[str, Any]:
     totals = {None: 0, ASSIGN_MANUAL: 0, ASSIGN_AUTO: 0, ASSIGN_REJECTED: 0}
     penalized = 0
     by_person: Dict[int, Dict[str, int]] = {}
-    # 減点する顔（#113）も同じ問い合わせで数える。条件は `_face_filter` の
-    # ``penalized`` と同じ（除外 かつ ``penalize = 1``）。
+    # 他人(減点)の顔（#113）も同じ問い合わせで数える。条件は `_face_filter` の
+    # ``penalized`` と同じ（顔認証外 かつ ``penalize = 1``）。
     rows = connection.execute(
         "SELECT person_id, assign_source, COUNT(*), SUM(penalize = 1) FROM Face"
         " GROUP BY person_id, assign_source"
@@ -1206,7 +1206,7 @@ def face_ids(
     """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
 
     **まとめて処理する操作のためにある。** `list_faces` はページ単位で読むので、
-    「この行事の未割当をすべて除外」のように**ページをまたぐ操作**には使えない。
+    「この行事の未分類をすべて顔認証外にする」のように**ページをまたぐ操作**には使えない。
     ここは id だけを読むのでサムネイルの BLOB を持ち上げない
     （実データで最大の行事が 1,357 件）。
 
@@ -1373,13 +1373,13 @@ def load_faces_for_clustering(
     日で絞らない呼び出し（``day=None``）は常に誤り。日付が読めない行事は
     `UNDATED` を渡す。**既定値があったせいで、束ねる画面が `None` をそのまま
     渡し、同じフォルダの別の日の顔まで束に入れていた**（実データで日付つきの
-    未割当 18,000 件。PR #62 のレビュー指摘1）。
+    未分類 18,000 件。PR #62 のレビュー指摘1）。
 
     絞り方の約束。
 
     - **いま使うモデルの特徴量を持つ顔だけ**（`embed_version` の完全一致）。
       別の埋め込み空間の距離を比べるのは常に誤り（CLAUDE.md §7）
-    - **未割当と手本だけ。** 除外した顔はもう人が判断済みで、束ねても決定は
+    - **未分類と手本だけ。** 顔認証外にした顔はもう人が判断済みで、束ねても決定は
       減らない。自動割当（`'auto'`）も入れない（`match` の結果を人の判断の
       材料に混ぜると、誤りが次の判断の根拠になる）
     - **手本は入れる。** 束に手本が混ざっていれば「この束はこの人」が分かる
@@ -1405,19 +1405,19 @@ def load_faces_for_clustering(
 
 
 def event_face_counts(connection: sqlite3.Connection) -> List[Dict[str, Any]]:
-    """**行事（フォルダ×日）ごと**の顔の件数を、未割当の多い順に返す。
+    """**行事（フォルダ×日）ごと**の顔の件数を、未分類の多い順に返す。
 
     `{"folder", "day", "unassigned", "manual", "rejected", "total"}` を持つ。
     ``day`` は撮影日時が読めない行事では ``None``（**フォルダだけが同じ顔の集まり**。
     実データでは顔 **6,190 件**がここに入る。**この関数は顔を全部数える**ので、
-    束ねられる「特徴量あり・未割当」の 5,910 件とは別の数）。
+    束ねられる「特徴量あり・未分類」の 5,910 件とは別の数）。
 
     **フォルダではなく行事で数える。** 同じフォルダでも日をまたぐと同一人物の
     距離が開くため（dlib で 0.480 → 0.578）、束ねる単位をフォルダにすると粗い。
     これが PR #56 を取り下げて作り直した理由。
 
     **手本（`'manual'`）の件数も返す。** 結婚式や学校行事は「ほぼ他人」であって
-    「全部他人」ではなく、家族も写っている。まとめて除外する前に、そこに手本が
+    「全部他人」ではなく、家族も写っている。まとめて顔認証外にする前に、そこに手本が
     あるかどうかが見えないと押せない。
 
     実データ（Media 70,297 / Face 58,606）で 2,700 行事・0.4 秒。
@@ -1620,17 +1620,17 @@ def _face_filter(
 
     ``rejected_for_person`` は「**その人物ではない**と記録した顔だけ」
     （`FaceRejection`）。**`person_id` とは別の指示**で、この顔はその人物に
-    割り当たっていないので一緒には使わない。**`誰でもない顔` にした顔は外す** —
+    割り当たっていないので一緒には使わない。**`顔認証外` にした顔は外す** —
     あちらは `match` の候補から顔ごと外れるので、否定の記録はもう何の仕事も
-    していない（一覧に残すと、`誰でもない顔` を押したのにサムネイルが消えない）。
-    **記録そのものは消さない**（消すと、除外を取り消した瞬間に `match` が
+    していない（一覧に残すと、`顔認証外` を押したのにサムネイルが消えない）。
+    **記録そのものは消さない**（消すと、顔認証外を取り消した瞬間に `match` が
     またその人物へ付ける）。
 
     以前はこの条件だけ専用の関数（`rejected_face_ids_for_person`）で作って
     いたため、**撮影年月・行事・年齢の絞り込みとページャが効かなかった。**
     条件はここに1つだけ持つ。
 
-    ``born_by`` と ``not_rejected_for_person`` は、**人物の画面で未割当の顔を
+    ``born_by`` と ``not_rejected_for_person`` は、**人物の画面で未分類の顔を
     見るとき**（#69）のもの。その人物の候補になりえない顔を外す。
 
     - ``born_by``（誕生日）: **撮影日がそれより前の顔を外す。** 生まれる前の
@@ -1641,10 +1641,10 @@ def _face_filter(
 
     ``penalized`` は減点の印（#110）で分ける指示（#113）。``None`` は分けない。
 
-    - ``True``: 「**減点する顔**」だけ。条件は `penalized_faces` と同じ
-      （除外 かつ ``penalize = 1``）。印は除外の顔にしか付かないが、移行の途中などで
+    - ``True``: 「**他人(減点)の顔**」だけ。条件は `penalized_faces` と同じ
+      （顔認証外 かつ ``penalize = 1``）。印は顔認証外の顔にしか付かないが、移行の途中などで
       ほかの顔に残っていても出さない
-    - ``False``: 印の無い顔だけ。GUI の「除外済み」がこれを使い、減点対象に
+    - ``False``: 印の無い顔だけ。GUI の「顔認証外」がこれを使い、他人(減点)に
       移った顔を出さない（利用者の指定「減点対象になった顔は除外済み選択時は
       表示しないで」）
     """
@@ -1945,7 +1945,7 @@ def _shooting_date_query(columns: List[str], where: str, ascending: bool = False
     ない。SQLite は左の表を外側に固定するので、`idx_media_shooting` を
     順に歩いて `LIMIT` の分だけ取れる。
 
-    **外すと、ページを送るたびに未割当の顔を全件並べ直す**（実データ
+    **外すと、ページを送るたびに未分類の顔を全件並べ直す**（実データ
     58,547 件で 220〜435ms。固定すると1ページ目 0.6ms）。`EXPLAIN QUERY PLAN`
     に `USE TEMP B-TREE FOR ORDER BY` が出たら、その状態に戻っている。
 
@@ -2089,16 +2089,16 @@ def reject_faces_for_person(
 ) -> int:
     """「**この顔はこの人物ではない**」を記録し、割り当てを解除する。
 
-    `reject_faces`（＝「誰でもない顔」）との違いはここ。
+    `reject_faces`（＝「顔認証外」）との違いはここ。
 
     | | この関数 | `reject_faces` |
     |---|---|---|
-    | 意味 | **その人物ではない** | **誰でもない顔** |
+    | 意味 | **その人物ではない** | **家族の誰でもない顔** |
     | ほかの人物への自動割り当て | **ありうる** | 無い |
     | `match` の候補 | 残る（その人物だけ外れる） | 外れる |
 
     **解除するだけでは足りない。** `match` は手本と閾値だけで決まるので、
-    未割当に戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
+    未分類に戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
     1,785 件で起きた）。否定を残して初めて、その判断が次の `match` に効く。
 
     **手動割り当ても解除する。** その人物だと記録しながら、その人物ではないと
@@ -2155,9 +2155,9 @@ def load_person_rejections(connection: sqlite3.Connection) -> Dict[int, set]:
 def count_person_rejections(connection: sqlite3.Connection, person_id: int) -> int:
     """その人物について「ではない」と記録された顔の件数。
 
-    **「誰でもない顔」にした顔も数える。** 記録は残っているため。
+    **「顔認証外」にした顔も数える。** 記録は残っているため。
     一覧に出る件数とは一致しないことがある
-    （一覧は `誰でもない顔` にした顔を外す。`_face_filter` の
+    （一覧は `顔認証外` にした顔を外す。`_face_filter` の
     ``rejected_for_person``）。
     """
     row = connection.execute(
@@ -2171,14 +2171,14 @@ def reject_faces(
     face_ids: Sequence[int],
     progress: ProgressCallback = None,
 ) -> int:
-    """「誰でもない顔」として、未割当一覧からも自動紐づけからも外す。"""
+    """「顔認証外」として、未分類一覧からも自動紐づけからも外す。"""
     if not face_ids:
         return 0
     now = _utc_now()
     cursor = connection.cursor()
     affected = _executemany_with_progress(
         cursor,
-        # 減点の印は、すでに除外だった顔なら残す（除外し直しただけで利用者の選択を消さない）
+        # 減点の印は、すでに顔認証外だった顔なら残す（顔認証外にし直しただけで利用者の選択を消さない）
         "UPDATE Face SET person_id = NULL, assign_source = ?, assign_score = NULL, assign_rule = NULL,"
         " penalize = CASE WHEN assign_source = 'rejected' THEN penalize ELSE NULL END,"
         " assigned_at = ? WHERE id = ?",
@@ -2273,7 +2273,7 @@ def save_face_embeddings(
     そろい、**作り直しの対象から外れて「完了」に到達できる。**
 
     **割り当てに触らない。** `person_id` / `assign_source` / `assign_score` /
-    `assigned_at` / `age` は列挙しないので、手本と除外はそのまま残る。
+    `assigned_at` / `age` は列挙しないので、手本と顔認証外はそのまま残る。
     これが `scan --force-rescan`（顔の行を作り直す）との決定的な違い。
 
     **塊ごとに確定する。** 実データで2時間を超える作業なので、途中で止めたときに
@@ -2546,7 +2546,7 @@ def iter_unassigned_embeddings(
     chunk_size: int = MATCH_CHUNK_SIZE,
     include_auto: bool = False,
 ) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
-    """未割当かつ埋め込みを持つ顔を (id配列, 埋め込み行列) の塊で返す。"""
+    """未分類かつ埋め込みを持つ顔を (id配列, 埋め込み行列) の塊で返す。"""
     where = _match_candidate_filter(include_auto)
     offset = 0
     while True:
@@ -2591,7 +2591,7 @@ def apply_auto_assignments(
 def reset_auto_assignments(
     connection: sqlite3.Connection, person_id: Optional[int] = None
 ) -> int:
-    """自動割り当てを取り消す。**手本と除外には触らない。**
+    """自動割り当てを取り消す。**手本と顔認証外には触らない。**
 
     ``person_id`` を渡すと、その人物の自動割り当てだけを取り消す。**省略は
     「全員」であって「人物で絞らない誰か」ではない**ので、呼び出し側が
@@ -2704,7 +2704,7 @@ def set_person_scoring(
 def set_face_penalty(
     connection: sqlite3.Connection, face_ids: Sequence[int], penalize: bool
 ) -> int:
-    """除外した顔に「減点する」の印を付ける／外す（#110）。**除外の顔にだけ効く。** 変えた件数を返す。"""
+    """顔認証外にした顔に「減点する」の印を付ける／外す（#110）。**顔認証外の顔にだけ効く。** 変えた件数を返す。"""
     if not face_ids:
         return 0
     cursor = connection.cursor()
@@ -2719,7 +2719,7 @@ def set_face_penalty(
 def penalized_faces(
     connection: sqlite3.Connection, media_ids: Iterable[int]
 ) -> List[Dict[str, Any]]:
-    """``media_ids`` の写真の、**減点する顔**（除外して印を付けた顔）の矩形（#110）。"""
+    """``media_ids`` の写真の、**他人(減点)の顔**（顔認証外にして印を付けた顔）の矩形（#110）。"""
     found: List[Dict[str, Any]] = []
     ids = list(media_ids)
     for start in range(0, len(ids), 500):

@@ -50,7 +50,7 @@ def _add(connection, path, *, type="image", file_hash=None, shooting_date=None,
 
 def _face(person=None, *, sharpness=200.0, yaw=0.0, aligned=True, smile=100.0,
           eye_blink=0.0, source=db.ASSIGN_MANUAL, rule=None):
-    """顔の仕様。``person`` が None なら他人（未割当）。既定は「くっきり・正面・目を開けた笑顔」。
+    """顔の仕様。``person`` が None なら他人（未分類）。既定は「くっきり・正面・目を開けた笑顔」。
 
     ``smile`` は 0〜100 で、表情の値（`Face.mouth_smile`・#95）に直して書く。
     """

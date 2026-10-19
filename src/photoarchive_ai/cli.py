@@ -358,7 +358,7 @@ def _run_reembed(args, db_path: str) -> None:
 
     **元写真を読まない。** 実データでは全件 約158分（実測 162ms/件。NFS の
     読み直しは0）。見積りは `--dry-run` が実際に作って測るので、ここは目安。
-    **割り当てには触らない**ので、手本と除外はそのまま残る。
+    **割り当てには触らない**ので、手本と顔認証外はそのまま残る。
     """
     log_file = Path("data/logs") / f"reembed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = _setup_logging(log_file, args.log_level)
@@ -549,7 +549,7 @@ def _resolve_person(connection, wanted: str) -> dict:
 
 
 def _run_unassign_auto(args, db_path: str) -> None:
-    """自動割り当てだけを消す。**手本と除外には触らない。**
+    """自動割り当てだけを消す。**手本と顔認証外には触らない。**
 
     `match` は流すたびに自動割り当てを付け直すので、これは「`match` の結果が
     信用できないので、いったん無かったことにする」ための口。

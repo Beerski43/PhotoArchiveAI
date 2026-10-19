@@ -54,7 +54,7 @@ def _face(connection, index, axis):
 
 @pytest.fixture()
 def seeded(tmp_path):
-    """手本1件と、同じ顔（同じ特徴量）の未割当1件・別人の未割当1件。"""
+    """手本1件と、同じ顔（同じ特徴量）の未分類1件・別人の未分類1件。"""
     database = tmp_path / "match.db"
     connection = db.ensure_database(str(database))
     person_id = db.add_person(connection, "${PERSON_4}", birth_date="2010-12-01")
@@ -128,7 +128,7 @@ def test_the_backup_is_taken_when_chosen(seeded, monkeypatch, shown):
     assert len(backups) == 1
     copy = db.connect(str(backups[0]))
     try:
-        # **流す前の状態**: 同じ顔はまだ未割当
+        # **流す前の状態**: 同じ顔はまだ未分類
         assert db.get_face(copy, faces["同じ顔"])["person_id"] is None
     finally:
         copy.close()
@@ -197,7 +197,7 @@ def test_the_progress_bar_reaches_every_candidate(seeded, monkeypatch, shown):
 
     assert reported, "進み具合が1度も出ていない"
     done, total = reported[-1]
-    assert done == total == 2, "未割当2件を照合し終えたところまで出る"
+    assert done == total == 2, "未分類2件を照合し終えたところまで出る"
 
 
 def test_the_dialog_backs_up_by_default_and_does_not_start_on_enter(seeded):

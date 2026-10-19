@@ -337,7 +337,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `expression.py` | **顔の表情**（目閉じ・笑顔）を保存済みサムネイルから測る（MediaPipe Face Landmarker・#95）。モデル `face_landmarker.task` は `scripts/fetch_models.py` で置く |
 | `quality.py` | **写真全体の良し悪し**（#106）。画質（MUSIQ）・美しさ（NIMA）を ONNX で、白飛び・黒つぶれを明るさで測る（`photoarchive assess`）。**前処理は pyiqa の PyTorch の処理を numpy に写したもの**。ONNX は `scripts/export_iqa_onnx.py` が別の仮想環境で書き出す（アプリに PyTorch を入れない・利用者の決定） |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
-| `strangers.py` | **減点する顔の重み**（#100・#110）。GUI で除外した顔のうち利用者が印（`Face.penalize`）を付けた顔だけを、目立ち具合（家族の顔と比べた大きさ）で `select` と `match` の点から引く。**未割当の顔と印の無い除外の顔は点に入れない**（#100 の「家族らしくなさ」はやめた） |
+| `strangers.py` | **他人(減点)の顔の重み**（#100・#110）。GUI で顔認証外にした顔のうち利用者が印（`Face.penalize`）を付けた顔だけを、目立ち具合（家族の顔と比べた大きさ）で `select` と `match` の点から引く。**未分類の顔と印の無い顔認証外の顔は点に入れない**（#100 の「家族らしくなさ」はやめた） |
 | `recommend.py` | 顔を「この人物に似た順」に並べる（GUI の顔候補の推薦・#69）。**閾値では切らない** |
 | `evaluation.py` | 手本を1件ずつ抜いて、自動紐づけの取りこぼし率と誤一致率を実測 |
 | `gui.py` | 人物登録と顔の割り当て画面。起動すると2枚のタブ（`AppWindow`）の1枚目 |
@@ -352,8 +352,8 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 
 - `Media.face_count`: **NULL=未スキャン / 0=顔なし / N=検出数**。この3状態の
   区別が差分スキャンの土台なので、勝手に 0 で埋めない。
-- `Face.assign_source`: `NULL`=未割当 / `'manual'`=手動 / `'auto'`=自動 /
-  `'rejected'`=除外。**手本にしてよいのは `'manual'` だけ。**
+- `Face.assign_source`: `NULL`=未分類 / `'manual'`=手動 / `'auto'`=自動 /
+  `'rejected'`=顔認証外。**手本にしてよいのは `'manual'` だけ。**
 - `Face.embedding`: float32 のBLOB。**次元数はモデルが決める**
   （`embedding.ACTIVE.dimensions`。ArcFace は512）。小さすぎる顔は `NULL`。
 - `Face.embed_version`: 特徴量の作り方。**照合はこれが一致する顔だけを見る。**
@@ -375,8 +375,8 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 - `Person.category` / `Person.weight`: **`select` の並びにだけ効く**（v12・#110）。`category` は NULL=家族 / `'close'`=親しい人、
   `weight` は NULL=1.0。**親しい人だけの写真は家族の写真に数えない**（`family_only`・似た写真の「同じ家族」・点）。
   家族だけが要るところは `db.is_family` で分ける。`match` は区分を見ない
-- `Face.penalize`: **減点する顔**（v12・#110）。1=減点する。**除外の顔にだけ付く。** 割り当てを変える UPDATE はすべて
-  `penalize = NULL` も書く（除外のまま除外し直したときだけ残す）。割り当てを変える経路を足したら、ここも消すこと
+- `Face.penalize`: **他人(減点)の顔**（v12・#110）。1=減点する。**顔認証外の顔にだけ付く。** 割り当てを変える UPDATE はすべて
+  `penalize = NULL` も書く（顔認証外のまま顔認証外にし直したときだけ残す）。割り当てを変える経路を足したら、ここも消すこと
 - `Person.name`: **重複不可**（v9・#90。一意索引 `idx_person_name`・完全一致）。同名がある DB は
   `migrate` が控えを取る前に止める。**勝手に改名・統合しない**
 - `ScanRoot`: **走査した root**（v7・#24）。`scan` が root を走査し終えるたびに書く。
@@ -396,7 +396,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 
 ### 用語
 
-同じものを別の名前で呼ばない。**「手本」「割り当て」「除外」「確定」「未割当」**
+同じものを別の名前で呼ばない。**「手本」「割り当て」「顔認証外」「他人(減点)」「確定」「未分類」**
 に揃える（「教師データ」「紐づけ」などをコードに持ち込まない）。
 一覧は `docs/spec/Specification.md` の §1.3。
 
@@ -405,7 +405,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 ## 8. 踏みやすい落とし穴
 
 - **特徴量モデルを替えたら `reembed` で作り直す。`scan --force-rescan` を使わない。**
-  後者は顔の行を消して作り直すので、**GUI で積み上げた手動割り当てと除外が消える。**
+  後者は顔の行を消して作り直すので、**GUI で積み上げた手動割り当てと顔認証外が消える。**
   `reembed` は `Face.embedding` と `Face.embed_version` だけを書き、サムネイルから
   作るので**元写真（NFS 上の 441GB）を読まない。**
 - **`DETECTOR_VERSION` に特徴量の版を内包させない。** 以前は

@@ -2,7 +2,7 @@
 
 **測定の道具がおかしいと、間違った閾値で実データを束ねることになる。**
 いちばん大事なのは**数え落とさないこと** — 撮影日時が読めない顔を黙って
-外していたため、「未割当 51,860 件」が全体の数のように文書へ出ていた
+外していたため、「未分類 51,860 件」が全体の数のように文書へ出ていた
 （PR #62 のレビュー指摘2）。
 """
 
@@ -97,7 +97,7 @@ def test_the_measurement_never_writes_to_the_database(measure_module, tmp_path):
 def test_undated_faces_are_counted_as_folder_events(measure_module, tmp_path):
     """**撮影日時が読めない顔を捨てない。** フォルダ単位の行事として数える。
 
-    以前は `continue` で外していたため、「未割当 51,860 件 → 決定 19,678 回」が
+    以前は `continue` で外していたため、「未分類 51,860 件 → 決定 19,678 回」が
     **日付つきだけの数**だったのに、文書は全体の数のように書いていた
     （実データで 5,910 件が測定の外。PR #62 のレビュー指摘2）。
     """
@@ -119,7 +119,7 @@ def test_undated_faces_are_counted_as_folder_events(measure_module, tmp_path):
 
 
 def test_rejected_faces_are_left_out(measure_module, tmp_path):
-    """除外した顔は入れない。**もう人が判断した顔**なので決定は減らない。"""
+    """顔認証外にした顔は入れない。**もう人が判断した顔**なので決定は減らない。"""
     database = tmp_path / "events.db"
     _seed_database(database)
     connection = db.connect(str(database))
@@ -154,15 +154,15 @@ def test_the_separation_is_measured_on_dated_events_only(measure_module, tmp_pat
 def test_the_decision_count_is_the_number_of_bundles_with_unassigned_faces(
     measure_module, tmp_path
 ):
-    """**決定の数 = 未割当を含む束の数。** 手本だけの束は数えない。"""
+    """**決定の数 = 未分類を含む束の数。** 手本だけの束は数えない。"""
     database = tmp_path / "events.db"
     _seed_database(database)
     dated, _undated, _counts = measure_module.load_events(str(database))
 
     run = measure_module.measure_clustering(dated, threshold=0.45)
 
-    # 10-06 の行事は手本1件＋未割当1件で、近いので1束（決定1回）。
-    # 10-07 の行事は未割当1件だけ（決定1回）。
+    # 10-06 の行事は手本1件＋未分類1件で、近いので1束（決定1回）。
+    # 10-07 の行事は未分類1件だけ（決定1回）。
     assert run.faces == 2
     assert run.decisions == 2
 

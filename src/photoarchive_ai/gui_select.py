@@ -67,7 +67,7 @@ WEIGHT_FIELDS = (
     ("eyes", "目を開けている", 0.05),
     ("smile", "笑顔", 0.05),
     ("member_bonus", "家族1人ごとの加点", 1.0),
-    ("stranger_penalty", "減点する顔の減点（除外した顔のうち選んだ顔）", 1.0),
+    ("stranger_penalty", "他人(減点)の顔の減点（顔認証外にした顔のうち選んだ顔）", 1.0),
     # 写真全体（#106・`photoarchive assess` で測る）
     ("technical", "画質（ぶれ・ピンぼけ・暗さ）", 0.05),
     ("aesthetic", "美しさ（構図）", 0.05),
@@ -105,7 +105,7 @@ BREAKDOWN_LABELS = (
     ("smile", "笑顔"),
     ("members", "家族の人数"),
     ("close", "親しい人"),
-    ("strangers", "減点する顔"),
+    ("strangers", "他人(減点)の顔"),
     ("technical", "画質"),
     ("aesthetic", "美しさ"),
     ("highlights", "白飛び"),

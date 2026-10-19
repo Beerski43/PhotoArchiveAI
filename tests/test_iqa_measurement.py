@@ -74,7 +74,7 @@ def test_disagreements_put_the_largest_rank_gap_first(measure_module):
 
 
 def test_the_sample_is_family_photos_only_and_repeatable(tmp_path, measure_module):
-    """手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。2回呼べば同じ写真を選ぶ。"""
+    """手本か自動割り当ての顔がある画像だけ（未分類・動画は外す）。2回呼べば同じ写真を選ぶ。"""
     path = tmp_path / "photoarchive.db"
     connection = db.ensure_database(str(path))
     try:
@@ -82,7 +82,7 @@ def test_the_sample_is_family_photos_only_and_repeatable(tmp_path, measure_modul
         rows = [
             ("/p/a.jpg", "image", db.ASSIGN_MANUAL),
             ("/p/b.jpg", "image", db.ASSIGN_AUTO),
-            ("/p/c.jpg", "image", None),  # 未割当だけ
+            ("/p/c.jpg", "image", None),  # 未分類だけ
             ("/p/e.mp4", "video", db.ASSIGN_MANUAL),  # 動画は測らない
         ]
         expected = set()

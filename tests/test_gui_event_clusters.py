@@ -160,7 +160,7 @@ def test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event(tmp_p
     一覧の絞り込みは `None` を `db.UNDATED` に直していたのに、束ねる画面は
     `None` をそのまま渡していた。`None` は「日で絞らない」なので、**同じ
     フォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた**
-    （実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。
+    （実データで日付つきの未分類 18,000 件が 363 フォルダで巻き込まれる。
     最悪の例は「日付不明 2 件」の行事に 985 件。PR #62 のレビュー指摘1）。
 
     **一覧の経路しか見ていなかったので、この経路は通っていなかった。**
@@ -223,7 +223,7 @@ def test_near_faces_land_in_one_cluster(seeded):
 def test_rejected_and_auto_faces_are_left_out_of_the_bundles(seeded):
     """**人が判断した顔と、`match` が付けた顔は束ねない。**
 
-    除外した顔を束ねても決定は減らず、自動割当を材料にすると誤りが次の判断の
+    顔認証外にした顔を束ねても決定は減らず、自動割当を材料にすると誤りが次の判断の
     根拠になる。
     """
     connection, faces, _path = seeded
@@ -384,7 +384,7 @@ def test_bulk_reject_covers_the_whole_event_but_not_other_days(seeded, monkeypat
 
 
 def test_bulk_unpenalize_keeps_the_faces_rejected(seeded, monkeypatch):
-    """減点対象のまとめ処理は**印だけを外す**（#113）。除外は消さず、別の日の印は残す。"""
+    """他人(減点)のまとめ処理は**印だけを外す**（#113）。顔認証外は消さず、別の日の印は残す。"""
     connection, faces, path = seeded
     marked = faces["near"] + faces["next_day"]
     db.reject_faces(connection, marked + faces["far"])
@@ -415,7 +415,7 @@ def test_bulk_unpenalize_keeps_the_faces_rejected(seeded, monkeypatch):
 
 
 def test_bulk_buttons_stay_disabled_until_an_event_is_chosen(seeded):
-    """**行事を選ばないと押せない。** 選ばないと対象が未割当の全件になる。"""
+    """**行事を選ばないと押せない。** 選ばないと対象が未分類の全件になる。"""
     connection, _faces, path = seeded
     window = photoarchive_gui.MainWindow(path)
     try:
@@ -440,7 +440,7 @@ def test_the_bulk_button_changes_meaning_with_the_view(seeded):
     try:
         window.event = ("/photos/wedding", "2011-04-16")
         window._sync_event_controls()
-        assert "未割当をすべて除外" in window.bulk_event_button.text()
+        assert "未分類をすべて顔認証外" in window.bulk_event_button.text()
 
         for row in range(window.person_list.count()):
             if (
@@ -449,9 +449,9 @@ def test_the_bulk_button_changes_meaning_with_the_view(seeded):
             ):
                 window.person_list.setCurrentRow(row)
                 break
-        assert "除外をすべて取り消す" in window.bulk_event_button.text()
+        assert "顔認証外をすべて取り消す" in window.bulk_event_button.text()
 
-        # 減点対象では未割当へ戻さず、印だけを外す（#113）。
+        # 他人(減点)では未分類へ戻さず、印だけを外す（#113）。
         for row in range(window.person_list.count()):
             if (
                 window.person_list.item(row).data(photoarchive_gui.SCOPE_ROLE)
@@ -459,7 +459,7 @@ def test_the_bulk_button_changes_meaning_with_the_view(seeded):
             ):
                 window.person_list.setCurrentRow(row)
                 break
-        assert "減点をすべてやめる" in window.bulk_event_button.text()
+        assert "他人(減点)をすべて顔認証外に戻す" in window.bulk_event_button.text()
     finally:
         window.connection.close()
 
