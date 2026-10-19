@@ -6,9 +6,14 @@
 
 動き方は `selection` の2段に合わせる（#103）。
 
-- 「候補を読み込む」= `selection.prepare`（見え方・表情の未計測分を測る。重い）
-- 「並べ直す」= `selection.choose`（重みで点を出し、並べ、束ね、年ごとに取る。
-  実データで約1秒。重みを変えた直後は、新しく上位に来た写真の見た目を NFS から測る）
+- 年ごとの表は、タブを開いたときに DB だけから作る（`selection.year_counts`・測らない）。
+  **最初から枚数を入れられる**（#113・利用者「[候補を読み込む]ボタンの意味が分からない。
+  最初から年毎の選ぶ枚数を入れれるようにしてほしい」）
+- 「選ぶ」= `selection.choose`（重みで点を出し、並べ、束ね、年ごとに取る。
+  実データで約1秒。重みを変えた直後は、新しく上位に来た写真の見た目を NFS から測る）。
+  候補（`selection.prepare`・見え方・表情の未計測分を測る。重い）は、**まだ無いときと、
+  割り当てなどが変わったとき（`db.selection_state`）だけ**その前に用意し直す。以前は
+  「候補を読み込む」ボタンを利用者が押していた
 
 **値を1つ動かすたびに自動で並べ直さない。** 数秒かかることがあり、続けて動かすと
 重なるため。ボタンで並べ直す。
@@ -45,6 +50,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -53,12 +59,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import selection, similar
+from . import db, selection, similar
 
 #: 結果の1ページの枚数。**ページャの無い一覧を作らない**（CLAUDE.md §8）。
 RESULT_PAGE_SIZE = 60
 #: 結果のサムネイルの大きさ（長辺）。
 RESULT_THUMBNAIL = 180
+#: 右のプレビューに読む大きさ（長辺・#113）。表示は枠に合わせて縮める。
+PREVIEW_SIZE = 1200
+PREVIEW_PROMPT = "写真を選ぶと、ここに大きく出ます"
 
 #: 重みの項目と、画面に出す名前・刻み・上限。順は `scoring.Weights` と同じ。
 WEIGHT_FIELDS = (
@@ -67,7 +76,7 @@ WEIGHT_FIELDS = (
     ("eyes", "目を開けている", 0.05),
     ("smile", "笑顔", 0.05),
     ("member_bonus", "家族1人ごとの加点", 1.0),
-    ("stranger_penalty", "減点する顔の減点（除外した顔のうち選んだ顔）", 1.0),
+    ("stranger_penalty", "他人(減点)の顔の減点（顔認証外にした顔のうち選んだ顔）", 1.0),
     # 写真全体（#106・`photoarchive assess` で測る）
     ("technical", "画質（ぶれ・ピンぼけ・暗さ）", 0.05),
     ("aesthetic", "美しさ（構図）", 0.05),
@@ -105,7 +114,7 @@ BREAKDOWN_LABELS = (
     ("smile", "笑顔"),
     ("members", "家族の人数"),
     ("close", "親しい人"),
-    ("strangers", "減点する顔"),
+    ("strangers", "他人(減点)の顔"),
     ("technical", "画質"),
     ("aesthetic", "美しさ"),
     ("highlights", "白飛び"),
@@ -116,7 +125,7 @@ BREAKDOWN_LABELS = (
 YEAR_UNKNOWN = "年不明"
 #: 年の表の「年以降」の行の印（`selection.year_limits` の ``2027+``）。
 ROW_LATER = "later"
-STALE_NOTICE = "顔の割り当てを変えたら「候補を読み込む」を押し直してください。"
+CHOOSE_LABEL = "選ぶ"
 
 
 def later_year() -> int:
@@ -145,6 +154,22 @@ def photo_thumbnail(path: str, size: int = RESULT_THUMBNAIL) -> Optional[Image.I
                 original.draft("RGB", (size * 2, size * 2))
                 image = ImageOps.exif_transpose(original).convert("RGB")
         image = image.convert("RGB")
+        image.thumbnail((size, size))
+        return image
+    except Exception:  # 壊れた・消えた・NFS が読めない
+        return None
+
+
+def photo_preview(path: str, size: int = PREVIEW_SIZE) -> Optional[Image.Image]:
+    """右のプレビュー用に、元写真を縮小デコードする（#113）。読めなければ None。
+
+    **EXIF の埋め込みサムネイルは使わない**（160px 前後で、大きく出すと粗い）。
+    `draft` で JPEG を縮小しながら読むので、元の画素数ぶんは展開しない。
+    """
+    try:
+        with Image.open(path) as original:
+            original.draft("RGB", (size, size))
+            image = ImageOps.exif_transpose(original).convert("RGB")
         image.thumbnail((size, size))
         return image
     except Exception:  # 壊れた・消えた・NFS が読めない
@@ -246,6 +271,9 @@ class SelectionPanel(QWidget):
         self.source_roots = list(source_roots or [])
         self.rule: Dict[str, Any] = self._read_rule()
         self.candidates: Optional[selection.Candidates] = None
+        #: 候補を用意したときの `db.selection_state`。変わっていたら「選ぶ」の前に用意し直す。
+        self.candidates_state: Any = None
+        self._years_filled = False
         self.selected: List[Dict[str, Any]] = []
         self.by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
         self.page = 0
@@ -323,17 +351,19 @@ class SelectionPanel(QWidget):
         years_layout.addLayout(fill_row)
         layout.addWidget(years_box)
 
-        self.load_button = QPushButton("候補を読み込む")
-        self.load_button.clicked.connect(self.load_candidates)
-        self.choose_button = QPushButton("並べ直す")
+        self.choose_button = QPushButton(CHOOSE_LABEL)
+        self.choose_button.setToolTip(
+            "重み・絞り込み・年ごとの枚数で写真を選びます（何度押してもよい）。\n"
+            "顔の割り当てが変わっていれば、先に読み直します（初回は数分かかることがあります）。"
+        )
         self.choose_button.clicked.connect(self.choose)
         self.save_button = QPushButton("ルールを保存")
         self.save_button.clicked.connect(self.save_rule)
         self.export_button = QPushButton("出力する")
         self.export_button.clicked.connect(self.export)
-        for button in (self.load_button, self.choose_button, self.save_button, self.export_button):
+        for button in (self.choose_button, self.save_button, self.export_button):
             layout.addWidget(button)
-        self.status = QLabel(STALE_NOTICE)
+        self.status = QLabel("")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         layout.addStretch(1)
@@ -347,15 +377,20 @@ class SelectionPanel(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         top = QHBoxLayout()
-        self.year_combo = QComboBox()
-        self.year_combo.currentIndexChanged.connect(self._year_changed)
+        # **年は「何年〜何年」で選ぶ**（#113・利用者の指定）。並びは年の古い順で、年不明は最後。
+        self.year_from_combo = QComboBox()
+        self.year_to_combo = QComboBox()
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.currentIndexChanged.connect(self._year_changed)
         self.previous_button = QPushButton("前へ")
         self.previous_button.clicked.connect(lambda: self._turn(-1))
         self.next_button = QPushButton("次へ")
         self.next_button.clicked.connect(lambda: self._turn(1))
         self.page_label = QLabel("")
         top.addWidget(QLabel("年"))
-        top.addWidget(self.year_combo, 1)
+        top.addWidget(self.year_from_combo, 1)
+        top.addWidget(QLabel("〜"))
+        top.addWidget(self.year_to_combo, 1)
         top.addWidget(self.previous_button)
         top.addWidget(self.page_label)
         top.addWidget(self.next_button)
@@ -368,12 +403,29 @@ class SelectionPanel(QWidget):
         self.result_list.setMovement(QListWidget.Static)
         self.result_list.setSpacing(6)
         self.result_list.currentItemChanged.connect(self._item_changed)
-        layout.addWidget(self.result_list, 1)
 
+        # **選んだ写真を右に大きく出す**（#113・利用者の指定）。点の内訳はその下。
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        self.preview = QLabel(PREVIEW_PROMPT)
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setMinimumSize(320, 240)
+        # 画像の大きさで枠が広がらないようにする（枠に合わせて縮めて出す）。
+        self.preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        side_layout.addWidget(self.preview, 1)
         self.detail = QLabel("")
         self.detail.setWordWrap(True)
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.detail)
+        side_layout.addWidget(self.detail)
+
+        body = QSplitter(Qt.Horizontal)
+        body.addWidget(self.result_list)
+        body.addWidget(side)
+        body.setStretchFactor(0, 1)
+        body.setStretchFactor(1, 1)
+        body.setSizes([480, 480])
+        layout.addWidget(body, 1)
         return panel
 
     # ------------------------------------------------------------------
@@ -426,6 +478,21 @@ class SelectionPanel(QWidget):
             values[key] = self.year_table.cellWidget(row, 2).value()
         return values
 
+    def showEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        """タブを初めて開いたときに年の表を作る（起動を遅くしないため・実データで約 1 秒）。"""
+        super().showEvent(event)
+        if not self._years_filled:
+            self.refresh_years()
+
+    def refresh_years(self) -> None:
+        """年の表を DB から作り直す（#113）。入っている枚数は引き継ぐ。"""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._fill_year_table()
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._years_filled = True
+
     def _fill_year_table(self) -> None:
         """候補の年ごとの枚数を表に出す。**入っている値は引き継ぐ**（PR #108 のレビュー指摘1）。
 
@@ -434,7 +501,8 @@ class SelectionPanel(QWidget):
         （年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が無ければ候補の枚数。
         """
         previous = self._year_values()
-        counts = selection.candidate_counts(self.candidates, self.current_rule_without_years())
+        # 候補を用意していなくても数えられる（DB だけ・#113）。数は `candidate_counts` と同じ。
+        counts = selection.year_counts(self.connection, self.current_rule_without_years())
         limit_of = selection.year_limits(self.rule)
         rows = [(year, year_label(year), counts[year]) for year in sorted(y for y in counts if y is not None)]
         rows.append((selection.COUNT_UNKNOWN, YEAR_UNKNOWN, counts.get(None, 0)))
@@ -461,16 +529,9 @@ class SelectionPanel(QWidget):
             self.year_table.setCellWidget(row, 2, spin)
 
     def _filters_changed(self, _checked: bool) -> None:
-        """絞り込みを変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。
-
-        読み込んだ候補に無い種別（自動割り当て）を求めるときは何もしない。「並べ直す」が
-        読み込み直し、そこで作り直す（入っている値は引き継ぐ）。
-        """
-        if self.candidates is None:
-            return
-        sources = selection.family_sources(self.current_rule_without_years())
-        if set(sources) <= set(self.candidates.assign_sources):
-            self._fill_year_table()
+        """絞り込みを変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。入っている値は引き継ぐ。"""
+        if self._years_filled:
+            self.refresh_years()
 
     def current_rule_without_years(self) -> Dict[str, Any]:
         rule = dict(self.rule)
@@ -488,12 +549,25 @@ class SelectionPanel(QWidget):
     # 実行
     # ------------------------------------------------------------------
 
+    def _candidates_are_current(self) -> bool:
+        """用意した候補が、いまの絞り込みと割り当てで使えるか（#113）。"""
+        if self.candidates is None:
+            return False
+        sources = selection.family_sources(self.current_rule_without_years())
+        if set(sources) - set(self.candidates.assign_sources):
+            return False
+        return self.candidates_state == db.selection_state(self.connection)
+
     def load_candidates(self) -> None:
-        """`selection.prepare`。見え方・表情の未計測分を測る（初回は数分かかることがある）。"""
+        """`selection.prepare`。見え方・表情の未計測分を測る（初回は数分かかることがある）。
+
+        「選ぶ」が要るときだけ呼ぶ（`_candidates_are_current`）。年の表も作り直す。
+        """
         rule = self.current_rule_without_years()
         progress = _Progress(self, "候補を読み込んでいます")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            self.candidates_state = db.selection_state(self.connection)
             self.candidates = selection.prepare(
                 self.connection,
                 selection.family_sources(rule),
@@ -501,6 +575,7 @@ class SelectionPanel(QWidget):
                 progress,
             )
             self._fill_year_table()
+            self._years_filled = True
         finally:
             QApplication.restoreOverrideCursor()
             progress.finish()
@@ -510,14 +585,10 @@ class SelectionPanel(QWidget):
         self.selected = []
         self.chosen_rule = {}
         self._group_by_year()
-        self.status.setText(f"候補を読み込みました。{STALE_NOTICE}")
 
     def choose(self) -> None:
         """`selection.choose`。設定が読めない値なら止める。"""
-        if self.candidates is None or (
-            set(selection.family_sources(self.current_rule_without_years()))
-            - set(self.candidates.assign_sources)
-        ):
+        if not self._candidates_are_current():
             self.load_candidates()
         rule = self.current_rule()
         try:
@@ -537,17 +608,22 @@ class SelectionPanel(QWidget):
             self.candidates.progress_callback = None
         self.chosen_rule = rule
         self._group_by_year()
-        self.status.setText(f"{len(self.selected)} 枚を選びました。{STALE_NOTICE}")
+        self.status.setText(f"{len(self.selected)} 枚を選びました。")
 
     def _group_by_year(self) -> None:
         self.by_year = {}
         for media in self.selected:
             self.by_year.setdefault(selection._get_media_year(media), []).append(media)
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        for year in sorted(self.by_year, key=lambda y: (y is None, y or 0)):
-            self.year_combo.addItem(f"{year_label(year)}（{len(self.by_year[year])} 枚）", year)
-        self.year_combo.blockSignals(False)
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            for year in self._years_in_order():
+                combo.addItem(f"{year_label(year)}（{len(self.by_year[year])} 枚）", year)
+        # 初めは全部の年（最初の年〜最後の年）。
+        self.year_from_combo.setCurrentIndex(0)
+        self.year_to_combo.setCurrentIndex(self.year_to_combo.count() - 1)
+        for combo in (self.year_from_combo, self.year_to_combo):
+            combo.blockSignals(False)
         self.page = 0
         self._show_page()
 
@@ -555,10 +631,23 @@ class SelectionPanel(QWidget):
         self.page = 0
         self._show_page()
 
+    def _years_in_order(self) -> List[Optional[int]]:
+        """年の古い順。年不明は最後。"""
+        return sorted(self.by_year, key=lambda y: (y is None, y or 0))
+
+    def set_year_range(self, first: Optional[int], last: Optional[int]) -> None:
+        """「何年〜何年」を選ぶ（年不明は ``None``）。"""
+        self.year_from_combo.setCurrentIndex(self.year_from_combo.findData(first))
+        self.year_to_combo.setCurrentIndex(self.year_to_combo.findData(last))
+
     def _current_year_media(self) -> List[Dict[str, Any]]:
-        if self.year_combo.count() == 0:
+        """選んだ年の範囲の写真。年の古い順に、年の中は選んだ順。**始めと終わりが逆でも同じ範囲。**"""
+        years = self._years_in_order()
+        start, end = self.year_from_combo.currentIndex(), self.year_to_combo.currentIndex()
+        if not years or start < 0 or end < 0:
             return []
-        return self.by_year.get(self.year_combo.currentData(), [])
+        start, end = sorted((start, end))
+        return [media for year in years[start : end + 1] for media in self.by_year[year]]
 
     def _turn(self, step: int) -> None:
         pages = max(1, -(-len(self._current_year_media()) // RESULT_PAGE_SIZE))
@@ -574,11 +663,13 @@ class SelectionPanel(QWidget):
         self.previous_button.setEnabled(self.page > 0)
         self.next_button.setEnabled(self.page < pages - 1)
         self.result_list.clear()
-        self.detail.setText("")
+        self._clear_preview()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             for media in page:
-                item = QListWidgetItem(self._thumbnail_icon(media), Path(media["path"]).name)
+                # 年をまたいで並ぶので、どの年の写真かを添える。
+                year = year_label(selection._get_media_year(media))
+                item = QListWidgetItem(self._thumbnail_icon(media), f"{year} {Path(media['path']).name}")
                 item.setData(Qt.UserRole, media["id"])
                 item.setToolTip(media["path"])
                 self.result_list.addItem(item)
@@ -596,9 +687,34 @@ class SelectionPanel(QWidget):
             self.thumbnails[media["id"]] = pixmap
         return QIcon(pixmap)
 
+    def _clear_preview(self) -> None:
+        self.detail.setText("")
+        self.preview.setPixmap(QPixmap())
+        self.preview.setText(PREVIEW_PROMPT)
+
+    def _show_preview(self, media: Dict[str, Any]) -> None:
+        """選んだ写真を右に大きく出す。**元写真は NFS 上**なので読むあいだは砂時計にする。"""
+        path = selection._source_path(
+            media.get("path", ""), [Path(root).resolve() for root in self.source_roots]
+        )
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            image = photo_preview(str(path))
+        finally:
+            QApplication.restoreOverrideCursor()
+        if image is None:
+            # 前の写真の画像を残さない（下の内訳と別の写真になる）。
+            self.preview.setPixmap(QPixmap())
+            self.preview.setText(f"写真を開けません:\n{path}")
+            return
+        self.preview.setText("")
+        self.preview.setPixmap(
+            _pixmap(image).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
+
     def _item_changed(self, current, _previous) -> None:
         if current is None or self.candidates is None:
-            self.detail.setText("")
+            self._clear_preview()
             return
         media_id = current.data(Qt.UserRole)
         media = next((m for m in self.selected if m["id"] == media_id), None)
@@ -611,6 +727,7 @@ class SelectionPanel(QWidget):
         taken = media.get("shooting_date") or "撮影日時なし"
         measured = self.candidates.quality.get(media_id)
         self.detail.setText(f"{place}\n{taken}\n{format_breakdown(parts, measured)}")
+        self._show_preview(media)
 
     # ------------------------------------------------------------------
     # 保存と出力
@@ -642,8 +759,16 @@ class SelectionPanel(QWidget):
 
     def export(self) -> None:
         """選んだ写真を出力先へコピーする（CLI の `select` と同じ。前の出力は消える）。"""
+        if self.selected and self.candidates_state != db.selection_state(self.connection):
+            # 選んだあとに割り当てが変わった。古い割り当てで選んだ結果を出力しない。
+            self.selected = []
+            self.chosen_rule = {}
+            self._group_by_year()
         if not self.selected:
-            QMessageBox.information(self, "出力", "先に「並べ直す」で写真を選んでください。")
+            QMessageBox.information(
+                self, "出力", f"先に「{CHOOSE_LABEL}」で写真を選んでください"
+                "（顔の割り当てを変えたあとは、選び直しが要ります）。"
+            )
             return
         if not self.output_root:
             QMessageBox.warning(self, "出力できません", "設定に output_root がありません。")

@@ -154,7 +154,7 @@ def test_a_negative_or_infinite_weight_is_refused(connection, people):
 
 
 def test_a_version_11_database_gains_the_columns_and_keeps_everything(tmp_path):
-    """列を足すだけ。**人物・手本・除外が消えない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0。"""
+    """列を足すだけ。**人物・手本・顔認証外が消えない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0。"""
     database = tmp_path / "v11.db"
     connection = db.ensure_database(str(database))
     person = db.add_person(connection, "父")

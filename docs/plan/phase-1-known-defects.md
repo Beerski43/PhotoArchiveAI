@@ -38,7 +38,7 @@ Phase 0 の調査で、場所まで特定できた欠陥。**実データでの�
 
 - 全顔が `embedding = NULL` のまま保存され
 - `Media.face_count` は N（スキャン済み）として記録され
-- `match` は `embedding IS NOT NULL` の顔しか見ないので、全件が未割当のまま
+- `match` は `embedding IS NOT NULL` の顔しか見ないので、全件が未分類のまま
 - `--force-rescan` を手で付けない限り、二度と回収されない
 
 **エラーも警告も出ない。** `scan` の開始時にモデルの有無を確かめて中断する。
@@ -62,7 +62,7 @@ CLI は `--db` → `config/app_settings.json` の順に解決するが、GUI は
 ### A6 — `match --dry-run` が2回目以降ほぼ空振り
 
 `matcher.py` は dry-run のとき自動割り当てを取り消さない。一方で候補は
-「未割当の顔」だけ。よって一度 `match` した後に `--dry-run` すると、
+「未分類の顔」だけ。よって一度 `match` した後に `--dry-run` すると、
 既に auto が付いた顔が候補から外れ、件数も距離の分布も過小になる。
 README は「`--dry-run` は距離の分布を表示するので `--threshold` を決める目安になる」
 と案内しているので、用途と食い違う。

@@ -69,8 +69,8 @@
 | `test_evaluation.py::test_a_teacher_in_the_same_photo_is_not_allowed_to_answer_for_the_face` | 交差検証で、抜いた顔とほぼ同じ手本が残っていると取りこぼし率が0に見え、閾値の判断を誤る |
 | `test_scoring.py::test_smile_score_follows_the_mouth_aspect_ratio` | フェイクの都合で笑顔スコアの式が一度も通っておらず、常に 0.0 を返していても気づけなかった |
 | `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
-| `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて除外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
-| `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未割当 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
+| `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて顔認証外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
+| `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未分類 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
 | `test_source_roots.py::test_select_copies_a_photo_outside_every_root` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（#83 で直下に平らに出力する形に替えたあとも、root の外を通す。`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 
@@ -78,13 +78,13 @@
 
 ## ファイル別
 
-### `test_db.py` — スキーマと永続化（40件）
+### `test_db.py` — スキーマと永続化（41件）
 
 | テスト | 内容 |
 |---|---|
 | `test_database_schema_and_media_crud` | メディアの登録と取得。未スキャンは `face_count IS NULL` |
 | `test_save_media_resets_scan_state_when_hash_changes` | ハッシュが変われば検出状態をリセットする |
-| `test_person_crud_and_face_assignment` | 人物のCRUD。人物を消しても顔は残り未割当に戻る |
+| `test_person_crud_and_face_assignment` | 人物のCRUD。人物を消しても顔は残り未分類に戻る |
 | `test_deleting_media_cascades_to_faces_and_results` | 外部キーの CASCADE |
 | `test_saving_scores_does_not_clear_family_score` | `scan` と `match` が互いのスコアを潰さない |
 | `test_load_manual_embeddings_pairs_vectors_with_person_ids` | 手本に使うのは手動割り当てだけ |
@@ -105,12 +105,13 @@
 | `test_every_list_filter_also_works_for_counting_and_for_bulk` | **一覧・件数・まとめて処理が、同じ絞り込みを受け取ること**（`_face_filter` の引数が正本） |
 | `test_bulk_face_ids_can_be_narrowed_by_the_month_range` | まとめて処理する対象が撮影年月の絞り込みに従う |
 | `test_face_counts_are_gathered_in_one_query` | 左の一覧の件数を**1回の問い合わせ**で数える（人数ぶんの問い合わせにしない） |
-| `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「誰でもない顔」は外す・記録は消さない） |
+| `test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize` | 「他人(減点)」の絞り込みが一覧・件数・まとめて処理・左の件数で同じ顔を指す。**顔認証外でない顔に残った印は数えない**。逆向き（`penalized=False`）は印の無い顔だけ（#113） |
+| `test_the_rejection_list_is_read_through_the_same_filters` | 「この人物ではない」の一覧も**ふつうの絞り込みに乗る**（撮影年月で絞れる・「顔認証外」は外す・記録は消さない） |
 | `test_faces_can_be_listed_least_confident_first` | 自動割り当ての見直しは**確信度の低い順**（持たない顔は最後） |
 | `test_the_age_order_uses_the_calculated_age_across_every_page` | **年齢順は画面に出ている年齢（確定値か計算値）で全件を並べてからページに分ける。** 出せない顔は最後・重複も欠落もしない |
 | `test_the_age_order_uses_each_face_s_own_person_when_none_is_selected` | 全員ぶんの表示では、顔ごとの人物の誕生日で年齢を出して並べる |
 | `test_every_order_has_its_reverse_and_keeps_missing_values_last` | **並びにはどれも逆向きがあり、値を持たない顔はどちらの向きでも最後**（#69 のコメント） |
-| `test_unassigned_faces_shot_before_the_birth_are_left_out` | 人物の未割当から**誕生前の写真を外す。** 撮影日時が読めない顔・誕生日が読めない場合は外さない |
+| `test_unassigned_faces_shot_before_the_birth_are_left_out` | 人物の未分類から**誕生前の写真を外す。** 撮影日時が読めない顔・誕生日が読めない場合は外さない |
 | `test_unassigned_faces_marked_not_this_person_are_left_out` | 「この人物ではない」と記録した顔は**その人物の候補にだけ**出さない |
 
 ### `test_db_events.py` — 行事（フォルダ×日）の絞り込みと集計（23件）
@@ -122,8 +123,8 @@
 | `test_day_expression_rejects_unreadable_dates` | `TTTT-TT-TT…` と `0000-00-00` を日として扱わない（**長さでは弾けない**） |
 | `test_day_expression_cuts_the_date_part` | 読める撮影日時から日付だけを取る |
 | `test_event_face_counts_splits_the_same_folder_by_day` | **同じフォルダでも日が違えば別の行事**（PR #56 との違い） |
-| `test_event_face_counts_separates_unassigned_manual_and_rejected` | 未割当・手本・除外を別々に数える |
-| `test_event_face_counts_are_sorted_by_unassigned_desc` | 未割当の多い順 |
+| `test_event_face_counts_separates_unassigned_manual_and_rejected` | 未分類・手本・顔認証外を別々に数える |
+| `test_event_face_counts_are_sorted_by_unassigned_desc` | 未分類の多い順 |
 | `test_event_face_counts_keeps_faces_without_a_readable_day` | **撮影日時が読めない顔を落とさない**（実データ 5,916 件） |
 | `test_event_face_counts_ignores_media_without_faces` | 顔の無いメディアだけの行事は出さない |
 | `test_list_faces_filters_by_event_in_every_order` | **並び順の経路が2つある**。どちらでも同じ条件が効く |
@@ -163,9 +164,9 @@
 |---|---|
 | `test_the_measurement_never_writes_to_the_database` | **実データに書かない**（読み取り専用で開く） |
 | `test_undated_faces_are_counted_as_folder_events` | **撮影日時が読めない顔を捨てない**（フォルダ単位の行事として数える） |
-| `test_rejected_faces_are_left_out` | 除外した顔は入れない（決定は減らない） |
+| `test_rejected_faces_are_left_out` | 顔認証外にした顔は入れない（決定は減らない） |
 | `test_the_separation_is_measured_on_dated_events_only` | 行事の中／外の分離に、日付不明の顔を混ぜない |
-| `test_the_decision_count_is_the_number_of_bundles_with_unassigned_faces` | 決定の数 = 未割当を含む束の数 |
+| `test_the_decision_count_is_the_number_of_bundles_with_unassigned_faces` | 決定の数 = 未分類を含む束の数 |
 | `test_the_report_keeps_the_two_kinds_of_events_apart` | 報告は日付つきと日付不明を別の表で出す |
 
 ### `test_fakes_stay_installed.py` — 回帰テストが実物のモデルを要らないこと（2件）
@@ -182,13 +183,13 @@
 
 ### `test_reembed.py` — 特徴量の作り直し（15件）
 
-**ここが壊れると、手作業で積み上げた手本と除外が消える。**
+**ここが壊れると、手作業で積み上げた手本と顔認証外が消える。**
 
 | テスト | 内容 |
 |---|---|
 | `test_too_small_thumbnails_do_not_keep_the_rebuild_unfinished` | **小さすぎる顔が作り直しを永遠に「途中」にしない。** 版を据え置くと毎回「もう一度実行すれば」と誤って案内する |
 | `test_a_face_that_could_not_be_embedded_keeps_a_null_embedding` | 作れなかったことを「いまのモデルで作れなかった」として記録する（版を進めて特徴量 NULL） |
-| `test_reembed_leaves_every_assignment_alone` | **手本・除外・年齢に触らない。** `scan --force-rescan` との決定的な違い |
+| `test_reembed_leaves_every_assignment_alone` | **手本・顔認証外・年齢に触らない。** `scan --force-rescan` との決定的な違い |
 | `test_the_original_photo_is_never_read` | **元写真を読まない**（NFS の 441GB を読み直さない） |
 | `test_faces_already_on_the_current_version_are_left_out` | 版が一致する顔は対象外 |
 | `test_running_twice_does_nothing_the_second_time` | 2回目は空振り（＝再開できることの裏返し） |
@@ -351,7 +352,7 @@
 | テスト | 内容 |
 |---|---|
 | `test_match_assigns_the_correct_person_with_uneven_teacher_counts` | 手本の枚数が人物ごとに違っても正しく引く |
-| `test_match_leaves_distant_faces_unassigned` | 閾値を超える顔は未割当のまま |
+| `test_match_leaves_distant_faces_unassigned` | 閾値を超える顔は未分類のまま |
 | `test_match_rejects_ambiguous_faces` | 2位との差がマージン未満なら割り当てない |
 | `test_match_does_not_learn_from_auto_or_rejected_faces` | 手本は手動割り当てだけ |
 | `test_match_is_idempotent_and_reset_keeps_manual` | 何度実行しても同じ結果。手動は消さない |
@@ -399,11 +400,11 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_unassigned_faces_are_listed` | 未割当の顔が並ぶ |
+| `test_unassigned_faces_are_listed` | 未分類の顔が並ぶ |
 | `test_face_list_is_paged` | ページ単位で読む |
 | `test_assign_and_unassign_faces` | 割り当てと解除 |
-| `test_reject_faces_removes_them_from_the_unassigned_list` | 除外 |
-| `test_deleting_person_returns_faces_to_the_unassigned_list` | 人物削除で顔は未割当に戻る |
+| `test_reject_faces_removes_them_from_the_unassigned_list` | 顔認証外 |
+| `test_deleting_person_returns_faces_to_the_unassigned_list` | 人物削除で顔は未分類に戻る |
 | `test_face_age_dialog_keeps_zero_distinct_from_unset` | 0歳と未設定を区別する |
 | `test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧のページャ |
 | `test_the_age_filter_returns_to_the_first_page` | 絞り込みで1ページ目に戻る |
@@ -417,14 +418,13 @@
 | `test_the_progress_is_reported_for_every_face` | 進み具合が件数で出る |
 | `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
 | `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
-| `test_a_rejected_face_can_be_put_back_to_unassigned` | **除外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
-| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる |
+| `test_a_rejected_face_can_be_put_back_to_unassigned` | **顔認証外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
+| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる（人物の表示で。左の「自動割当」は #113 でやめた） |
 | `test_unassigning_is_blocked_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
-| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 除外済みの顔に「select で減点する」の印を付け外しでき、一覧に `[減点]` と出る（#110） |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（29件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（33件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -432,12 +432,12 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_the_left_list_puts_the_views_above_the_persons` | 表示3つ → 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
+| `test_the_left_list_puts_the_views_above_the_persons` | 表示3つ（未分類・顔認証外・他人(減点)。**自動割当は置かない**・#113）→ 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
 | `test_the_left_list_shows_how_much_work_is_left` | 残りの件数が出て、操作のたびに数え直す |
 | `test_selecting_a_person_shows_the_faces_assigned_to_them` | **人物を選ぶことが、旧「割り当て済みを確認」。** 別ウィンドウは開かない |
 | `test_the_person_filters_only_appear_for_a_person` | 種別・年齢は人物のときだけ出す（誕生日が無いと年齢は計算できない） |
 | `test_each_view_starts_with_the_order_that_suits_it` | 表示ごとに既定の並びへ戻す。**同じ表示のあいだは選んだ並びを変えない** |
-| `test_dragging_a_person_above_the_views_does_not_move_them` | 表示3行はドラッグで動かない。人物の並び順だけを保存する |
+| `test_dragging_a_person_above_the_views_does_not_move_them` | 表示の行はドラッグで動かない。人物の並び順だけを保存する |
 | `test_the_menu_only_offers_what_the_view_can_do` | **その表示でできることだけ**をメニューに出す |
 | `test_the_menu_lists_every_person_as_an_assign_target` | 割り当て先はメニューが持つ |
 | `test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth` | 人物名に撮影時の年齢を添え、**誕生前の写真が混ざっていたら印を付ける** |
@@ -445,9 +445,6 @@
 | `test_the_digit_keys_assign_to_the_persons_in_order` | **1〜9 の打鍵で割り当てられる。** 番号は左の一覧の並び順 |
 | `test_right_clicking_an_unselected_face_selects_it_first` | 右クリックした顔を処理する。**すでに選んでいる顔なら選択を崩さない** |
 | `test_the_hint_line_names_the_keys_that_work_here` | 右クリックは目に見えないので、効く打鍵と選択件数を1行で出す |
-| `test_the_auto_view_names_the_person_on_each_face` | 全員ぶんの表示では、顔に**誰のものか**と年齢を出す |
-| `test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person` | まとめて確定しても、**その顔に付いている人物へ**確定する |
-| `test_not_this_person_in_the_auto_view_records_it_per_person` | 「この人物ではない」も顔ごとの人物に記録する |
 | `test_confirm_is_blocked_unless_an_automatic_face_is_selected` | 確定は自動割り当てだけに効く。押せない理由はツールチップに出す |
 | `test_rejecting_from_the_unassigned_view_does_not_ask` | **毎件通る操作に確認を挟まない**（そこが遅さの正体になる） |
 | `test_rejecting_an_assigned_face_asks_first` | 割り当て済みに押すときは確認する（手作業の結果が消える） |
@@ -458,8 +455,14 @@
 | `test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **枠はサムネイルの寸法に任せない**（先頭の顔が小さいとページ全体が縮んでいた） |
 | `test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text` | 枠にサムネイルと文字2行が入る |
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
-| `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未割当では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
+| `test_orders_that_mean_nothing_in_the_view_cannot_be_chosen` | 未分類では年齢・確信度の並びを押せない（理由はツールチップ）。人物ではどれも選べる |
 | `test_the_person_view_is_sorted_by_the_shown_age_on_every_page` | 画面に出ている年齢がページをまたいで若い順に並ぶ |
+| `test_a_rejected_face_can_be_marked_to_penalize_and_shows_the_mark` | 顔認証外の顔に「他人(減点)にする」の印を付けると他人(減点)へ `[減点]` つきで移り、外すと顔認証外へ戻る（#110・#113） |
+| `test_the_penalized_view_lists_only_the_faces_marked_to_penalize` | 左の `他人(減点)` に印のある顔認証外の顔だけが出て、**顔認証外には出ない**（件数からも引く・利用者の指定）。顔認証外に戻した顔は顔認証外へ戻る（#113） |
+| `test_not_this_person_offers_where_the_face_goes_in_the_person_view` | 人物の表示では「この人物ではない ▸ 未分類へ(N) / 顔認証外へ(X) / 他人(減点)へ(P)」。**同じ打鍵の別の操作は押せない**（打鍵が取り合わない）。自動割当は1項目のまま（#113） |
+| `test_not_this_person_records_it_and_moves_the_face` | どの行き先でも「この人物ではない」を記録し、顔をその一覧へ移す（#113） |
+| `test_the_screen_does_not_use_the_old_names` | 画面の文言に旧い呼び名（未割当・除外・減点対象）を残さない（#113・利用者の指定で用語を統一） |
+| `test_an_unassigned_face_can_go_straight_to_penalized` | 左の「未分類」の右クリックから他人(減点)へ（顔認証外にしてから印を付ける・#113） |
 
 ### `test_recommend.py` — 顔を「この人物に似た順」に並べる（13件）
 
@@ -481,23 +484,23 @@
 | `test_teachers_not_yet_measured_are_measured_before_use` | **GUI で割り当てたばかりの手本（見え方が未計測）を、使う前に測る。** 測らずに使うと横倒しの候補が上位に来た（PR #71 レビュー指摘1） |
 | `test_a_teacher_that_cannot_be_measured_is_still_used` | サムネイルが読めない手本は未計測のまま根拠に残す（**測れないと整列できないを混ぜない**） |
 
-### `test_gui_recommend.py` — 人物の未割当を似た順に見る画面（12件）
+### `test_gui_recommend.py` — 人物の未分類を似た順に見る画面（12件）
 
 **探す時間を削るための画面**（他人の顔の 99.1% が家族の写真に混ざっていて、まとめて消せない）。
 
 | テスト | 内容 |
 |---|---|
-| `test_unassigned_faces_of_a_person_are_listed_most_similar_first` | 種別「未割当」を選ぶと、**並びを選び直さなくても**似た順に並ぶ |
+| `test_unassigned_faces_of_a_person_are_listed_most_similar_first` | 種別「未分類」を選ぶと、**並びを選び直さなくても**似た順に並ぶ |
 | `test_the_reverse_order_lists_the_least_similar_first` | 似ていない順 |
 | `test_faces_that_cannot_be_this_person_are_not_offered` | **誕生前の写真と「この人物ではない」と決めた顔は、どれだけ似ていても出さない** |
 | `test_a_person_without_teachers_says_the_order_is_not_by_similarity` | **手本が0件の人物では、そうと分かる表示を出す**（黙って id 順にしない） |
 | `test_assigning_from_the_list_improves_the_order_right_away` | 割り当てた顔がすぐ手本になり、次の並びに効く |
 | `test_the_similarity_is_kept_while_paging` | ページ送りで計算し直さない |
-| `test_similarity_orders_need_a_person` | 比べる人物が居ない表示では似た順を押せない。人物の未割当では確信度の並びを押せない |
+| `test_similarity_orders_need_a_person` | 比べる人物が居ない表示では似た順を押せない。人物の未分類では確信度の並びを押せない |
 | `test_a_persons_own_faces_can_be_listed_least_similar_first` | 似ていない順で、割り当ての誤りを探せる（自分自身は手本から外す） |
-| `test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense` | 右クリックは「この人物ではない」と「誰でもない顔」。戻す先は無い |
+| `test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense` | 右クリックは「この人物ではない ▸ 未分類のまま / 顔認証外へ / 他人(減点)へ」（#113）。戻す先は無い |
 | `test_not_this_person_removes_the_face_from_the_candidates` | 「この人物ではない」と押した顔はその人物の候補から消える |
-| `test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation` | 未割当の除外に確認を挟まない（毎件通る操作） |
+| `test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation` | 未分類の顔認証外に確認を挟まない（毎件通る操作） |
 | `test_switching_back_from_unassigned_restores_the_persons_order` | 種別を戻すと人物の既定の並び（年齢順）に戻る |
 
 ### `test_gui_match.py` — `match` を画面から流す（8件）
@@ -513,13 +516,13 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（21件。#104・#106）
+### `test_gui_select.py` — 写真の選定タブ（26件。#104・#106・#113）
 
 | テスト | 内容 |
 |---|---|
 | `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚。1枚目は今の顔の割り当て |
 | `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
-| `test_loading_lists_every_year_with_its_candidates` | 候補を読み込むと、年ごとの候補の枚数が表に並ぶ（整数の `count_per_year` は全部の年に入る） |
+| `test_loading_lists_every_year_with_its_candidates` | **タブを開いた時点で**年ごとの候補の枚数が表に並び、枚数を入れられる（整数の `count_per_year` は全部の行に入る・「候補を読み込む」ボタンは無い・#113） |
 | `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
 | `test_a_year_set_to_zero_is_not_chosen` | 0 の年からは選ばない |
 | `test_fill_all_years_sets_every_year` | 「全部の年に入れる」 |
@@ -530,16 +533,21 @@
 | `test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation` | サムネイルは EXIF の埋め込みから（先頭だけ読む）。読めなければ None |
 | `test_the_breakdown_never_shows_minus_zero` | 内訳に `-0.0` を出さない |
 | `test_selecting_a_photo_shows_where_it_is_and_why` | 写真を選ぶと場所と点の内訳が出る |
+| `test_selecting_a_photo_shows_it_large_on_the_right` | サムネイルを選ぶと右に大きく出る。ページを替えたら消える（#113） |
+| `test_the_preview_is_read_from_the_photo_not_the_small_exif_thumbnail` | プレビューは元写真から読む（埋め込みのサムネイルは粗い）。読めなければ None（#113） |
 | `test_unchecking_family_only_adds_the_years_without_family` | **絞り込みを変えたら年の表を作り直す**（家族のいない年が表に無く選ばれなかった。PR #108 のレビュー指摘1） |
 | `test_reloading_for_auto_assignments_keeps_the_year_counts` | **読み込み直しても入れた枚数を引き継ぐ**（ルールファイルの値に戻っていた。指摘1） |
-| `test_reloading_clears_the_previous_results` | **読み込み直したら前の結果を捨てる**（古い写真の内訳で例外・古い結果を出力していた。指摘2） |
+| `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
+| `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
+| `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
+| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は「何年〜何年」で絞る。初めは全部の年・年不明は最後・逆に選んでも同じ範囲（#113） |
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
 | `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
 | `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |
 | `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
 | `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
 
-### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（23件）
+### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（24件）
 
 **1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。
 
@@ -553,16 +561,17 @@
 | `test_the_two_paths_turn_an_event_into_the_same_filter` | 両方の経路が `event_filters` の同じ変換を通る |
 | `test_the_dialog_bundles_only_the_chosen_day` | 束ねるのはその日の顔だけ |
 | `test_near_faces_land_in_one_cluster` | 近い顔が1つの束になる |
-| `test_rejected_and_auto_faces_are_left_out_of_the_bundles` | 除外と自動割当は束ねない |
+| `test_rejected_and_auto_faces_are_left_out_of_the_bundles` | 顔認証外と自動割当は束ねない |
 | `test_a_cluster_shows_the_teacher_it_contains` | 束に混ざった手本の名前を出す |
 | `test_assigning_a_cluster_never_touches_the_teacher_in_it` | **手本を巻き込まない**（いちばん大事な一線） |
 | `test_a_cluster_becomes_done_after_it_is_assigned` | 押した束は「済」になる（二度押さない） |
-| `test_rejecting_a_cluster_only_rejects_the_pending_faces` | まとめて除外も未判断の顔だけ |
+| `test_rejecting_a_cluster_only_rejects_the_pending_faces` | まとめて顔認証外にするのも未判断の顔だけ |
 | `test_only_one_page_of_thumbnails_is_read_at_a_time` | **サムネイルは1ページ分だけ読む** |
 | `test_people_born_after_the_event_are_not_offered` | その日に生まれていない人物は選べない |
 | `test_people_without_a_birth_date_stay_in_the_list` | 誕生日が未設定の人物は残す |
 | `test_too_many_faces_is_reported_instead_of_truncated` | 上限超過を黙って切らない |
 | `test_bulk_reject_covers_the_whole_event_but_not_other_days` | 行事まるごとの処理が別の日に漏れない |
+| `test_bulk_unpenalize_keeps_the_faces_rejected` | 他人(減点)のまとめ処理は**印だけを外す**（未分類へ戻さない）。別の日の印は残す（#113） |
 | `test_bulk_buttons_stay_disabled_until_an_event_is_chosen` | **行事を選ぶまで押せない**（押し間違いで全件に効くのを防ぐ） |
 | `test_the_bulk_button_changes_meaning_with_the_view` | 表示に応じてボタンの意味が変わる |
 | `test_splitting_a_cluster_uses_a_tighter_distance` | 大きい束を割れる（実データは 380 件の束を作る） |
@@ -635,7 +644,7 @@
 | `test_the_preview_says_done_and_fades_after_an_assignment` | **割り当てた顔が濃いまま残らない。** 「完了」を出して薄くする |
 | `test_the_done_label_sits_on_top_of_the_photo` | 札は顔写真に重ねて中央 |
 | `test_choosing_another_face_clears_the_done_label` | 次の顔を選んだら消す |
-| `test_rejecting_a_face_also_says_done` | 除外でも同じ扱い |
+| `test_rejecting_a_face_also_says_done` | 顔認証外でも同じ扱い |
 | `test_dimming_leaves_the_original_alone` | 薄くするのは複製。元の画像を書き換えない |
 
 ### `test_selection.py` — 抽出とコピー（112件）
@@ -820,16 +829,16 @@
 | `test_match_writes_the_same_score_as_select_with_the_photo_quality` | **`match` の `family_score` も `PhotoQuality` を読み、`select` と同じ点**（読まないと測った写真で食い違う） |
 | `test_the_real_models_give_scores_in_their_ranges`（`models`） | 実物の ONNX が範囲内の点を出す（環境依存・合否に含めない） |
 
-### `test_strangers.py` — 減点する顔の写った写真の点を下げる（9件。#100・#110）
+### `test_strangers.py` — 他人(減点)の顔の写った写真の点を下げる（9件。#100・#110）
 
 | テスト | 内容 |
 |---|---|
 | `test_the_prominence_is_a_straight_line_between_its_bounds` | 目立ち具合は境の間を直線で結ぶ |
-| `test_only_the_faces_marked_to_penalize_count` | **印を付けた除外の顔だけを引く。** 未割当の顔と印の無い除外の顔は引かない（#110 の利用者の決定） |
+| `test_only_the_faces_marked_to_penalize_count` | **印を付けた顔認証外の顔だけを引く。** 未分類の顔と印の無い顔認証外の顔は引かない（#110 の利用者の決定） |
 | `test_a_small_marked_face_weighs_little` | 印があっても、背景に小さく写っただけなら重みは小さい |
 | `test_photos_without_family_are_not_looked_at` | 家族の写っていない写真は見ない |
 | `test_a_close_persons_face_is_not_the_yardstick` | 大きさの物差しは家族の顔だけ（親しい人の大きな顔で減点が薄まらない） |
-| `test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves` | **印は除外の顔にだけ付く。** 除外し直しても残り、未割当に戻すと消える |
+| `test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves` | **印は顔認証外の顔にだけ付く。** 顔認証外にし直しても残り、未分類に戻すと消える |
 | `test_the_penalty_is_subtracted_from_the_photo_score` | 重み 1 あたり 30 点（利用者の決定） |
 | `test_select_and_match_use_the_same_penalty` | `select` の並びと `match` の `family_score` は同じ式 |
 | `test_a_family_photo_with_a_penalized_face_still_ranks_above_a_photo_without_family` | **点が負になっても、家族の写った写真は家族のいない写真より前**（`family_only: false`。PR #101 のレビュー指摘1） |
@@ -846,7 +855,7 @@
 | `test_family_only_drops_a_photo_with_only_a_close_person` | **親しい人だけの写真は `family_only` で外れる** |
 | `test_the_breakdown_shows_the_close_person_and_adds_up` | 内訳に親しい人の項目が出て、合計が並びの点と一致する |
 | `test_a_negative_or_infinite_weight_is_refused` | 負・無限大・NaN の重みは受け付けない |
-| `test_a_version_11_database_gains_the_columns_and_keeps_everything` | **v11 → v12 で人物・手本・除外が減らない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0 |
+| `test_a_version_11_database_gains_the_columns_and_keeps_everything` | **v11 → v12 で人物・手本・顔認証外が減らない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0 |
 
 ### `test_converter.py` — HEIC → JPEG（16件）
 
@@ -1042,7 +1051,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_top1_accuracy_excludes_faces_from_the_same_photo` | **同じ写真の顔を候補から外す。** 外さないと正解率が水増しされる（0% が 40% に見える） |
 | `test_top1_accuracy_reports_nothing_when_every_face_shares_one_photo` | 評価できる顔が無ければ件数0を返す |
 | `test_pairs_are_split_into_within_event_and_across_events` | **プールした平均を出さない。** ここを混ぜたのが 9/20 の読み違いの原因 |
-| `test_faces_without_a_readable_date_are_left_out_of_both_sides` | **分からないものをどちらかに混ぜない**（未割当の 10.4% が該当） |
+| `test_faces_without_a_readable_date_are_left_out_of_both_sides` | **分からないものをどちらかに混ぜない**（未分類の 10.4% が該当） |
 | `test_pairs_from_the_same_photo_are_skipped` | ペアの集計でも同じ写真を外す |
 | `test_the_gap_is_how_far_strangers_sit_from_the_same_person`（2件） | 差の定義と、片側が空のとき |
 | `test_the_sweep_finds_a_threshold_that_separates`（2件） | 閾値の振り方と、振れないとき |
@@ -1082,7 +1091,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_ties_share_the_average_rank` | 同じ値には平均の順位 |
 | `test_best_first_respects_models_where_lower_is_better` | 点の低いほうが良いモデルは逆に並べる |
 | `test_disagreements_put_the_largest_rank_gap_first` | 2つのモデルの食い違いは順位の差が大きい順 |
-| `test_the_sample_is_family_photos_only_and_repeatable` | 手本か自動割り当ての顔がある画像だけ（未割当・動画は外す）。2回呼べば同じ写真 |
+| `test_the_sample_is_family_photos_only_and_repeatable` | 手本か自動割り当ての顔がある画像だけ（未分類・動画は外す）。2回呼べば同じ写真 |
 | `test_the_sample_does_not_depend_on_the_order_sqlite_returns` | **SQLite の返す順に依存しない**（索引の無い表に逆順で入れて確かめる。実データの DB は索引で ID 順に返すので、上のテストでは `ORDER BY` を外しても気づけない） |
 | `test_sheets_are_written_for_each_model_and_each_pair` | 見比べ画像はモデルごとの上位・下位と、組ごとの食い違い。読めない写真があっても止めない |
 

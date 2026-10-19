@@ -1,8 +1,8 @@
-"""家族の写真に写った**減点する顔**の点を下げる（#100・#110）。
+"""家族の写真に写った**他人(減点)の顔**の点を下げる（#100・#110）。
 
-**減点するのは、利用者が選んだ顔だけ**（#110・2026-10-17 の利用者の決定）。除外した顔のうち「減点する」の印を
-付けた顔だけを、家族と比べた大きさ（目立ち具合）× 30 で引く。未割当の顔と、印の無い除外の顔は引かない。
-以前（#100）は未割当・除外の顔すべてを、家族の顔までの距離（家族らしくなさ）を掛けて引いていた。
+**減点するのは、利用者が選んだ顔だけ**（#110・2026-10-17 の利用者の決定）。顔認証外にした顔のうち「減点する」の印を
+付けた顔だけを、家族と比べた大きさ（目立ち具合）× 30 で引く。未分類の顔と、印の無い顔認証外の顔は引かない。
+以前（#100）は未分類・顔認証外の顔すべてを、家族の顔までの距離（家族らしくなさ）を掛けて引いていた。
 """
 
 import pytest
@@ -54,12 +54,12 @@ def test_the_prominence_is_a_straight_line_between_its_bounds():
 
 
 def test_only_the_faces_marked_to_penalize_count(connection, father):
-    """**選んだ顔だけ。** 未割当と、印の無い除外の顔は引かない（#110）。"""
+    """**選んだ顔だけ。** 未分類と、印の無い顔認証外の顔は引かない（#110）。"""
     photo = _media(connection, 1)
     _face(connection, photo, person_id=father, source=db.ASSIGN_MANUAL)
     _face(connection, photo, source=db.ASSIGN_REJECTED, penalize=True)
-    _face(connection, photo, source=db.ASSIGN_REJECTED)  # 除外しただけ
-    _face(connection, photo)  # 未割当
+    _face(connection, photo, source=db.ASSIGN_REJECTED)  # 顔認証外にしただけ
+    _face(connection, photo)  # 未分類
     assert _weights(connection) == {photo: pytest.approx(1.0)}
 
 
@@ -92,11 +92,11 @@ def test_a_close_persons_face_is_not_the_yardstick(connection, father):
 def test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves(connection, father):
     photo = _media(connection, 1)
     unassigned = _face(connection, photo)
-    assert db.set_face_penalty(connection, [unassigned], True) == 0  # 除外していない顔には付かない
+    assert db.set_face_penalty(connection, [unassigned], True) == 0  # 顔認証外にしていない顔には付かない
     rejected = _face(connection, photo, source=db.ASSIGN_REJECTED, penalize=True)
-    db.reject_faces(connection, [rejected])  # 除外し直しても印は残る
+    db.reject_faces(connection, [rejected])  # 顔認証外にし直しても印は残る
     assert connection.execute("SELECT penalize FROM Face WHERE id = ?", (rejected,)).fetchone()[0] == 1
-    db.unassign_faces(connection, [rejected])  # 除外を外したら印も消える
+    db.unassign_faces(connection, [rejected])  # 顔認証外を外したら印も消える
     assert connection.execute("SELECT penalize FROM Face WHERE id = ?", (rejected,)).fetchone()[0] is None
     db.reject_faces(connection, [rejected])
     assert connection.execute("SELECT penalize FROM Face WHERE id = ?", (rejected,)).fetchone()[0] is None

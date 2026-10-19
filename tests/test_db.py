@@ -89,7 +89,7 @@ def test_person_crud_and_face_assignment(tmp_path: Path):
         db.update_person(connection, person_id, "父さん", "father", "memo2")
         assert db.list_persons(connection)[0]["name"] == "父さん"
 
-        # 人物を消しても顔は残り、未割当に戻る
+        # 人物を消しても顔は残り、未分類に戻る
         db.delete_person(connection, person_id)
         assert db.list_persons(connection) == []
         assert db.count_faces(connection, unassigned=True) == 1
@@ -380,7 +380,7 @@ def _seed_for_ordering(connection):
 
 
 def test_faces_can_be_listed_newest_shot_first(tmp_path: Path):
-    """未割当の一覧は撮影日時の新しい順。**同じ行事の写真が固まる。**
+    """未分類の一覧は撮影日時の新しい順。**同じ行事の写真が固まる。**
 
     まとめて選んで一度に割り当てられる。撮影年をまたがないので、
     年齢の初期値も1つに定まる。
@@ -568,7 +568,7 @@ def test_a_broken_exif_date_does_not_take_over_the_newest_page(tmp_path: Path):
 def test_the_shooting_date_order_does_not_fall_back_to_a_full_sort(tmp_path: Path):
     """**索引を歩くこと。** 全件並べ直しに戻っていないかを問い合わせ計画で見る。
 
-    実データ（未割当 58,547 件）では、全件並べ直すと 1ページの読み出しが
+    実データ（未分類 58,547 件）では、全件並べ直すと 1ページの読み出しが
     220〜435ms かかる。索引を順に歩けば 1ページ目は 0.6ms。
     `CROSS JOIN` を外すと、この検査が落ちる。
     """
@@ -744,7 +744,7 @@ def test_shooting_dates_come_back_keyed_by_face_id(tmp_path: Path):
 
 
 def test_resetting_auto_assignments_leaves_the_manual_ones_alone(tmp_path: Path):
-    """**自動だけを消す。** 手本と除外は GUI で積み上げた判断なので触らない。"""
+    """**自動だけを消す。** 手本と顔認証外は GUI で積み上げた判断なので触らない。"""
     connection = db.ensure_database(str(tmp_path / "test.db"))
     try:
         person = db.add_person(connection, "Alice")
@@ -793,7 +793,7 @@ def test_faces_can_be_filtered_by_shooting_month(tmp_path: Path):
     """**撮影年月で絞れること。**
 
     家族の写っていない行事（結婚式や旅行先の他人）は時期でまとまっているので、
-    その時期だけを開いてまとめて除外できる。
+    その時期だけを開いてまとめて顔認証外にできる。
     """
     connection = db.ensure_database(str(tmp_path / "test.db"))
     try:
@@ -949,9 +949,40 @@ def test_face_counts_are_gathered_in_one_query(tmp_path: Path):
         assert counts["manual"] == 1
         assert counts["auto"] == 1
         assert counts["rejected"] == 1
+        assert counts["penalized"] == 0
         assert counts["by_person"][person_id] == {"manual": 1, "auto": 0}
         assert counts["by_person"][other] == {"manual": 0, "auto": 1}
         assert sum("SELECT" in text.upper() for text in statements) == 1, statements
+    finally:
+        connection.close()
+
+
+def test_the_penalized_filter_reads_only_rejected_faces_marked_to_penalize(tmp_path: Path):
+    """「他人(減点)」（#113）の絞り込みと件数が、**顔認証外 かつ 印あり**の顔だけを見ること。
+
+    逆向き（``penalized=False``）は印の無い顔だけで、顔認証外の表示が使う。
+
+    一覧・件数・まとめて処理・左の件数が同じ顔を指す。印が顔認証外でない顔に
+    残っていても（移行の途中など）数えない。
+    """
+    connection = db.ensure_database(str(tmp_path / "penalized.db"))
+    try:
+        person_id, faces = _seed_for_ordering(connection)
+        db.reject_faces(connection, [faces["古い"], faces["中間"]])
+        db.set_face_penalty(connection, [faces["古い"]], True)
+        # 顔認証外でない顔に印が残っている形を作る（画面からは作れない）。
+        connection.execute("UPDATE Face SET penalize = 1 WHERE id = ?", (faces["新しい"],))
+
+        assert [face["id"] for face in db.list_faces(connection, penalized=True)] == [faces["古い"]]
+        assert db.count_faces(connection, penalized=True) == 1
+        assert db.face_ids(connection, penalized=True) == [faces["古い"]]
+        assert db.face_counts(connection)["penalized"] == 1
+        assert db.face_counts(connection)["rejected"] == 2
+        # 顔認証外の表示は印の無い顔認証外の顔だけを読む（#113）。
+        unmarked = dict(assign_source=db.ASSIGN_REJECTED, penalized=False)
+        assert [face["id"] for face in db.list_faces(connection, **unmarked)] == [faces["中間"]]
+        assert db.count_faces(connection, **unmarked) == 1
+        assert db.face_ids(connection, **unmarked) == [faces["中間"]]
     finally:
         connection.close()
 
@@ -979,11 +1010,11 @@ def test_the_rejection_list_is_read_through_the_same_filters(tmp_path: Path):
             connection, rejected_for_person=person_id, month_from="2017-01"
         ) == [faces["中間"]]
 
-        # **「誰でもない顔」にした顔は出さない。** `match` の候補から顔ごと
+        # **「顔認証外」にした顔は出さない。** `match` の候補から顔ごと
         # 外れるので、否定の記録はもう何の仕事もしていない。
         db.reject_faces(connection, [faces["古い"]])
         assert db.face_ids(connection, rejected_for_person=person_id) == [faces["中間"]]
-        # **記録そのものは消さない**（除外を取り消せば一覧に戻る）。
+        # **記録そのものは消さない**（顔認証外を取り消せば一覧に戻る）。
         assert db.count_person_rejections(connection, person_id) == 2
         db.unassign_faces(connection, [faces["古い"]])
         assert db.face_ids(connection, rejected_for_person=person_id) == sorted(
@@ -1017,7 +1048,7 @@ def test_faces_can_be_listed_least_confident_first(tmp_path: Path):
         ]
 
         assert listed[:3] == [faces["中間"], faces["新しい"], faces["古い"]]
-        # 確信度を持たない顔（未割当）は最後
+        # 確信度を持たない顔（未分類）は最後
         assert listed[-1] == faces["日時なし"]
     finally:
         connection.close()
@@ -1185,7 +1216,7 @@ def test_every_order_has_its_reverse_and_keeps_missing_values_last(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# 人物の画面で未割当を見るとき、候補になりえない顔を外す（#69）
+# 人物の画面で未分類を見るとき、候補になりえない顔を外す（#69）
 # ---------------------------------------------------------------------------
 
 

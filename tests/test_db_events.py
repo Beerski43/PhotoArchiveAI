@@ -134,9 +134,9 @@ def test_event_face_counts_splits_the_same_folder_by_day(connection):
 
 
 def test_event_face_counts_separates_unassigned_manual_and_rejected(connection):
-    """未割当・手本・除外を別々に数える。
+    """未分類・手本・顔認証外を別々に数える。
 
-    **手本の件数が見えないと、まとめて除外を押せない。** 結婚式のフォルダは
+    **手本の件数が見えないと、まとめて顔認証外にする操作を押せない。** 結婚式のフォルダは
     「ほぼ他人」であって「全部他人」ではなく、家族も写っている。
     """
     person_id = db.add_person(connection, name="${PERSON_2}")
@@ -163,7 +163,7 @@ def test_event_face_counts_separates_unassigned_manual_and_rejected(connection):
 
 
 def test_event_face_counts_are_sorted_by_unassigned_desc(connection):
-    """**未割当の多い順。** 効き目の大きい行事が上に来る。"""
+    """**未分類の多い順。** 効き目の大きい行事が上に来る。"""
     small = _add_media(connection, "/photos/small/a.jpg")
     big = _add_media(connection, "/photos/big/b.jpg")
     _add_face(connection, small)
@@ -177,7 +177,7 @@ def test_event_face_counts_are_sorted_by_unassigned_desc(connection):
 def test_event_face_counts_keeps_faces_without_a_readable_day(connection):
     """**撮影日時が読めない顔を落とさない。** 実データで 6,190 件ある。
 
-    落とすと、一覧に出ない顔が未割当のまま永久に残る。``day`` を ``None`` に
+    落とすと、一覧に出ない顔が未分類のまま永久に残る。``day`` を ``None`` に
     して「フォルダだけが同じ集まり」として見せる。
     """
     broken = _add_media(connection, "/photos/broken/a.jpg", shooting_date="TTTT-TT-TTTTT:TT:TT")
@@ -253,7 +253,7 @@ def test_event_filter_does_not_match_subfolders(connection):
     """**入れ子は別のフォルダとして扱う。** 前方一致にしない。
 
     実データの `2011/110416雄司明日美結婚式` は `式場/data` と `${SURNAME}` に
-    分かれていて、片方だけ除外したい場合がある。
+    分かれていて、片方だけ顔認証外にしたい場合がある。
     """
     parent = _add_media(connection, "/photos/wedding/a.jpg")
     child = _add_media(connection, "/photos/wedding/hall/b.jpg")
@@ -322,7 +322,7 @@ def test_face_filter_without_an_event_keeps_the_previous_query(connection):
     """**行事を指定しないときは問い合わせを変えない。**
 
     `match` と `evaluate` も `list_faces` を通る。条件が1つ増えるだけで、
-    58,547 件の未割当を撮影日時順に読む経路が索引から外れる（実測 0.002 秒 →
+    58,547 件の未分類を撮影日時順に読む経路が索引から外れる（実測 0.002 秒 →
     0.199 秒）。
     """
     where, params = db._face_filter(None, None, True, None, None)

@@ -349,7 +349,7 @@ class Candidates:
         return [row for row in self.rows if row["assign_source"] in sources]
 
     def stranger_weights(self, sources: Sequence[str]) -> Dict[int, float]:
-        """写真ごとの減点する顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
+        """写真ごとの他人(減点)の顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
         key = tuple(sorted(sources))
         if key not in self._strangers:
             self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
@@ -361,6 +361,20 @@ def candidate_counts(candidates: "Candidates", rule: Dict[str, Any]) -> Dict[Opt
     _, family_of = _scores(candidates, family_sources(rule), None)
     counts: Dict[Optional[int], int] = {}
     for media in _filtered(candidates.media, rule, family_of):
+        year = _get_media_year(media)
+        counts[year] = counts.get(year, 0) + 1
+    return counts
+
+
+def year_counts(connection, rule: Dict[str, Any]) -> Dict[Optional[int], int]:
+    """`candidate_counts` と同じ数を、**候補を用意せずに** DB だけから数える（#113）。
+
+    見え方・表情を測らないので速い（実データで約 1 秒）。GUI の年の表を、候補を読み込む前から
+    出すためにある（利用者「最初から年毎の選ぶ枚数を入れれるようにしてほしい」）。
+    """
+    family_of = _family_of(db.family_faces(connection, assign_sources=family_sources(rule)))
+    counts: Dict[Optional[int], int] = {}
+    for media in _filtered(get_media_with_analysis(connection), rule, family_of):
         year = _get_media_year(media)
         counts[year] = counts.get(year, 0) + 1
     return counts
@@ -716,7 +730,7 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     if limit_of is not None:
         filtered = [m for m in filtered if limit_of(_get_media_year(m)) != 0]
 
-    # **家族の写った写真が先。** 減点する顔の重みを引くと点が負になりうる（#100・#110）ので、
+    # **家族の写った写真が先。** 他人(減点)の顔の重みを引くと点が負になりうる（#100・#110）ので、
     # 点だけで並べると、家族の写った写真が家族のいない写真（点 0）より後ろに来る
     # （`family_only: false` のとき。PR #101 のレビュー指摘1・利用者の決定）。
     filtered.sort(key=lambda m: (

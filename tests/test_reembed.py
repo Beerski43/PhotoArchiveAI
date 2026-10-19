@@ -1,6 +1,6 @@
 """保存済みサムネイルから特徴量を作り直す（Issue #59）。
 
-**ここが壊れると、手作業で積み上げた手本126件と除外268件が消える。**
+**ここが壊れると、手作業で積み上げた手本126件と顔認証外268件が消える。**
 `scan --force-rescan` との決定的な違いがそこなので、いちばん厚く見張る。
 """
 
@@ -89,10 +89,10 @@ def _raw(connection, face_id: int) -> dict:
 
 
 def test_reembed_leaves_every_assignment_alone(connection):
-    """**手本・除外・年齢に触らない。**
+    """**手本・顔認証外・年齢に触らない。**
 
     `scan --force-rescan` は顔の行を作り直すので、GUI で積み上げたもの
-    （実データで手本126件・除外268件）が消える。`reembed` はそれを避けるために
+    （実データで手本126件・顔認証外268件）が消える。`reembed` はそれを避けるために
     ある。書き換えるのは `embedding` と `embed_version` だけ。
     """
     person_id = db.add_person(connection, "${PERSON_2}")

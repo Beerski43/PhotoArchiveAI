@@ -85,7 +85,7 @@ def test_match_assigns_the_correct_person_with_uneven_teacher_counts(connection)
 
 
 def test_match_leaves_distant_faces_unassigned(connection):
-    """似ていない顔は未割当のまま残すこと。
+    """似ていない顔は未分類のまま残すこと。
 
     旧実装は閾値判定が無く、どれだけ遠くても必ず誰かに紐づけていた (#22)。
     """
@@ -192,7 +192,7 @@ def test_match_dry_run_does_not_write(connection):
 def test_dry_run_is_not_blinded_by_a_previous_match(connection):
     """2回目以降の --dry-run が空振りしないこと。
 
-    dry-run は自動割り当てを取り消さないので、候補を「未割当」に
+    dry-run は自動割り当てを取り消さないので、候補を「未分類」に
     限ると、前回 auto が付いた顔を数え落として件数も距離の分布も
     実際より小さく出ていた。--threshold を決める目安にならない。
     """
@@ -297,7 +297,7 @@ def test_removing_an_impossible_person_lets_the_margin_through(connection):
     """**絞るのは `_best_match` に渡す前でなければならない。**
 
     あとから捨てると、ありえない人物が「2位」に居座ってマージンを潰し、
-    判断が保留のままになる。**実データではこれが効いて、未割当だった
+    判断が保留のままになる。**実データではこれが効いて、未分類だった
     457 件が正しく兄へ付いた。**
     """
     people = _births(connection, 兄="2009-02-01", 妹="2010-12-01")
@@ -395,7 +395,7 @@ def test_the_distance_histogram_leaves_out_faces_with_no_candidate(connection):
 def test_a_face_marked_as_not_this_person_is_not_assigned_to_them_again(connection):
     """**「割り当てを解除」だけでは、match を流すたびに同じ誤りが戻る。**
 
-    `match` は手本と閾値だけで結果が決まるので、未割当に戻した判断はどこにも
+    `match` は手本と閾値だけで結果が決まるので、未分類に戻した判断はどこにも
     残らない。実データでは、${PERSON_4}の自動割り当てを見直して解除した **1,785 件**が
     これに当たった。**否定を残して初めて、その判断が次の match に効く。**
     """
@@ -417,7 +417,7 @@ def test_a_face_marked_as_not_this_person_is_not_assigned_to_them_again(connecti
 
 
 def test_not_this_person_still_allows_another_person(connection):
-    """**「この人物ではない」は「誰でもない」ではない。**
+    """**「この人物ではない」は「顔認証外」ではない。**
 
     兄弟の赤ん坊は互いによく似ている。妹を否定したら、**兄には付いてよい。**
     `assign_source='rejected'` との違いがここ。

@@ -34,7 +34,7 @@ def _always_accepts_age(age):
 
 
 def _select_scope(window, scope):
-    """左の一覧で表示（未割当・自動割当・除外済み）を選ぶ。
+    """左の一覧で表示（未分類・自動割当・顔認証外）を選ぶ。
 
     **これが旧 `filter_box`。** 表示の選択を左の一覧へ畳んだので、
     同じことを2か所で選ばせない（#67）。
@@ -494,15 +494,15 @@ def test_setting_the_age_of_many_faces_commits_once(window, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 除外の取り消し
+# 顔認証外の取り消し
 # ---------------------------------------------------------------------------
 
 
 def test_a_rejected_face_can_be_put_back_to_unassigned(window):
-    """**除外を取り消せること。**
+    """**顔認証外を取り消せること。**
 
-    除外した顔は人物の表示に出てこない（あちらは人物で絞るが、
-    除外した顔は `person_id` を持たない）。そのため、いったん除外すると
+    顔認証外にした顔は人物の表示に出てこない（あちらは人物で絞るが、
+    顔認証外にした顔は `person_id` を持たない）。そのため、いったん顔認証外にすると
     **誰かに割り当てる以外に戻す手段が無かった。** 「決めきれないので保留に
     戻す」ができない。
     """
@@ -529,7 +529,12 @@ def test_an_auto_assignment_can_also_be_put_back(window):
     face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
     db.assign_faces(window.connection, face_ids, person_id, db.ASSIGN_AUTO, assign_score=50.0)
 
-    _select_scope(window, photoarchive_gui.SCOPE_AUTO)
+    # 自動割当は人物の表示で見る（左の「自動割当」は #113 でやめた）。
+    window._reload_person_list()
+    for row in range(window.person_list.count()):
+        person = window.person_list.item(row).data(Qt.UserRole)
+        if person is not None and person["id"] == person_id:
+            window.person_list.setCurrentRow(row)
     window.face_list.selectAll()
     window._unassign_selected()
 
@@ -549,13 +554,13 @@ def test_unassigning_is_blocked_while_showing_unassigned_faces(window):
     assert "戻す先がありません" in window.action_unassign.toolTip()
     assert photoarchive_gui.ACTION_UNASSIGN not in [
         action.text() for action in window._menu_actions()
-    ], "未割当の表示では、そもそもメニューに出さない"
+    ], "未分類の表示では、そもそもメニューに出さない"
 
     db.reject_faces(window.connection, [db.list_faces(window.connection)[0]["id"]])
     _select_scope(window, photoarchive_gui.SCOPE_REJECTED)
     window.face_list.selectAll()
     assert window.action_unassign.isEnabled() is True
-    assert "未割当に戻します" in window.action_unassign.toolTip()
+    assert "未分類に戻します" in window.action_unassign.toolTip()
 
 
 def test_putting_a_face_back_says_done(window):
@@ -567,7 +572,7 @@ def test_putting_a_face_back_says_done(window):
 
     window._unassign_selected()
 
-    assert "未割当に戻しました" in window.preview_status.text()
+    assert "未分類に戻しました" in window.preview_status.text()
 
 
 def test_putting_faces_back_does_not_reload_the_preview(window, monkeypatch):
@@ -975,7 +980,7 @@ def test_clearing_the_age_filter_shows_everything_again(window):
 
 
 def test_not_this_person_records_the_rejection_and_clears_the_assignment(window):
-    """**除外は2種類ある。** こちらは「その人物ではない」。
+    """**顔認証外は2種類ある。** こちらは「その人物ではない」。
 
     実データでは、${PERSON_4}の自動割り当てを見直して解除した 1,785 件が
     `match` を流すと戻ってくる状態だった。**解除では判断が残らない。**
@@ -995,11 +1000,11 @@ def test_not_this_person_records_the_rejection_and_clears_the_assignment(window)
     assert db.count_person_rejections(connection, person_id) == len(face_ids)
     rows = {row["id"]: row for row in db.list_faces(connection)}
     assert all(rows[f]["person_id"] is None for f in face_ids), "割り当ては外れる"
-    assert all(rows[f]["assign_source"] is None for f in face_ids), "除外にはしない"
+    assert all(rows[f]["assign_source"] is None for f in face_ids), "顔認証外にはしない"
 
 
 def test_nobody_s_face_is_a_different_button_and_asks_first(window, monkeypatch):
-    """**「誰でもない顔」はどの人物にも付かなくなる。** 取り返しがつきにくいので確認する。"""
+    """**「顔認証外」はどの人物にも付かなくなる。** 取り返しがつきにくいので確認する。"""
     connection = window.connection
     person_id, face_ids = _assigned_person_with_faces(
         connection,
@@ -1139,7 +1144,7 @@ def test_the_unassigned_list_can_be_filtered_by_a_month_range(tmp_path):
     """**いつからいつまでで絞れること。** 両端を含む。
 
     家族の写っていない写真は時期でまとまっている（結婚式・旅行先の他人）ので、
-    その期間だけを開いてまとめて除外できる。
+    その期間だけを開いてまとめて顔認証外にできる。
     """
     database = tmp_path / "gui.db"
     connection = db.ensure_database(str(database))
@@ -1296,9 +1301,9 @@ def test_choosing_a_month_goes_back_to_the_first_page(tmp_path, monkeypatch):
 
 
 def test_a_face_made_nobody_s_disappears_from_the_not_this_person_list(window, monkeypatch):
-    """**「誰でもない顔」を押したのに一覧から消えない。**
+    """**「顔認証外」を押したのに一覧から消えない。**
 
-    `誰でもない顔` は `Face.assign_source` を変えるが、`FaceRejection` の行は
+    `顔認証外` は `Face.assign_source` を変えるが、`FaceRejection` の行は
     残る。あの一覧は `FaceRejection` を引いているので、押しても消えなかった。
 
     `rejected` の顔は `match` の候補から丸ごと外れるので、**「この人物ではない」の
@@ -1331,9 +1336,9 @@ def test_a_face_made_nobody_s_disappears_from_the_not_this_person_list(window, m
 
 
 def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeypatch):
-    """**記録そのものは消さない。** 除外を取り消したら「この人物ではない」は戻る。
+    """**記録そのものは消さない。** 顔認証外を取り消したら「この人物ではない」は戻る。
 
-    消してしまうと、「誰でもない顔」を取り消した瞬間に `match` がまたその人物へ
+    消してしまうと、「顔認証外」を取り消した瞬間に `match` がまたその人物へ
     付けてしまう。
     """
     connection = window.connection
@@ -1357,7 +1362,7 @@ def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeyp
 
     assert db.count_person_rejections(connection, person_id) == len(face_ids)
 
-    # 除外を取り消すと、また一覧に戻る。
+    # 顔認証外を取り消すと、また一覧に戻る。
     db.unassign_faces(connection, face_ids)
     window.reload_faces()
 
@@ -1367,7 +1372,7 @@ def test_the_not_this_person_record_survives_being_made_nobody_s(window, monkeyp
 def test_other_buttons_also_clear_the_face_from_the_not_this_person_list(window):
     """**一覧から消える条件を取り違えない。**
 
-    `誰でもない顔` 以外のボタンを、この一覧で押したときにどうなるか。
+    `顔認証外` 以外のボタンを、この一覧で押したときにどうなるか。
     「この人物ではない」の記録が効いているあいだは残る、が筋。
     """
     connection = window.connection

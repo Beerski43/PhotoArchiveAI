@@ -428,7 +428,7 @@ def format_report(summary: Dict[str, Any]) -> str:
         )
 
     lines.append("")
-    lines.append("取りこぼし＝未割当のまま残った顔、誤り＝別の人物に割り当てられた顔。")
+    lines.append("取りこぼし＝未分類のまま残った顔、誤り＝別の人物に割り当てられた顔。")
     lines.append(
         "連写のように似た手本が別のファイルにあると、正解は実運用より甘く出る。"
     )

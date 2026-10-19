@@ -134,7 +134,7 @@ def test_pairs_are_split_into_within_event_and_across_events(measure_module):
 def test_faces_without_a_readable_date_are_left_out_of_both_sides(measure_module):
     """**分からないものをどちらかに混ぜない。** 混ぜると両方の数字が信じられない。
 
-    実データでは未割当の 10.4% が撮影日時を持たない。
+    実データでは未分類の 10.4% が撮影日時を持たない。
     """
     separation = _separation(
         measure_module,
@@ -475,7 +475,7 @@ def _unit(*values):
 def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_path):
     """**「同じ写真なら別人」は仮定。** 手本どうしのペアと分けて数えること。
 
-    本番の `match` が解くのは「未割当（大半が他人）を手本と照合する」問題なので、
+    本番の `match` が解くのは「未分類（大半が他人）を手本と照合する」問題なので、
     手本どうしの測定では実害が出る誤りを測れない。
     """
     database = tmp_path / "pairs.db"
@@ -500,7 +500,7 @@ def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_pat
         b = _add_face_with_vector(connection, media_id, _unit(0.0, 1.0))
         # 手本どうし・同一人物（鏡など。**誤りに数えない**）
         c = _add_face_with_vector(connection, media_id, _unit(1.0, 0.01))
-        # 未割当（別人と仮定）
+        # 未分類（別人と仮定）
         _add_face_with_vector(connection, media_id, _unit(0.0, 0.0, 1.0))
         db.assign_faces(connection, [a, c], person2, age=3)
         db.assign_faces(connection, [b], person4, age=1)
@@ -512,7 +512,7 @@ def test_same_photo_pairs_separate_labelled_from_assumed(measure_module, tmp_pat
         str(database), db.embedding_model.ACTIVE.version, measure_module.COSINE
     )
 
-    # 4つの顔 → 6ペア。a-b と b-c が別人、a-c が同一人物、残り3つが未割当がらみ
+    # 4つの顔 → 6ペア。a-b と b-c が別人、a-c が同一人物、残り3つが未分類がらみ
     assert len(buckets[measure_module.LABELLED_DIFFERENT]) == 2  # a-b, b-c
     assert len(buckets[measure_module.LABELLED_SAME]) == 1  # a-c
     assert len(buckets[measure_module.ASSUMED_DIFFERENT]) == 3  # d と他の3組

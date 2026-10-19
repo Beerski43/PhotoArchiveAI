@@ -81,7 +81,7 @@ def _make_dialog_class(
 def _person_rows(window):
     """左の一覧のうち、**人物の行**の行番号。
 
-    一覧の先頭には表示（未割当・自動割当・除外済み）と区切り線が並ぶので、
+    一覧の先頭には表示（未分類・自動割当・顔認証外）と区切り線が並ぶので、
     行番号をそのまま人物の番号として使えない（#67）。
     """
     return [
@@ -648,7 +648,7 @@ def test_switching_the_view_does_not_reload_the_original_photo(window, monkeypat
 
     **人物を選ぶと「見るもの」が変わる**（その人物の割り当て済みが出る）ので、
     以前のように「顔を選んだまま人物を切り替えて年齢を見比べる」操作は無い。
-    代わりに未割当の表示では**全員の年齢が1行に並ぶ**
+    代わりに未分類の表示では**全員の年齢が1行に並ぶ**
     （`test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s`）。
     """
     connection = window.connection
@@ -890,7 +890,7 @@ def test_assigning_faces_offers_the_calculated_age_without_saving_it(window, mon
 
     # 写真は 2017-12-16 撮影
     assert opened["initial_age"] == 37
-    # 取り消したので、顔は未割当のまま
+    # 取り消したので、顔は未分類のまま
     assert db.list_faces(window.connection, with_thumbnail=False)[0]["person_id"] is None
 
 
@@ -1040,7 +1040,7 @@ def test_the_age_appears_right_after_the_birth_date_is_registered(window, monkey
     assert "誕生日: 1980-01-02" in window.details_label.text()
     assert window._current_person()["name"] == "父"
 
-    # 未割当に戻ると、情報欄とメニューの両方に出る（写真は 2017-12-16 撮影）
+    # 未分類に戻ると、情報欄とメニューの両方に出る（写真は 2017-12-16 撮影）
     window.person_list.setCurrentRow(0)
     window.face_list.setCurrentRow(0)
     assert window.preview_info.text().splitlines()[-1] == "撮影時の年齢: 父 37歳"
@@ -1050,8 +1050,8 @@ def test_the_age_appears_right_after_the_birth_date_is_registered(window, monkey
 def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window):
     """**人物を選んでいないときは、全員の撮影時の年齢を出す。**
 
-    左の一覧が「見るもの」になったので、未割当を見ているあいだは**選択中の
-    人物が居ない。** 以前はそこで年齢の行が消えていたが、未割当の作業は
+    左の一覧が「見るもの」になったので、未分類を見ているあいだは**選択中の
+    人物が居ない。** 以前はそこで年齢の行が消えていたが、未分類の作業は
     「この顔は誰か」を決めることなので、**その写真の時点で各人が何歳か**が
     いちばん効く手がかりになる。
 
@@ -1068,7 +1068,7 @@ def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window
     )
     db.add_person(window.connection, "${PERSON_2}", "daughter", "", birth_date="2011-05-03")
     # 同じ写真にもう1つ顔を足し、片方だけ「父」に割り当てる。
-    # **人物の表示と未割当の表示で、同じ写真を見比べるため。**
+    # **人物の表示と未分類の表示で、同じ写真を見比べるため。**
     media_id = db.list_faces(window.connection, with_thumbnail=False)[0]["media_id"]
     assigned = db.list_faces(window.connection, unassigned=True)[0]["id"]
     db.add_face(
@@ -1089,7 +1089,7 @@ def test_the_unassigned_view_shows_everyone_s_age_instead_of_one_person_s(window
     window._show_preview()
     assert window.preview_info.text().splitlines()[-1] == "父: 37歳"
 
-    window.person_list.setCurrentRow(0)  # 「未割当」の表示
+    window.person_list.setCurrentRow(0)  # 「未分類」の表示
     window.face_list.setCurrentRow(0)
     window._show_preview()
 
@@ -1283,7 +1283,7 @@ def test_choosing_another_face_clears_the_done_label(window, monkeypatch, qt_app
 
 
 def test_rejecting_a_face_also_says_done(window, qt_app):
-    """除外でも顔は一覧から消える。**割り当てと同じ症状なので同じ扱い。**"""
+    """顔認証外でも顔は一覧から消える。**割り当てと同じ症状なので同じ扱い。**"""
     window.show()
     qt_app.processEvents()
     window.face_list.setCurrentRow(0)
@@ -1293,7 +1293,7 @@ def test_rejecting_a_face_also_says_done(window, qt_app):
     qt_app.processEvents()
 
     assert window.preview_status.isVisible() is True
-    assert "除外" in window.preview_status.text()
+    assert "顔認証外" in window.preview_status.text()
     window.hide()
 
 
