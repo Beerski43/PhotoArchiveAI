@@ -529,7 +529,12 @@ def test_an_auto_assignment_can_also_be_put_back(window):
     face_ids = [row["id"] for row in db.list_faces(window.connection, unassigned=True)]
     db.assign_faces(window.connection, face_ids, person_id, db.ASSIGN_AUTO, assign_score=50.0)
 
-    _select_scope(window, photoarchive_gui.SCOPE_AUTO)
+    # 自動割当は人物の表示で見る（左の「自動割当」は #113 でやめた）。
+    window._reload_person_list()
+    for row in range(window.person_list.count()):
+        person = window.person_list.item(row).data(Qt.UserRole)
+        if person is not None and person["id"] == person_id:
+            window.person_list.setCurrentRow(row)
     window.face_list.selectAll()
     window._unassign_selected()
 

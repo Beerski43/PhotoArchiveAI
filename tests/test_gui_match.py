@@ -110,7 +110,8 @@ def test_match_runs_from_the_window_and_refreshes_the_counts(seeded, monkeypatch
     assert rows[faces["同じ顔"]]["assign_source"] == db.ASSIGN_AUTO
     assert rows[faces["別人"]]["person_id"] is None, "似ていない顔は付けない"
     # 左の一覧の件数が、流したあとの値になっている
-    assert window.person_list.item(1).text().endswith("1"), "自動割当 1"
+    # （左の「自動割当」は #113 でやめたので、人物の行の内訳で見る）
+    assert "自動 1" in window.person_list.item(4).text(), "自動割当 1"
     kind, title, text = shown[-1]
     assert kind == "information"
     assert "自動で割り当てた顔: 1 件" in text

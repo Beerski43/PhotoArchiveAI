@@ -151,18 +151,17 @@ def test_the_left_list_puts_the_views_above_the_persons(seeded):
 
     rows = _rows(window)
 
-    # 他人(減点)は顔認証外の下（#113・利用者の指定）
-    assert [scope for scope, _ in rows[:4]] == [
+    # 他人(減点)は顔認証外の下。「自動割当」は置かない（#113・利用者の指定）
+    assert [scope for scope, _ in rows[:3]] == [
         photoarchive_gui.SCOPE_UNASSIGNED,
-        photoarchive_gui.SCOPE_AUTO,
         photoarchive_gui.SCOPE_REJECTED,
         photoarchive_gui.SCOPE_PENALIZED,
     ]
-    assert rows[4][0] is None, "5行目は区切り線"
+    assert rows[3][0] is None, "4行目は区切り線"
     assert not (
-        window.person_list.item(4).flags() & Qt.ItemFlag.ItemIsSelectable
+        window.person_list.item(3).flags() & Qt.ItemFlag.ItemIsSelectable
     ), "区切り線は選べない"
-    assert [scope for scope, _ in rows[5:]] == [photoarchive_gui.SCOPE_PERSON] * 2
+    assert [scope for scope, _ in rows[4:]] == [photoarchive_gui.SCOPE_PERSON] * 2
     assert not hasattr(window, "filter_box"), "表示の combo は残さない"
 
 
@@ -172,10 +171,9 @@ def test_the_left_list_shows_how_much_work_is_left(seeded):
 
     rows = dict(_rows(window))
     assert rows[photoarchive_gui.SCOPE_UNASSIGNED].endswith("2")
-    assert rows[photoarchive_gui.SCOPE_AUTO].endswith("2")
     assert rows[photoarchive_gui.SCOPE_REJECTED].endswith("1")
     assert rows[photoarchive_gui.SCOPE_PENALIZED].endswith("0")
-    person4 = window.person_list.item(5).text()
+    person4 = window.person_list.item(4).text()
     assert "手本 1" in person4 and "自動 1" in person4
 
     # 操作したら、その場で数え直す。
@@ -225,10 +223,6 @@ def test_each_view_starts_with_the_order_that_suits_it(seeded):
     assert window._current_order() == db.ORDER_SHOT_DESC
     assert _ids(window) == [faces["未分類・新しい"], faces["未分類・古い"]]
 
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
-    assert window._current_order() == db.ORDER_SCORE_ASC
-    assert _ids(window) == [faces["自動・弱い"], faces["自動・強い"]]
-
     _select(window, person_id=persons["${PERSON_4}"])
     assert window._current_order() == db.ORDER_AGE
 
@@ -246,23 +240,22 @@ def test_dragging_a_person_above_the_views_does_not_move_them(seeded):
     window, _faces, persons = seeded
 
     # 2人目（${PERSON_3}）を一覧の先頭へ落としたのと同じこと。
-    moved = window.person_list.model().moveRow(QModelIndex(), 6, QModelIndex(), 0)
+    moved = window.person_list.model().moveRow(QModelIndex(), 5, QModelIndex(), 0)
     assert moved
 
     rows = _rows(window)
-    assert [scope for scope, _ in rows[:4]] == [
+    assert [scope for scope, _ in rows[:3]] == [
         photoarchive_gui.SCOPE_UNASSIGNED,
-        photoarchive_gui.SCOPE_AUTO,
         photoarchive_gui.SCOPE_REJECTED,
         photoarchive_gui.SCOPE_PENALIZED,
     ], "表示は必ず先頭へ戻る"
     # **表示の行は掴めない。人物の行は掴める。**
     assert not (window.person_list.item(0).flags() & Qt.ItemFlag.ItemIsDragEnabled)
     assert not (window.person_list.item(0).flags() & Qt.ItemFlag.ItemIsDropEnabled)
-    assert not (window.person_list.item(3).flags() & Qt.ItemFlag.ItemIsDragEnabled)
-    assert window.person_list.item(5).flags() & Qt.ItemFlag.ItemIsDragEnabled
+    assert not (window.person_list.item(2).flags() & Qt.ItemFlag.ItemIsDragEnabled)
+    assert window.person_list.item(4).flags() & Qt.ItemFlag.ItemIsDragEnabled
     # 区切り線は選べない・掴めない・落とせない
-    assert window.person_list.item(4).flags() == Qt.ItemFlag.NoItemFlags
+    assert window.person_list.item(3).flags() == Qt.ItemFlag.NoItemFlags
     # 人物の並びは入れ替わっている（${PERSON_3}が先頭）。
     assert [person["name"] for person in db.list_persons(window.connection)] == [
         "${PERSON_3}",
@@ -280,7 +273,8 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
     window, _faces, persons = seeded
 
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
-    assert _menu_texts(window) == [photoarchive_gui.ACTION_REJECT]
+    # 未分類から他人(減点)へも一手で（#113・利用者の指定）
+    assert _menu_texts(window) == [photoarchive_gui.ACTION_REJECT, photoarchive_gui.ACTION_PENALIZE]
 
     _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
     assert _menu_texts(window) == [
@@ -292,14 +286,6 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
     assert _menu_texts(window) == [
         photoarchive_gui.ACTION_UNPENALIZE,
         photoarchive_gui.ACTION_UNASSIGN,
-    ]
-
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
-    assert _menu_texts(window) == [
-        photoarchive_gui.ACTION_CONFIRM,
-        photoarchive_gui.ACTION_UNASSIGN,
-        photoarchive_gui.ACTION_NOT_THIS_PERSON,
-        photoarchive_gui.ACTION_REJECT,
     ]
 
     _select(window, person_id=persons["${PERSON_4}"])
@@ -463,53 +449,6 @@ def test_the_hint_line_names_the_keys_that_work_here(seeded):
 # ---------------------------------------------------------------------------
 # 全員ぶんの表示（自動割当）
 # ---------------------------------------------------------------------------
-
-
-def test_the_auto_view_names_the_person_on_each_face(seeded):
-    """**誰に付いた顔かが分からないと見直せない。** 名前と撮影時の年齢を出す。"""
-    window, _faces, _persons = seeded
-
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
-
-    labels = _labels(window)
-    assert any("${PERSON_4} (7歳)" in label for label in labels), labels
-    assert any("${PERSON_3} (11歳)" in label for label in labels), labels
-
-
-def test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person(seeded):
-    """**全員ぶんをまとめて確定できること。** 別々の人物に付いていても、
-    その顔に付いている人物へ確定する。
-    """
-    window, faces, persons = seeded
-
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
-    window.face_list.selectAll()
-    assert window.action_confirm.isEnabled()
-
-    window._confirm_selected()
-
-    rows = {row["id"]: row for row in db.list_faces(window.connection)}
-    assert rows[faces["自動・弱い"]]["person_id"] == persons["${PERSON_4}"]
-    assert rows[faces["自動・強い"]]["person_id"] == persons["${PERSON_3}"]
-    assert {
-        rows[faces["自動・弱い"]]["assign_source"],
-        rows[faces["自動・強い"]]["assign_source"],
-    } == {db.ASSIGN_MANUAL}
-
-
-def test_not_this_person_in_the_auto_view_records_it_per_person(seeded):
-    """「この人物ではない」も、**その顔に付いている人物ごとに記録する。**"""
-    window, faces, persons = seeded
-
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
-    window.face_list.selectAll()
-    window._reject_for_person_selected()
-
-    assert db.count_person_rejections(window.connection, persons["${PERSON_4}"]) == 1
-    assert db.count_person_rejections(window.connection, persons["${PERSON_3}"]) == 1
-    assert db.face_ids(
-        window.connection, rejected_for_person=persons["${PERSON_4}"]
-    ) == [faces["自動・弱い"]]
 
 
 def test_confirm_is_blocked_unless_an_automatic_face_is_selected(seeded):
@@ -898,7 +837,7 @@ def test_not_this_person_offers_where_the_face_goes_in_the_person_view(seeded):
     """人物の表示では「この人物ではない ▸ 未分類へ / 顔認証外へ / 他人(減点)へ」（#113・利用者の指定）。
 
     どの行き先でも「この人物ではない」と記録する（`match` が同じ誤りを戻さないように）。
-    自動割当（全員ぶん）は顔ごとに人物が違うので、1項目のまま。
+    人物を選んでいない表示には出さない。
     """
     window, faces, persons = seeded
     _select(window, person_id=persons["${PERSON_4}"])
@@ -917,7 +856,7 @@ def test_not_this_person_offers_where_the_face_goes_in_the_person_view(seeded):
     # 同じ打鍵の別の操作は、この表示では押せない（打鍵が取り合わない）
     assert not window.action_reject.isEnabled() and not window.action_penalize.isEnabled()
 
-    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
+    _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
     window.face_list.selectAll()
     assert not any(
         action.menu() and action.text() == photoarchive_gui.NOT_THIS_PERSON_MENU
@@ -982,3 +921,23 @@ def test_the_screen_does_not_use_the_old_names():
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 found += [(module.__name__, node.lineno, name) for name in old_names if name in node.value]
     assert found == []
+
+
+def test_an_unassigned_face_can_go_straight_to_penalized(seeded):
+    """左の「未分類」の右クリックから他人(減点)へ（#113・利用者の指定）。顔認証外にしてから印を付ける。"""
+    window, faces, _persons = seeded
+    _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
+    window.face_list.clearSelection()
+    window.face_list.item(_ids(window).index(faces["未分類・古い"])).setSelected(True)
+    assert window.action_penalize.isEnabled()
+    assert "P 他人(減点)にする" in window.hint_label.text()
+
+    window._set_penalty_selected(True)
+
+    row = window.connection.execute(
+        "SELECT assign_source, penalize FROM Face WHERE id = ?", (faces["未分類・古い"],)
+    ).fetchone()
+    assert tuple(row) == (db.ASSIGN_REJECTED, 1)
+    assert faces["未分類・古い"] not in _ids(window)
+    assert dict(_rows(window))[photoarchive_gui.SCOPE_PENALIZED].endswith("1")
+    # 人物の種別「未分類」では P は「この人物ではない ▸ 他人(減点)へ」のもの

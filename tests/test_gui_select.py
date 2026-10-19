@@ -72,8 +72,12 @@ def test_the_settings_start_from_the_rule_file(window):
 
 
 def test_loading_lists_every_year_with_its_candidates(window):
+    """**タブを開いた時点で**年ごとの表が出て、枚数を入れられる（#113・「候補を読み込む」は無くした）。"""
     panel = window.selection
-    panel.load_candidates()
+    assert not hasattr(panel, "load_button")
+    window.setCurrentWidget(panel)
+    window.show()
+    assert panel.year_table.rowCount() > 0, "開いただけで表がある"
     rows = {
         panel.year_table.item(row, 0).text(): (
             panel.year_table.item(row, 1).text(), panel.year_table.cellWidget(row, 2).value()
@@ -98,7 +102,7 @@ def test_choosing_again_with_other_weights_changes_the_order(window):
 
 def test_a_year_set_to_zero_is_not_chosen(window):
     panel = window.selection
-    panel.load_candidates()
+    panel.refresh_years()
     for row in range(panel.year_table.rowCount()):
         if panel.year_table.item(row, 0).text() == "2018":
             panel.year_table.cellWidget(row, 2).setValue(0)
@@ -111,7 +115,7 @@ def test_a_year_set_to_zero_is_not_chosen(window):
 
 def test_fill_all_years_sets_every_year(window):
     panel = window.selection
-    panel.load_candidates()
+    panel.refresh_years()
     panel.fill_spin.setValue(7)
     panel.fill_all_years()
     assert panel.current_rule()["count_per_year"] == {
@@ -123,7 +127,7 @@ def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatc
     """**保存の前に控えを取る**（ファイルのコメントは消えるため）。書いたルールは CLI でも読める。"""
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     panel = window.selection
-    panel.load_candidates()
+    panel.refresh_years()
     panel.weight_spins["smile"].setValue(0.5)
     panel.save_rule()
     backup = Path(str(rule_path) + ".bak")
@@ -196,6 +200,29 @@ def test_selecting_a_photo_shows_where_it_is_and_why(window):
     assert "点 " in text and "鮮明さ" in text
 
 
+def test_selecting_a_photo_shows_it_large_on_the_right(window, tmp_path):
+    """サムネイルを選ぶと、右に写真を大きく出す（#113・利用者の指定）。ページを替えたら消す。"""
+    panel = window.selection
+    panel.choose()
+    assert panel.preview.pixmap().isNull()
+
+    panel.result_list.setCurrentRow(0)
+    assert not panel.preview.pixmap().isNull()
+    assert panel.preview.text() == ""
+
+    panel._show_page()
+    assert panel.preview.pixmap().isNull()
+    assert panel.preview.text() == gui_select.PREVIEW_PROMPT
+
+
+def test_the_preview_is_read_from_the_photo_not_the_small_exif_thumbnail(tmp_path):
+    """プレビューは元写真から読む（埋め込みのサムネイルは粗い）。読めなければ None。"""
+    photo = write_photo(tmp_path / "big.jpg", scene(1))
+    image = gui_select.photo_preview(str(photo), size=100)
+    assert image is not None and max(image.size) == 100
+    assert gui_select.photo_preview(str(tmp_path / "missing.jpg")) is None
+
+
 # ---------------------------------------------------------------------------
 # PR #108 のレビュー対応
 # ---------------------------------------------------------------------------
@@ -232,7 +259,7 @@ def test_unchecking_family_only_adds_the_years_without_family(mixed, tmp_path):
     作り直さないと、家族の写っていない写真しかない年が表に無く、選ばれなかった。
     """
     window, panel = _panel(mixed, tmp_path, "family_only: true\ncount_per_year: 5\nremove_similar: false\n")
-    panel.load_candidates()
+    panel.refresh_years()
     panel.fill_spin.setValue(5)
     panel.fill_all_years()
     panel.flag_checks["family_only"].setChecked(False)
@@ -249,7 +276,7 @@ def test_reloading_for_auto_assignments_keeps_the_year_counts(mixed, tmp_path):
         mixed, tmp_path,
         "include_auto_assigned: false\ncount_per_year: 5\nremove_similar: false\n",
     )
-    panel.load_candidates()
+    panel.refresh_years()
     panel.fill_spin.setValue(1)
     panel.fill_all_years()
     before = panel.current_rule()["count_per_year"]
@@ -261,18 +288,19 @@ def test_reloading_for_auto_assignments_keeps_the_year_counts(mixed, tmp_path):
 
 
 def test_reloading_clears_the_previous_results(mixed, tmp_path, monkeypatch):
-    """**読み込み直したら前の結果を捨てる**（指摘2）。古い結果をクリックすると例外、出力は古いまま
-    コピーしていた。"""
+    """**割り当てが変わったら前の結果を捨てる**（指摘2）。古い結果をクリックすると例外、出力は古いまま
+    コピーしていた。#113 で「候補を読み込む」を無くしたので、出力の前に割り当ての変化を見る。"""
     window, panel = _panel(mixed, tmp_path, "remove_similar: false\n")
     panel.choose()
     assert panel.result_list.count() > 0 or panel.year_combo.count() > 0
-    panel.flag_checks["include_auto_assigned"].setChecked(False)
-    panel.load_candidates()
-    assert panel.result_list.count() == 0 and panel.selected == []
+    # 選んだあとに割り当てを変えた（1枚目のタブでの操作と同じ）。
+    face_id = panel.connection.execute("SELECT id FROM Face WHERE person_id IS NOT NULL").fetchone()[0]
+    db.unassign_faces(panel.connection, [face_id])
     shown = []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: shown.append(args[2]))
     panel.export()
-    assert shown and "並べ直す" in shown[0]
+    assert panel.result_list.count() == 0 and panel.selected == []
+    assert shown and gui_select.CHOOSE_LABEL in shown[0]
     window.close()
 
 
@@ -322,3 +350,30 @@ def test_the_breakdown_shows_the_measured_values_or_says_they_are_missing():
     text = gui_select.format_breakdown(parts, measured)
     assert "画質 72.3" in text and "美しさ 5.12" in text and "白飛び 3.1%" in text
     assert "photoarchive assess" in gui_select.format_breakdown(parts)
+
+
+def test_choosing_reloads_the_candidates_only_when_the_assignments_changed(window, monkeypatch):
+    """「選ぶ」は、割り当てが変わったときだけ候補を用意し直す（#113）。重みを動かすだけなら読み直さない。"""
+    panel = window.selection
+    loads = []
+    original = selection.prepare
+    monkeypatch.setattr(selection, "prepare", lambda *a, **k: loads.append(1) or original(*a, **k))
+
+    panel.choose()
+    panel.weight_spins["smile"].setValue(2.0)
+    panel.choose()
+    assert len(loads) == 1, "重みだけなら読み直さない"
+
+    face_id = panel.connection.execute("SELECT id FROM Face WHERE person_id IS NOT NULL").fetchone()[0]
+    db.reject_faces(panel.connection, [face_id])
+    panel.choose()
+    assert len(loads) == 2, "割り当てが変わったら読み直す"
+
+
+def test_the_year_counts_from_the_database_match_the_prepared_candidates(mixed):
+    """DB だけで数えた年ごとの枚数が、候補を用意して数えたものと同じ（#113）。"""
+    connection = db.ensure_database(str(mixed))
+    for rule in ({}, {"family_only": False}, {"include_auto_assigned": False}):
+        candidates = selection.prepare(connection, selection.family_sources(rule))
+        assert selection.year_counts(connection, rule) == selection.candidate_counts(candidates, rule)
+    connection.close()

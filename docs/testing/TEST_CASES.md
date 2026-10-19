@@ -419,12 +419,12 @@
 | `test_the_cursor_is_restored_even_when_the_work_fails` | **砂時計を戻し忘れない**（失敗しても戻す） |
 | `test_setting_the_age_of_many_faces_commits_once` | 年齢をまとめて入れるとき、1件ずつコミットしない |
 | `test_a_rejected_face_can_be_put_back_to_unassigned` | **顔認証外を取り消せる。** 以前は誰かに割り当てる以外に戻す手段が無かった |
-| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる |
+| `test_an_auto_assignment_can_also_be_put_back` | 自動割当も同じボタンで外せる（人物の表示で。左の「自動割当」は #113 でやめた） |
 | `test_unassigning_is_blocked_while_showing_unassigned_faces` | 戻す先が無いときは、隠さずに押せなくする |
 | `test_putting_a_face_back_says_done` | 戻したあとも「完了」を出す |
 | `test_putting_faces_back_does_not_reload_the_preview` | 戻すときも元写真を読み直さない |
 
-### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（35件）
+### `test_gui_views.py` — 左の一覧が「見るもの」になった画面（33件）
 
 **この画面の作りは「1件あたりの手数を減らす」ためにある**（手作業の量が精度の
 上限で、他人の顔の 99.1% が家族の写真に混ざっている。2026-10-08 実測）。
@@ -432,7 +432,7 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_the_left_list_puts_the_views_above_the_persons` | 表示4つ（未分類・自動割当・顔認証外・他人(減点)）→ 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
+| `test_the_left_list_puts_the_views_above_the_persons` | 表示3つ（未分類・顔認証外・他人(減点)。**自動割当は置かない**・#113）→ 区切り線 → 人物の順。**表示の combo は残さない**（同じことを2か所で選ばせない） |
 | `test_the_left_list_shows_how_much_work_is_left` | 残りの件数が出て、操作のたびに数え直す |
 | `test_selecting_a_person_shows_the_faces_assigned_to_them` | **人物を選ぶことが、旧「割り当て済みを確認」。** 別ウィンドウは開かない |
 | `test_the_person_filters_only_appear_for_a_person` | 種別・年齢は人物のときだけ出す（誕生日が無いと年齢は計算できない） |
@@ -445,9 +445,6 @@
 | `test_the_digit_keys_assign_to_the_persons_in_order` | **1〜9 の打鍵で割り当てられる。** 番号は左の一覧の並び順 |
 | `test_right_clicking_an_unselected_face_selects_it_first` | 右クリックした顔を処理する。**すでに選んでいる顔なら選択を崩さない** |
 | `test_the_hint_line_names_the_keys_that_work_here` | 右クリックは目に見えないので、効く打鍵と選択件数を1行で出す |
-| `test_the_auto_view_names_the_person_on_each_face` | 全員ぶんの表示では、顔に**誰のものか**と年齢を出す |
-| `test_confirming_in_the_auto_view_keeps_each_face_with_its_own_person` | まとめて確定しても、**その顔に付いている人物へ**確定する |
-| `test_not_this_person_in_the_auto_view_records_it_per_person` | 「この人物ではない」も顔ごとの人物に記録する |
 | `test_confirm_is_blocked_unless_an_automatic_face_is_selected` | 確定は自動割り当てだけに効く。押せない理由はツールチップに出す |
 | `test_rejecting_from_the_unassigned_view_does_not_ask` | **毎件通る操作に確認を挟まない**（そこが遅さの正体になる） |
 | `test_rejecting_an_assigned_face_asks_first` | 割り当て済みに押すときは確認する（手作業の結果が消える） |
@@ -465,6 +462,7 @@
 | `test_not_this_person_offers_where_the_face_goes_in_the_person_view` | 人物の表示では「この人物ではない ▸ 未分類へ(N) / 顔認証外へ(X) / 他人(減点)へ(P)」。**同じ打鍵の別の操作は押せない**（打鍵が取り合わない）。自動割当は1項目のまま（#113） |
 | `test_not_this_person_records_it_and_moves_the_face` | どの行き先でも「この人物ではない」を記録し、顔をその一覧へ移す（#113） |
 | `test_the_screen_does_not_use_the_old_names` | 画面の文言に旧い呼び名（未割当・除外・減点対象）を残さない（#113・利用者の指定で用語を統一） |
+| `test_an_unassigned_face_can_go_straight_to_penalized` | 左の「未分類」の右クリックから他人(減点)へ（顔認証外にしてから印を付ける・#113） |
 
 ### `test_recommend.py` — 顔を「この人物に似た順」に並べる（13件）
 
@@ -518,13 +516,13 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（21件。#104・#106）
+### `test_gui_select.py` — 写真の選定タブ（25件。#104・#106・#113）
 
 | テスト | 内容 |
 |---|---|
 | `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚。1枚目は今の顔の割り当て |
 | `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
-| `test_loading_lists_every_year_with_its_candidates` | 候補を読み込むと、年ごとの候補の枚数が表に並ぶ（整数の `count_per_year` は全部の年に入る） |
+| `test_loading_lists_every_year_with_its_candidates` | **タブを開いた時点で**年ごとの候補の枚数が表に並び、枚数を入れられる（整数の `count_per_year` は全部の行に入る・「候補を読み込む」ボタンは無い・#113） |
 | `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
 | `test_a_year_set_to_zero_is_not_chosen` | 0 の年からは選ばない |
 | `test_fill_all_years_sets_every_year` | 「全部の年に入れる」 |
@@ -535,9 +533,13 @@
 | `test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation` | サムネイルは EXIF の埋め込みから（先頭だけ読む）。読めなければ None |
 | `test_the_breakdown_never_shows_minus_zero` | 内訳に `-0.0` を出さない |
 | `test_selecting_a_photo_shows_where_it_is_and_why` | 写真を選ぶと場所と点の内訳が出る |
+| `test_selecting_a_photo_shows_it_large_on_the_right` | サムネイルを選ぶと右に大きく出る。ページを替えたら消える（#113） |
+| `test_the_preview_is_read_from_the_photo_not_the_small_exif_thumbnail` | プレビューは元写真から読む（埋め込みのサムネイルは粗い）。読めなければ None（#113） |
 | `test_unchecking_family_only_adds_the_years_without_family` | **絞り込みを変えたら年の表を作り直す**（家族のいない年が表に無く選ばれなかった。PR #108 のレビュー指摘1） |
 | `test_reloading_for_auto_assignments_keeps_the_year_counts` | **読み込み直しても入れた枚数を引き継ぐ**（ルールファイルの値に戻っていた。指摘1） |
-| `test_reloading_clears_the_previous_results` | **読み込み直したら前の結果を捨てる**（古い写真の内訳で例外・古い結果を出力していた。指摘2） |
+| `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
+| `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
+| `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
 | `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
 | `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |

@@ -2643,6 +2643,28 @@ CATEGORY_CLOSE = "close"
 DEFAULT_PERSON_WEIGHT = 1.0
 
 
+def selection_state(connection: sqlite3.Connection) -> Tuple[Any, ...]:
+    """`select` の候補の作り直しが要るかを見るための、割り当てと点の材料の要約（#113）。
+
+    GUI の「写真の選定」タブが、用意した候補と見比べる。**割り当て・減点の印・人物の区分と重み・
+    写真全体の測定**のどれかが変われば値が変わる（どれも候補に読み込んでいるもの）。
+    割り当てを変える UPDATE は `assigned_at` を書くか、種別ごとの件数を変える。
+    """
+    faces = tuple(
+        connection.execute(
+            "SELECT assign_source, COUNT(*), MAX(assigned_at), SUM(penalize = 1),"
+            " SUM(person_id) FROM Face GROUP BY assign_source ORDER BY assign_source"
+        ).fetchall()
+    )
+    persons = tuple(
+        connection.execute(
+            "SELECT id, category, weight, birth_date FROM Person ORDER BY id"
+        ).fetchall()
+    )
+    quality = connection.execute("SELECT COUNT(*) FROM PhotoQuality").fetchone()
+    return tuple(tuple(row) for row in faces), tuple(tuple(row) for row in persons), tuple(quality)
+
+
 def family_faces(
     connection: sqlite3.Connection,
     media_ids: Optional[Sequence[int]] = None,

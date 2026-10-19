@@ -62,8 +62,8 @@ THUMBNAIL_SIZE = 120
 #: 報告。実データの未分類1ページ目は先頭が 101px・残りが 160px だった）。
 #:
 #: **枠を固定すれば、どの顔が先頭に来ても同じ見た目になる。**
-#: 高さは「サムネイル＋文字2行」ぶん（自動割当の表示は
-#: `13391 (自動 55) ${PERSON_4} (0歳)` のように長い）。
+#: 高さは「サムネイル＋文字2行」ぶん（人物の表示の自動割当は
+#: `13391 (自動 55) (0歳)` のように長い）。
 ITEM_WIDTH = THUMBNAIL_SIZE + 44
 ITEM_HEIGHT = THUMBNAIL_SIZE + 48
 
@@ -81,7 +81,6 @@ MONTH_ANY = "指定なし"
 MONTH_UNDATED = "撮影日時なしのみ"
 
 FILTER_UNASSIGNED = "未分類"
-FILTER_AUTO = "自動割当"
 FILTER_REJECTED = "顔認証外"
 FILTER_PENALIZED = "他人(減点)"
 
@@ -91,7 +90,6 @@ FILTER_PENALIZED = "他人(減点)"
 #: 同じ作業の表裏なので、画面を分けると開き直しの往復が要る（以前は
 #: 「割り当て済みを確認」が別ウィンドウだった）。
 SCOPE_UNASSIGNED = "unassigned"
-SCOPE_AUTO = "auto"
 SCOPE_REJECTED = "rejected"
 #: 顔認証外にした顔のうち、`select` で減点する印を付けた顔（#110）。顔認証外の一部（#113）。
 SCOPE_PENALIZED = "penalized"
@@ -114,12 +112,6 @@ VIEW_SCOPES = (
         FILTER_UNASSIGNED,
         "まだ誰にも割り当てていない顔。人物に割り当てるか、"
         "家族の誰でもない顔として外す。",
-    ),
-    (
-        SCOPE_AUTO,
-        FILTER_AUTO,
-        "match が自動で割り当てた顔（全員ぶん）。"
-        "確信度の低い順に見直すと、誤りに早く当たる。",
     ),
     (
         SCOPE_REJECTED,
@@ -157,14 +149,12 @@ ORDER_CHOICES = (
 #:
 #: - 未分類・顔認証外・他人(減点): 撮影日時の新しい順。**同じ行事の写真が固まる**ので、
 #:   まとめて選んで一度に割り当てられる（#53）
-#: - 自動割当: 確信度の低い順。**誤りに早く当たる**
 #: - 人物: 年齢の若い順。**成長の順に並ぶ**ので、年齢の入れ間違いや
 #:   別人の混入に気づきやすい（#53）
 #: - 人物の未分類: この人物に似た順。**本人を目で探さずに済む**（#69。
 #:   2026-10-08 の測定で、本人の 94.0% が1ページ目に入った）
 DEFAULT_ORDER = {
     SCOPE_UNASSIGNED: db.ORDER_SHOT_DESC,
-    SCOPE_AUTO: db.ORDER_SCORE_ASC,
     SCOPE_REJECTED: db.ORDER_SHOT_DESC,
     SCOPE_PENALIZED: db.ORDER_SHOT_DESC,
     SCOPE_PERSON: db.ORDER_AGE,
@@ -195,10 +185,6 @@ ORDER_UNUSABLE = {
         db.ORDER_AGE_DESC: "未分類の顔は人物が決まっていないので、年齢を出せません",
         db.ORDER_SCORE_ASC: "未分類の顔は自動割り当ての確信度を持ちません",
         db.ORDER_SCORE_DESC: "未分類の顔は自動割り当ての確信度を持ちません",
-        recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
-        recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
-    },
-    SCOPE_AUTO: {
         recommend.ORDER_SIMILAR: _NO_PERSON_TO_COMPARE,
         recommend.ORDER_DISSIMILAR: _NO_PERSON_TO_COMPARE,
     },
@@ -1704,7 +1690,7 @@ class EventClusterDialog(QDialog):
 class MainWindow(QWidget):
     """1枚の画面で、人物の登録から割り当て・見直しまでを済ませる。
 
-    **左の一覧が「いま何を見ているか」。** 未分類・自動割当・顔認証外・他人(減点)と、
+    **左の一覧が「いま何を見ているか」。** 未分類・顔認証外・他人(減点)と、
     登録した人物が同じ一覧に並ぶ。人物を選ぶと、その人物に割り当て済みの顔が
     右に出る（**以前は別ウィンドウだった**。開き直しの往復が要り、未分類の
     割り当てと見直しが同じ作業の表裏なのに画面が分かれていた）。
@@ -1817,7 +1803,7 @@ class MainWindow(QWidget):
             "（いま見えている200件の中だけで並べ替えるのではない）。\n"
             "年齢は**画面に出ている年齢**（確定値か、誕生日から計算した値）で並べる。\n"
             "表示を切り替えると、その表示に向いた順に戻る"
-            "（未分類は撮影日時の新しい順、自動割当は確信度の低い順、"
+            "（未分類は撮影日時の新しい順、"
             "人物は年齢の若い順、人物の未分類はこの人物に似た順）。\n"
             "「この人物に似た順」は、その人物の手本との距離で並べる"
             "（5点整列ができなかった手本は使わない）。"
@@ -2197,7 +2183,6 @@ class MainWindow(QWidget):
         counts = db.face_counts(self.connection)
         totals = {
             SCOPE_UNASSIGNED: counts["unassigned"],
-            SCOPE_AUTO: counts["auto"],
             # 他人(減点)に移った顔は顔認証外に出さない（#113）ので、件数からも引く。
             SCOPE_REJECTED: counts["rejected"] - counts["penalized"],
             SCOPE_PENALIZED: counts["penalized"],
@@ -2544,20 +2529,14 @@ class MainWindow(QWidget):
                 *self.not_this_person_actions,
                 self.action_set_age,
             )
-        if scope == SCOPE_AUTO:
-            return (
-                self.action_confirm,
-                self.action_unassign,
-                self.action_not_this_person,
-                self.action_reject,
-            )
         # **顔認証外と他人(減点)は印の有無で分かれている**（#113）ので、
         # それぞれ効く側の操作だけを出す。
         if scope == SCOPE_REJECTED:
             return (self.action_penalize, self.action_unassign)
         if scope == SCOPE_PENALIZED:
             return (self.action_unpenalize, self.action_unassign)
-        return (self.action_reject,)
+        # 未分類から他人(減点)へ一手で（#113・利用者の指定）。
+        return (self.action_reject, self.action_penalize)
 
     def _build_face_menu(self) -> QMenu:
         """顔の右クリックメニュー。**テストからも中身を見られるように分ける。**"""
@@ -2601,10 +2580,7 @@ class MainWindow(QWidget):
         return menu
 
     def _groups_not_this_person(self) -> bool:
-        """「この人物ではない」を行き先のメニューにまとめる表示か（人物の表示・#113）。
-
-        自動割当（全員ぶん）は顔ごとに人物が違うので、これまでどおり1項目のまま。
-        """
+        """「この人物ではない」を行き先のメニューにまとめる表示か（人物の表示・#113）。"""
         return self._current_scope() == SCOPE_PERSON and not self._showing_rejections()
 
     def _show_face_menu(self, pos) -> None:
@@ -2684,7 +2660,13 @@ class MainWindow(QWidget):
         # 減点の印は顔認証外の顔にだけ付く（`db.set_face_penalty`）
         marked = [bool(record.get("penalize")) for record in records]
         rejected_view = scope in (SCOPE_REJECTED, SCOPE_PENALIZED)
-        self.action_penalize.setEnabled(rejected_view and not all(marked) if records else False)
+        # 左の「未分類」からも押せる（顔認証外にしてから印を付ける・#113）。人物の種別「未分類」は
+        # 「この人物ではない ▸ 他人(減点)へ」が P を持つので押せなくする（打鍵が取り合う）。
+        self.action_penalize.setEnabled(
+            bool(records)
+            and not all(marked)
+            and (rejected_view or scope == SCOPE_UNASSIGNED)
+        )
         self.action_unpenalize.setEnabled(rejected_view and any(marked))
 
         # 割り当て先の人物に、**選んだ顔の撮影時の年齢**を添える。
@@ -2891,8 +2873,6 @@ class MainWindow(QWidget):
                 birth_date=person.get("birth_date"),
                 include_unknown_age=self.include_unknown_age.isChecked(),
             )
-        elif scope == SCOPE_AUTO:
-            filters = {"assign_source": db.ASSIGN_AUTO}
         elif scope == SCOPE_REJECTED:
             # 他人(減点)に移った顔は出さない（#113・利用者の指定）。
             filters = {"assign_source": db.ASSIGN_REJECTED, "penalized": False}
@@ -2994,11 +2974,6 @@ class MainWindow(QWidget):
             return (
                 "この行事の顔認証外をすべて取り消す",
                 "この行事で顔認証外にした顔を、ページをまたいで未分類へ戻します。",
-            )
-        if scope == SCOPE_AUTO:
-            return (
-                "この行事の自動割当をすべて取り消す",
-                "この行事の自動割当を、ページをまたいで未分類へ戻します。",
             )
         if scope == SCOPE_PERSON:
             person = self._current_person()
@@ -3190,8 +3165,9 @@ class MainWindow(QWidget):
         人物の誕生日と撮影日時から計算して出す。これが「その割り当てが
         正しいか」を人が見るときのいちばんの手がかりになる。
 
-        **全員ぶんの表示（自動割当）では人物名も添える。** 誰に付いた顔かが
-        分からないと見直せない。
+        **人物を選んでいない表示では、顔に付いている人物名も添える。** 誰に付いた顔かが
+        分からないと見直せない（左の「自動割当」は #113 でやめたので、いまは人物の付いた
+        顔が出ない）。
         """
         if not records:
             return {}
@@ -3489,16 +3465,29 @@ class MainWindow(QWidget):
     def _set_penalty_selected(self, penalize: bool) -> None:
         """顔認証外にした顔に「他人(減点)にする」の印を付ける／外す（#110）。
 
-        **どちらの向きでも顔は一覧から消える**（#113）。顔認証外で印を付けた顔は他人(減点)へ、
-        他人(減点)で印を外した顔は顔認証外へ移る。
+        **どちらの向きでも顔は一覧から消える**（#113）。顔認証外や未分類で印を付けた顔は
+        他人(減点)へ（未分類の顔は顔認証外にしてから）、他人(減点)で印を外した顔は顔認証外へ移る。
         """
         face_ids = self._selected_face_ids()
         if not face_ids:
             return
+
+        def work(progress):
+            if penalize:
+                # 未分類の顔は先に顔認証外にする（印は顔認証外の顔にしか付かない・#113）。
+                # すでに顔認証外の顔に重ねても印は消えない（`db.reject_faces`）。
+                not_rejected = [
+                    record["id"]
+                    for record in self._selected_records()
+                    if record.get("assign_source") != db.ASSIGN_REJECTED
+                ]
+                db.reject_faces(self.connection, not_rejected)
+            db.set_face_penalty(self.connection, face_ids, penalize)
+
         self._run_with_progress(
             "減点の印を付けています" if penalize else "減点の印を外しています",
             face_ids,
-            lambda progress: db.set_face_penalty(self.connection, face_ids, penalize),
+            work,
             f"完了 — {len(face_ids)} 件の" + ("顔を select で減点します" if penalize else "減点をやめました"),
         )
 

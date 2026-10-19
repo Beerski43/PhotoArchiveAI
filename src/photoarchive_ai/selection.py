@@ -366,6 +366,20 @@ def candidate_counts(candidates: "Candidates", rule: Dict[str, Any]) -> Dict[Opt
     return counts
 
 
+def year_counts(connection, rule: Dict[str, Any]) -> Dict[Optional[int], int]:
+    """`candidate_counts` と同じ数を、**候補を用意せずに** DB だけから数える（#113）。
+
+    見え方・表情を測らないので速い（実データで約 1 秒）。GUI の年の表を、候補を読み込む前から
+    出すためにある（利用者「最初から年毎の選ぶ枚数を入れれるようにしてほしい」）。
+    """
+    family_of = _family_of(db.family_faces(connection, assign_sources=family_sources(rule)))
+    counts: Dict[Optional[int], int] = {}
+    for media in _filtered(get_media_with_analysis(connection), rule, family_of):
+        year = _get_media_year(media)
+        counts[year] = counts.get(year, 0) + 1
+    return counts
+
+
 def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Dict[str, float]:
     """写真1枚の点の内訳（`scoring.photo_breakdown`。#104）。`choose` と同じ重み・同じ顔。"""
     sources = family_sources(rule)
