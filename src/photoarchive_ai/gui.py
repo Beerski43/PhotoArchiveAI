@@ -216,6 +216,13 @@ ACTION_CONFIRM = "手本に確定"
 ACTION_UNASSIGN = "未割当に戻す"
 ACTION_DETACH = "割り当てを解除"
 ACTION_NOT_THIS_PERSON = "この人物ではない"
+#: 人物の表示では「この人物ではない」を行き先の小さなメニューにする（#113・利用者の指定）。
+#: どの行き先でも「この人物ではない」と記録し、そのうえで顔を移す。
+NOT_THIS_PERSON_MENU = ACTION_NOT_THIS_PERSON
+ACTION_NOT_THIS_PERSON_TO_UNASSIGNED = "未割当へ"
+ACTION_NOT_THIS_PERSON_STAY_UNASSIGNED = "未割当のまま"
+ACTION_NOT_THIS_PERSON_TO_REJECTED = "除外済みへ"
+ACTION_NOT_THIS_PERSON_TO_PENALIZED = "減点対象へ"
 ACTION_REJECT = "誰でもない顔として除外…"
 ACTION_SET_AGE = "年齢を設定…"
 ACTION_UNDO_REJECTION = "「この人物ではない」を取り消す"
@@ -2019,7 +2026,32 @@ class MainWindow(QWidget):
             "**ほかの人物には自動で付きうる。**\n"
             "解除と違い、match を流し直しても戻ってこない。"
         )
-        self.action_not_this_person.triggered.connect(self._reject_for_person_selected)
+        self.action_not_this_person.triggered.connect(lambda: self._reject_for_person_selected())
+
+        # 人物の表示の「この人物ではない ▸」の残りの行き先（#113）。**X と P は
+        # 除外済みの表示などの操作と同じ打鍵だが、押せる表示が重ならない**ので取り合わない
+        # （押せない `QAction` の打鍵は効かない）。
+        self.action_not_this_person_reject = QAction(ACTION_NOT_THIS_PERSON_TO_REJECTED, self)
+        self.action_not_this_person_reject.setShortcut("X")
+        self.action_not_this_person_reject.setToolTip(
+            "この人物ではない、と記録して除外する。\n**どの人物にも自動で付かなくなる。**"
+        )
+        self.action_not_this_person_reject.triggered.connect(
+            lambda: self._reject_for_person_selected(SCOPE_REJECTED)
+        )
+        self.action_not_this_person_penalize = QAction(ACTION_NOT_THIS_PERSON_TO_PENALIZED, self)
+        self.action_not_this_person_penalize.setShortcut("P")
+        self.action_not_this_person_penalize.setToolTip(
+            "この人物ではない、と記録して除外し、select で減点する印も付ける。"
+        )
+        self.action_not_this_person_penalize.triggered.connect(
+            lambda: self._reject_for_person_selected(SCOPE_PENALIZED)
+        )
+        self.not_this_person_actions = (
+            self.action_not_this_person,
+            self.action_not_this_person_reject,
+            self.action_not_this_person_penalize,
+        )
 
         self.action_reject = QAction(ACTION_REJECT, self)
         self.action_reject.setShortcut("X")
@@ -2053,6 +2085,8 @@ class MainWindow(QWidget):
             self.action_confirm,
             self.action_unassign,
             self.action_not_this_person,
+            self.action_not_this_person_reject,
+            self.action_not_this_person_penalize,
             self.action_reject,
             self.action_set_age,
             self.action_undo_rejection,
@@ -2499,14 +2533,15 @@ class MainWindow(QWidget):
             return (self.action_undo_rejection,)
         if self._showing_unassigned_for_person():
             # **割り当て先は「人物に割り当て」（1〜9）から選ぶ。** ここに並ぶのは
-            # 「この人物の候補から外す」と「誰でもない顔」。
-            return (self.action_not_this_person, self.action_reject)
+            # 「この人物の候補から外す」（行き先つき・#113）。
+            return self.not_this_person_actions
         if scope == SCOPE_PERSON:
+            # 「誰でもない顔として除外」は置かない。「この人物ではない ▸ 除外済みへ」が
+            # 同じ行き先で、否定の記録も残る（#113）。
             return (
                 self.action_confirm,
                 self.action_unassign,
-                self.action_not_this_person,
-                self.action_reject,
+                *self.not_this_person_actions,
                 self.action_set_age,
             )
         if scope == SCOPE_AUTO:
@@ -2545,12 +2580,32 @@ class MainWindow(QWidget):
             empty = menu.addAction("先に人物を追加してください")
             empty.setEnabled(False)
         menu.addSeparator()
+        grouped = self._groups_not_this_person()
+        not_this_person_menu = None
         for action in self._menu_actions():
+            if grouped and action in self.not_this_person_actions:
+                # 人物の表示では「この人物ではない ▸ 行き先」にまとめる（#113）。
+                if not_this_person_menu is None:
+                    not_this_person_menu = menu.addMenu(NOT_THIS_PERSON_MENU)
+                    not_this_person_menu.setToolTipsVisible(True)
+                not_this_person_menu.addAction(action)
+                continue
             menu.addAction(action)
+        if not_this_person_menu is not None:
+            not_this_person_menu.setEnabled(
+                any(action.isEnabled() for action in self.not_this_person_actions)
+            )
         menu.addSeparator()
         menu.addAction(self.action_previous_page)
         menu.addAction(self.action_next_page)
         return menu
+
+    def _groups_not_this_person(self) -> bool:
+        """「この人物ではない」を行き先のメニューにまとめる表示か（人物の表示・#113）。
+
+        自動割当（全員ぶん）は顔ごとに人物が違うので、これまでどおり1項目のまま。
+        """
+        return self._current_scope() == SCOPE_PERSON and not self._showing_rejections()
 
     def _show_face_menu(self, pos) -> None:
         self._select_under_cursor(pos)
@@ -2609,7 +2664,19 @@ class MainWindow(QWidget):
             record.get("person_id") is not None for record in records
         )
         self.action_not_this_person.setEnabled(has_selection and has_owner)
-        self.action_reject.setEnabled(has_selection)
+        grouped = self._groups_not_this_person()
+        self.action_not_this_person.setText(
+            ACTION_NOT_THIS_PERSON
+            if not grouped
+            else ACTION_NOT_THIS_PERSON_STAY_UNASSIGNED
+            if unassigned
+            else ACTION_NOT_THIS_PERSON_TO_UNASSIGNED
+        )
+        # 人物の表示では X は「この人物ではない ▸ 除外済みへ」。同じ打鍵の
+        # 「誰でもない顔として除外」は押せなくする（押せる2つが重なると打鍵が効かない）。
+        self.action_reject.setEnabled(has_selection and not grouped)
+        self.action_not_this_person_reject.setEnabled(has_selection and grouped)
+        self.action_not_this_person_penalize.setEnabled(has_selection and grouped)
         self.action_set_age.setEnabled(
             has_selection and scope == SCOPE_PERSON and not unassigned
         )
@@ -2640,8 +2707,14 @@ class MainWindow(QWidget):
         打鍵を出しておかないと、ボタンを消したぶんが「機能が無くなった」に見える。
         """
         selected = len(self.face_list.selectedItems())
+        grouped = self._groups_not_this_person()
         keys = [
-            f"{action.shortcut().toString()} {action.text()}"
+            f"{action.shortcut().toString()} "
+            + (
+                f"{NOT_THIS_PERSON_MENU}→{action.text()}"
+                if grouped and action in self.not_this_person_actions
+                else action.text()
+            )
             for action in self._menu_actions()
             if action.isEnabled() and not action.shortcut().isEmpty()
         ]
@@ -3370,8 +3443,12 @@ class MainWindow(QWidget):
             f"完了 — {len(face_ids)} 件を未割当に戻しました",
         )
 
-    def _reject_for_person_selected(self):
+    def _reject_for_person_selected(self, destination: Optional[str] = None):
         """**この人物ではない**、と記録する。ほかの人物には付きうる。
+
+        ``destination`` は記録したあとの行き先（#113）。``None`` は未割当、
+        `SCOPE_REJECTED` は除外、`SCOPE_PENALIZED` は除外して減点の印も付ける。
+        除外すると、ほかの人物にも自動で付かなくなる（否定の記録は残る）。
 
         **「割り当てを解除」では足りない。** `match` は手本と閾値だけで決まるので、
         未割当へ戻しただけだと**流すたびに同じ誤りが戻る**（実データで${PERSON_4}の
@@ -3393,12 +3470,20 @@ class MainWindow(QWidget):
         def work(progress):
             for person_id, ids in groups.items():
                 db.reject_faces_for_person(self.connection, ids, person_id, progress=progress)
+            if destination in (SCOPE_REJECTED, SCOPE_PENALIZED):
+                db.reject_faces(self.connection, face_ids)
+            if destination == SCOPE_PENALIZED:
+                db.set_face_penalty(self.connection, face_ids, True)
 
+        moved = {
+            SCOPE_REJECTED: f"、{FILTER_REJECTED}へ移しました",
+            SCOPE_PENALIZED: f"、{FILTER_PENALIZED}へ移しました",
+        }.get(destination, "")
         self._run_with_progress(
             "この人物ではない、と記録しています",
             face_ids,
             work,
-            f"完了 — {len(face_ids)} 件を「この人物ではない」に記録しました",
+            f"完了 — {len(face_ids)} 件を「この人物ではない」に記録しました{moved}",
         )
 
     def _set_penalty_selected(self, penalize: bool) -> None:

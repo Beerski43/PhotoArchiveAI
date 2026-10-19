@@ -303,11 +303,14 @@ def test_the_menu_only_offers_what_the_view_can_do(seeded):
     ]
 
     _select(window, person_id=persons["${PERSON_4}"])
+    # 「この人物ではない」は行き先つき（#113）。「誰でもない顔として除外」は
+    # 「この人物ではない ▸ 除外済みへ」と同じ行き先なので置かない。
     assert _menu_texts(window) == [
         photoarchive_gui.ACTION_CONFIRM,
         photoarchive_gui.ACTION_DETACH,
-        photoarchive_gui.ACTION_NOT_THIS_PERSON,
-        photoarchive_gui.ACTION_REJECT,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_UNASSIGNED,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_REJECTED,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_PENALIZED,
         photoarchive_gui.ACTION_SET_AGE,
     ]
 
@@ -889,3 +892,65 @@ def test_the_penalized_view_lists_only_the_faces_marked_to_penalize(seeded):
     assert dict(_rows(window))[photoarchive_gui.SCOPE_REJECTED].endswith("2")
     _select(window, scope=photoarchive_gui.SCOPE_REJECTED)
     assert sorted(_ids(window)) == sorted([faces["除外"], another]), "除外済みに戻る"
+
+
+def test_not_this_person_offers_where_the_face_goes_in_the_person_view(seeded):
+    """人物の表示では「この人物ではない ▸ 未割当へ / 除外済みへ / 減点対象へ」（#113・利用者の指定）。
+
+    どの行き先でも「この人物ではない」と記録する（`match` が同じ誤りを戻さないように）。
+    自動割当（全員ぶん）は顔ごとに人物が違うので、1項目のまま。
+    """
+    window, faces, persons = seeded
+    _select(window, person_id=persons["${PERSON_4}"])
+    window.face_list.selectAll()
+    menu = window._build_face_menu()
+    grouped = next(
+        action.menu() for action in menu.actions()
+        if action.menu() and action.text() == photoarchive_gui.NOT_THIS_PERSON_MENU
+    )
+    assert [(action.text(), action.shortcut().toString()) for action in grouped.actions()] == [
+        (photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_UNASSIGNED, "N"),
+        (photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_REJECTED, "X"),
+        (photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_PENALIZED, "P"),
+    ]
+    assert "この人物ではない→除外済みへ" in window.hint_label.text()
+    # 同じ打鍵の別の操作は、この表示では押せない（打鍵が取り合わない）
+    assert not window.action_reject.isEnabled() and not window.action_penalize.isEnabled()
+
+    _select(window, scope=photoarchive_gui.SCOPE_AUTO)
+    window.face_list.selectAll()
+    assert not any(
+        action.menu() and action.text() == photoarchive_gui.NOT_THIS_PERSON_MENU
+        for action in window._build_face_menu().actions()
+    )
+    assert not window.action_not_this_person_reject.isEnabled()
+    assert not window.action_not_this_person_penalize.isEnabled()
+
+
+@pytest.mark.parametrize(
+    "destination, source, penalize",
+    [
+        (None, None, None),
+        (photoarchive_gui.SCOPE_REJECTED, db.ASSIGN_REJECTED, None),
+        (photoarchive_gui.SCOPE_PENALIZED, db.ASSIGN_REJECTED, 1),
+    ],
+)
+def test_not_this_person_records_it_and_moves_the_face(seeded, destination, source, penalize):
+    """どの行き先でも否定を記録し、顔をその一覧へ移す（#113）。"""
+    window, faces, persons = seeded
+    _select(window, person_id=persons["${PERSON_4}"])
+    window.face_list.clearSelection()
+    window.face_list.item(_ids(window).index(faces["手本"])).setSelected(True)
+
+    window._reject_for_person_selected(destination)
+
+    row = window.connection.execute(
+        "SELECT person_id, assign_source, penalize FROM Face WHERE id = ?", (faces["手本"],)
+    ).fetchone()
+    assert tuple(row) == (None, source, penalize)
+    recorded = window.connection.execute(
+        "SELECT COUNT(*) FROM FaceRejection WHERE face_id = ? AND person_id = ?",
+        (faces["手本"], persons["${PERSON_4}"]),
+    ).fetchone()[0]
+    assert recorded == 1
+    assert faces["手本"] not in _ids(window)

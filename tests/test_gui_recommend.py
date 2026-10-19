@@ -224,15 +224,16 @@ def test_a_persons_own_faces_can_be_listed_least_similar_first(window_and_faces)
 
 
 def test_the_menu_on_a_persons_unassigned_faces_offers_what_makes_sense(window_and_faces):
-    """**未割当の顔には戻す先が無い。** 出すのは「この人物ではない」と「誰でもない顔」。
-    割り当て先は「人物に割り当て」（1〜9）。"""
+    """**未割当の顔には戻す先が無い。** 出すのは「この人物ではない ▸ 行き先」（#113）。
+    未割当の顔なので、1つ目は「未割当のまま」。割り当て先は「人物に割り当て」（1〜9）。"""
     window, faces, persons = window_and_faces
     _show_unassigned(window, persons["${PERSON_4}"])
     window.face_list.item(0).setSelected(True)
 
     assert [action.text() for action in window._menu_actions()] == [
-        photoarchive_gui.ACTION_NOT_THIS_PERSON,
-        photoarchive_gui.ACTION_REJECT,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_STAY_UNASSIGNED,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_REJECTED,
+        photoarchive_gui.ACTION_NOT_THIS_PERSON_TO_PENALIZED,
     ]
     assert window.action_unassign.isEnabled() is False
     menu = window._build_face_menu()
