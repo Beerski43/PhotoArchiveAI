@@ -234,3 +234,27 @@ def test_the_table_checks_would_catch_a_broken_document(tmp_path):
     # いまの文書は両方とも通る
     test_a_table_is_not_split_by_a_blank_line()
     test_a_test_file_section_owns_the_table_under_it()
+
+
+# ---------------------------------------------------------------------------
+# 利用者向けの文書が、特徴量の作り直しに再スキャンを勧めない
+# ---------------------------------------------------------------------------
+
+USER_DOCS = ("README.md", *(f"docs/operation/{path.name}" for path in sorted((REPO_ROOT / "docs/operation").glob("*.md"))))
+
+
+@pytest.mark.parametrize("name", USER_DOCS)
+def test_a_document_that_says_to_bump_the_embedding_version_points_at_reembed(name):
+    """特徴量の版を上げる話は、必ず `reembed` へ導く（CLAUDE.md §8）。
+
+    README の注意事項が「`face.EMBED_VERSION` を上げて再スキャン」のまま残っていた（#96 で直した）。
+    再スキャン（`--force-rescan`）は顔の行を作り直すので、**手動割り当てと顔認証外が消える。**
+    `face.EMBED_VERSION` も `embedding.ACTIVE.version` から作る値で、上げる場所ではない。
+    """
+    offenders = [
+        f"{name}:{number}  {line.strip()}"
+        for number, line in enumerate((REPO_ROOT / name).read_text(encoding="utf-8").splitlines(), start=1)
+        if ("EMBED_VERSION" in line or "ACTIVE.version" in line) and "reembed" not in line
+    ]
+
+    assert not offenders, "特徴量の版の話に reembed が無い:\n  " + "\n  ".join(offenders)

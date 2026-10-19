@@ -8,6 +8,7 @@
 | テストの動かし方 | [testing/TESTING.md](testing/TESTING.md) |
 | 何がテストで守られているか | [testing/TEST_CASES.md](testing/TEST_CASES.md) |
 | GUI の使い方 | [operation/GUI_USAGE.md](operation/GUI_USAGE.md) |
+| 設定ファイル（YAML）の各キーの意味 | [operation/CONFIG.md](operation/CONFIG.md) |
 | 過去のセッションの詳しい記録 | [history/details/](history/details/) |
 | セットアップと基本操作 | [../README.md](../README.md) |
 | 作業のルール（AIエージェント向け） | [../CLAUDE.md](../CLAUDE.md) |

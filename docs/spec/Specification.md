@@ -70,6 +70,7 @@ Last Update: 2026-10-19
 ## 2.2 設定ファイル（実装済み）
 
 アプリ設定は **YAML**（#27）。`config/app_settings.sample.yml` を写して使う。
+利用者向けの一覧（キー・既定・引数との優先順・誤ったときの振る舞い）は [../operation/CONFIG.md](../operation/CONFIG.md)（#96）。
 
 | キー | 意味 |
 |---|---|
@@ -2312,7 +2313,7 @@ IMG001  IMG002  IMG003   →   IMG002 を選ぶ（いちばん並びが上のも
 
 ## 12.1 ルール
 
-抽出は YAML のルールで制御する（JSON は読まない・§2.2）。
+抽出は YAML のルールで制御する（JSON は読まない・§2.2）。利用者向けの一覧は [../operation/CONFIG.md](../operation/CONFIG.md) の「2. 抽出ルール」。
 
 ```yaml
 date:

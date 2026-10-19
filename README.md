@@ -150,7 +150,7 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 cp config/app_settings.sample.yml config/app_settings.yml
 ```
 
-必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。
+必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。**各キーの意味・既定・誤ったときの振る舞いは [docs/operation/CONFIG.md](docs/operation/CONFIG.md) にまとめてあります**（ルール・公開しない語の一覧も）。
 
 **写真の置き場所（root）が複数あれば、`source_roots` に並べます**（#24）。
 
@@ -376,7 +376,7 @@ GUI の「写真の選定」タブで変えます）。
 
 ### 8. 抽出ルールに基づく選択とコピー
 
-`config/rule.sample.yml` をコピーして `config/rule.yml` とし、必要に応じて編集します。
+`config/rule.sample.yml` をコピーして `config/rule.yml` とし、必要に応じて編集します。キーの一覧は [docs/operation/CONFIG.md](docs/operation/CONFIG.md) の「2. 抽出ルール」にあります。
 
 ```bash
 photoarchive select
@@ -515,6 +515,7 @@ PhotoArchiveAI/
   config/
     app_settings.sample.yml    アプリ設定のサンプル
     rule.sample.yml            抽出ルールのサンプル
+    private_terms.sample.yml   公開しない語の一覧のサンプル
   docs/
     README.md                  文書の索引
     spec/Specification.md      要件・仕様・DB設計・CLIリファレンス
@@ -522,6 +523,7 @@ PhotoArchiveAI/
     history/WORKLOG.md         作業履歴
     testing/                   テストの手順とテスト項目一覧
     operation/GUI_USAGE.md     GUIの操作手順
+    operation/CONFIG.md        設定ファイル（YAML）の説明
   src/
     photoarchive_ai/
       __init__.py
@@ -569,7 +571,7 @@ PhotoArchiveAI/
 
 - 元の写真・動画を変更しません。
 - 出力先フォルダの直下へファイルをコピーします。実行のたびに、出力先の直下にあるファイルを消します。
-- GUI は人物登録と顔の割り当てを担当し、顔検出と自動紐づけは CLI で実行します。
+- GUI は人物登録と顔の割り当て・自動割り当て（`match`）・写真の選定（`select`）を担当し、顔検出（`scan`）と写真の良し悪しの測定（`assess`）は CLI で実行します。
 - `photoarchive analyze` は廃止しました。顔検出は `photoarchive scan` に、人物への紐づけは GUI と `photoarchive match` に分かれています。
-- `photoarchive convert-heic` はデータベースを使わないので、`--db` も設定ファイルも必要ありません。
-- 顔の切り出し方（`face.EMBED_PADDING` など）を変えた場合は、`face.EMBED_VERSION` を必ず上げて再スキャンしてください。古い特徴量と新しい特徴量が混ざると照合が成立しません。
+- `photoarchive convert-heic` はデータベースを使わないので、`--db` は要りません。設定ファイルは、`--source` を付けないときの root を読むためだけに使います。
+- 顔の切り出し方（`face.EMBED_PADDING` など）を変えた場合は、`embedding.ACTIVE.version` を必ず上げて `photoarchive reembed` で作り直してください。古い特徴量と新しい特徴量が混ざると照合が成立しません。**`scan --force-rescan` は使わないでください**（顔の行を作り直すので、GUI で積み上げた手動割り当てと顔認証外が消えます）。
