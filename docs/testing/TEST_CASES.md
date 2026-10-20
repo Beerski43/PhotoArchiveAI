@@ -934,6 +934,15 @@ editable install のときだけ出すこと（通常のインストールでは
 モジュールの位置で判断する**）。同じ場所を2度並べないこと。
 検出元は `source_roots`（配列。1つなら文字列でもよい。**古い `source_root` は読まずに WARNING**（PR #75 で利用者が決めた）。#24）。
 
+### `test_config_reference.py` — 設定ファイルの説明が実装から古くならない（4件。#96）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_reference_describes_every_key_with_its_current_default` | **コードが読むキー**（`config.py` の `settings.get`・`selection.RULE_FLAGS`・`RULE_NUMBERS`・`WEIGHT_KEYS`・`check_private_terms.py` の項目）が `docs/operation/CONFIG.md` にあり、真偽・数・重みの**既定が実装と同じ** |
+| `test_the_check_would_catch_a_missing_key_and_a_stale_default` | 番人自身が働く（行を消す・既定を変えると落ちる） |
+| `test_the_samples_mention_every_key` | 3つの `*.sample.yml` に、書けるキーがコメントでも載っている |
+| `test_the_reference_is_reachable_from_the_indexes` | README・`docs/README.md`・仕様書から辿れる |
+
 ### `test_source_roots.py` — 検出元の root を複数持つ（20件。#24）
 
 | テスト | 内容 |
@@ -1174,7 +1183,7 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 | `test_the_diff_below_the_scissors_is_not_part_of_the_message` | `git commit -v` の差分は見ない（語を消すコミットを止めない）。`-m` の `#77` 行は見る（指摘2） |
 | `test_a_broken_list_does_not_print_its_terms` | 壊れた一覧のエラーに語を出さない（指摘3） |
 
-### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（9件）
+### `test_docs_stay_stable.py` — 文書に実装の数字を置かない（12件）
 
 `TEST_CASES.md` の**見出しと表がずれていないこと**も見る。見出しが自分の表の
 下に落ちると表が前の節にぶら下がり、**表の途中の空行はそれ以降を表でなくする**
@@ -1190,6 +1199,10 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 番号を振り直したりすると指し先が黙ってずれ、読み手は**そんな節が無いことにも
 気づけない**。フェーズ文書のリンクを見張っているのと同じ理由
 （`test_plan_stays_true.py`）。
+
+**利用者向けの文書（README・`docs/operation/`）で、特徴量の版を上げる話は必ず `reembed` へ導く**
+（`test_a_document_that_says_to_bump_the_embedding_version_points_at_reembed`）。README の注意事項が
+「`face.EMBED_VERSION` を上げて再スキャン」のまま残っていた（#96 で見つけた）。再スキャンは手動割り当てと顔認証外を消す（CLAUDE.md §8）。
 
 ### `test_gitignore.py` — 実データの置き場を git に入れない（4件）
 

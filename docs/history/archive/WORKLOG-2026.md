@@ -13,6 +13,11 @@ GPU（GTX 670）は CUDA 11 以降で切られていて、OpenCL でも ArcFace 
 レビュー対応（PR #91）: 指摘1 **真偽値のキー5つすべて**（`include_video`・`family_only`・`remove_duplicate`・`remove_similar`・`include_auto_assigned`）を `load_rule` で確かめるように（既存の4つは `"false"` を真として読んでいた。既定値は `selection.RULE_FLAGS` の1か所に）。指摘2 仕様書の「手本か自動割り当て」3か所に条件を足した。指摘3 phase-6 の表の番号を ROADMAP に揃えた。
 次は 4.2（#90）。
 
+## 2026-10-11 — 引き継ぎを書いた（#89 のあと）
+
+申し送りは [details/2026-10-11-handoff-after-pr91.md](details/2026-10-11-handoff-after-pr91.md)。**PR #91 マージ待ち**（レビュー対応済み）。
+次は「進める順序」の 4.2（#90・`Person.name` の UNIQUE。#35 もこれで閉じる）。4.3〜4.5 は子 Issue が未起票。
+
 ## 2026-10-10 — PR #70 のレビュー対応（family_only・年齢の上限の判定）
 
 **#66・PR #70。** レビューの指摘4件にすべて対応した。
