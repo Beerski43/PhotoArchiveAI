@@ -484,6 +484,33 @@
 | `test_teachers_not_yet_measured_are_measured_before_use` | **GUI で割り当てたばかりの手本（見え方が未計測）を、使う前に測る。** 測らずに使うと横倒しの候補が上位に来た（PR #71 レビュー指摘1） |
 | `test_a_teacher_that_cannot_be_measured_is_still_used` | サムネイルが読めない手本は未計測のまま根拠に残す（**測れないと整列できないを混ぜない**） |
 
+### `test_undo.py` — 顔の操作を元に戻す・やり直す（12件。#116）
+
+| テスト | 内容 |
+|---|---|
+| `test_an_assignment_is_undone_and_redone_with_every_column` | 割り当てを戻すと年齢・時刻まで元どおり、やり直すと操作の直後と同じ |
+| `test_not_this_person_and_its_record_are_undone` | 「この人物ではない」の記録（`FaceRejection`）も戻り、手本も元の人物へ |
+| `test_clearing_a_rejection_is_undone_with_its_original_time` | 否定の取り消し（`Z`）も戻せる。記録の時刻も元のまま |
+| `test_a_penalty_mark_is_undone_back_to_unassigned` | 未分類 → 他人(減点)（2段の書き込み）を1回で戻す |
+| `test_an_operation_that_changes_nothing_is_not_recorded` | 何も変えない操作は積まない |
+| `test_only_the_newest_steps_are_kept` | 上限を超えたら古いものから捨てる（既定 50） |
+| `test_a_new_operation_drops_what_could_be_redone` | 新しく操作すると、やり直しは消える |
+| `test_a_face_changed_afterwards_is_not_overwritten` | **あとで同じ顔が書き換わっていたら戻さない**（`match` などの結果を上書きしない） |
+| `test_a_deleted_person_is_not_written_back` | **削除した人物の id を書き戻さない** |
+| `test_an_older_step_on_other_faces_survives_a_conflict` | 戻せない操作だけを捨て、別の顔の古い操作は戻せる |
+| `test_many_faces_are_read_and_written_in_chunks` | 1,200 件のまとめ処理も戻る（SQLite の変数の上限） |
+| `test_a_failed_write_leaves_nothing_half_done` | 書き戻しが途中で落ちたら何も書かない |
+
+### `test_gui_undo.py` — GUI の元に戻す・やり直す（5件。#116）
+
+| テスト | 内容 |
+|---|---|
+| `test_an_assignment_is_undone_and_the_list_comes_back` | 割り当てた顔が未分類の一覧に戻り、やり直すとまた割り当たる |
+| `test_the_menu_says_what_will_be_undone` | 右クリックに「元に戻す: 〈何を〉」、一覧の下の案内に `Ctrl+Z` |
+| `test_ctrl_z_undoes_and_plain_z_is_left_alone` | 打鍵は `Ctrl+Z` / `Ctrl+Shift+Z`・`Ctrl+Y`。**`Z` は「この人物ではない」の取り消しのまま** |
+| `test_a_conflict_is_explained_and_nothing_is_written` | 戻せないときは理由を出し、何も書かない |
+| `test_an_event_cluster_operation_is_undone_from_the_dialog_and_the_main_window` | 束ねる画面の操作も同じ履歴に積み、画面の中でも親でも戻せる |
+
 ### `test_gui_recommend.py` — 人物の未分類を似た順に見る画面（12件）
 
 **探す時間を削るための画面**（他人の顔の 99.1% が家族の写真に混ざっていて、まとめて消せない）。
