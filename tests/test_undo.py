@@ -233,3 +233,41 @@ def test_a_failed_write_leaves_nothing_half_done(connection, monkeypatch):
         ))
 
     assert _state(connection, faces) == after
+
+
+def test_a_step_that_could_not_be_written_stays_in_history(connection, monkeypatch):
+    """**書けなかっただけの操作は履歴に戻す**（PR #117 のレビュー指摘1）。
+
+    CLI の `match` が書き込みロックを握っているあいだに戻すと `database is locked` になる。
+    以前は先に履歴から取り出していたので、DB は何も変わっていないのに操作が消えた。
+    捨てるのは、戻すと上書きになるとき（`UndoConflict`）だけ。
+    """
+    import sqlite3
+
+    faces = _seed(connection, 2)
+    person = db.add_person(connection, "父")
+    history = undo.History()
+    history.record(
+        connection, "割り当てた", faces,
+        lambda: db.assign_faces(connection, faces, person, db.ASSIGN_MANUAL),
+    )
+    real_write = undo.write
+
+    def locked(_connection, _state):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(undo, "write", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        history.undo(connection)
+    assert history.can_undo() and not history.can_redo()
+    assert db.count_faces(connection, assign_source=db.ASSIGN_MANUAL) == 2
+
+    monkeypatch.setattr(undo, "write", real_write)
+    history.undo(connection)
+    assert db.count_faces(connection, assign_source=db.ASSIGN_MANUAL) == 0
+
+    # やり直しも同じ
+    monkeypatch.setattr(undo, "write", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        history.redo(connection)
+    assert history.can_redo() and not history.can_undo()

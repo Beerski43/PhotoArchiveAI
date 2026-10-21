@@ -484,7 +484,7 @@
 | `test_teachers_not_yet_measured_are_measured_before_use` | **GUI で割り当てたばかりの手本（見え方が未計測）を、使う前に測る。** 測らずに使うと横倒しの候補が上位に来た（PR #71 レビュー指摘1） |
 | `test_a_teacher_that_cannot_be_measured_is_still_used` | サムネイルが読めない手本は未計測のまま根拠に残す（**測れないと整列できないを混ぜない**） |
 
-### `test_undo.py` — 顔の操作を元に戻す・やり直す（12件。#116）
+### `test_undo.py` — 顔の操作を元に戻す・やり直す（13件。#116）
 
 | テスト | 内容 |
 |---|---|
@@ -500,8 +500,9 @@
 | `test_an_older_step_on_other_faces_survives_a_conflict` | 戻せない操作だけを捨て、別の顔の古い操作は戻せる |
 | `test_many_faces_are_read_and_written_in_chunks` | 1,200 件のまとめ処理も戻る（SQLite の変数の上限） |
 | `test_a_failed_write_leaves_nothing_half_done` | 書き戻しが途中で落ちたら何も書かない |
+| `test_a_step_that_could_not_be_written_stays_in_history` | **書けなかっただけの操作は履歴に戻す**（`database is locked`。以前は操作だけが消えた。PR #117 のレビュー指摘1） |
 
-### `test_gui_undo.py` — GUI の元に戻す・やり直す（5件。#116）
+### `test_gui_undo.py` — GUI の元に戻す・やり直す（8件。#116）
 
 | テスト | 内容 |
 |---|---|
@@ -510,6 +511,8 @@
 | `test_ctrl_z_undoes_and_plain_z_is_left_alone` | 打鍵は `Ctrl+Z` / `Ctrl+Shift+Z`・`Ctrl+Y`。**`Z` は「この人物ではない」の取り消しのまま** |
 | `test_a_conflict_is_explained_and_nothing_is_written` | 戻せないときは理由を出し、何も書かない |
 | `test_an_event_cluster_operation_is_undone_from_the_dialog_and_the_main_window` | 束ねる画面の操作も同じ履歴に積み、画面の中でも親でも戻せる |
+| `test_a_write_error_is_explained_and_can_be_retried` | DB に書けなければ知らせ、メニューは押せるまま、もう一度押せば戻る（親と束ねる画面の2通り・指摘1） |
+| `test_the_penalty_step_is_named_in_the_past_tense` | 減点の操作の名前は「〜を他人(減点)にしました」（「減点します」だと戻すと減点するように読める・指摘2） |
 
 ### `test_gui_recommend.py` — 人物の未分類を似た順に見る画面（12件）
 

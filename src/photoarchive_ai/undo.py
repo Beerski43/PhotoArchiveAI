@@ -166,14 +166,18 @@ class History:
     def undo(self, connection) -> Step:
         """いちばん新しい操作を戻す。戻せなければ `UndoConflict`（その操作は履歴から捨てる）。"""
         step = self._pop(self.undo_steps, "元に戻す")
-        self._apply(connection, step, expected=step.after, target=step.before, verb="元に戻せません")
+        self._apply_or_keep(
+            self.undo_steps, connection, step, expected=step.after, target=step.before, verb="元に戻せません"
+        )
         self.redo_steps.append(step)
         return step
 
     def redo(self, connection) -> Step:
         """いちばん新しく戻した操作をやり直す。やり直せなければ `UndoConflict`。"""
         step = self._pop(self.redo_steps, "やり直す")
-        self._apply(connection, step, expected=step.before, target=step.after, verb="やり直せません")
+        self._apply_or_keep(
+            self.redo_steps, connection, step, expected=step.before, target=step.after, verb="やり直せません"
+        )
         self.undo_steps.append(step)
         return step
 
@@ -182,6 +186,21 @@ class History:
         if not steps:
             raise UndoConflict(f"{name}操作がありません。")
         return steps.pop()
+
+    def _apply_or_keep(self, steps: List[Step], connection, step: Step, **kwargs) -> None:
+        """書けなかっただけなら（``database is locked`` など）、取り出した操作を ``steps`` へ戻す。
+
+        **捨てるのは、戻すと上書きになるとき（`UndoConflict`）だけ**（PR #117 のレビュー指摘1）。
+        CLI の `match` が書き込みロックを握っているあいだに戻すと、DB は何も変わらないまま
+        操作だけが消えていた。`write` は落ちたら rollback するので、もう一度押せば戻る。
+        """
+        try:
+            self._apply(connection, step, **kwargs)
+        except UndoConflict:
+            raise
+        except Exception:
+            steps.append(step)
+            raise
 
     def _apply(self, connection, step: Step, expected: FaceState, target: FaceState, verb: str) -> None:
         """いまの状態が ``expected`` のままなら ``target`` を書く。

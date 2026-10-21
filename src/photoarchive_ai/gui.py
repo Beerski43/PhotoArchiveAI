@@ -9,6 +9,7 @@ BLOB を全件読むと数百MBになり、画面が固まる。
 
 import argparse
 import os
+import sqlite3
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
@@ -221,6 +222,15 @@ UNDONE = "元に戻しました"
 REDONE = "やり直しました"
 UNDO_SHORTCUTS = ("Ctrl+Z",)
 REDO_SHORTCUTS = ("Ctrl+Shift+Z", "Ctrl+Y")
+
+
+def undo_write_failed(error: Exception) -> str:
+    """戻す・やり直すで DB に書けなかったときの知らせ（PR #117 のレビュー指摘1）。**操作は履歴に残る。**"""
+    return (
+        f"データベースに書けませんでした（{error}）。\n\n"
+        "ほかの処理（端末の match など）が書き込み中かもしれません。"
+        "何も変えていないので、しばらくしてからもう一度押してください。"
+    )
 #: 他人(減点)の顔（#110）の一覧の印。
 PENALIZE_MARK = "減点"
 ASSIGN_MENU = "人物に割り当て"
@@ -1630,6 +1640,9 @@ class EventClusterDialog(QDialog):
         except undo.UndoConflict as error:
             QMessageBox.information(self, ACTION_REDO if redo else ACTION_UNDO, str(error))
             return
+        except sqlite3.Error as error:
+            QMessageBox.warning(self, ACTION_REDO if redo else ACTION_UNDO, undo_write_failed(error))
+            return
         self._reread(step.face_ids)
         self.notice_label.setText(f"{REDONE if redo else UNDONE}: {step.label}")
 
@@ -2657,6 +2670,11 @@ class MainWindow(QWidget):
             QMessageBox.information(self, name, str(error))
             self._update_undo_actions()
             return
+        except sqlite3.Error as error:
+            # 書けなかっただけ。操作は履歴に残っている（`undo.History._apply_or_keep`）
+            QMessageBox.warning(self, name, undo_write_failed(error))
+            self._update_undo_actions()
+            return
         self.reload_faces()
         self._refresh_counts()
         self._refresh_details()
@@ -2789,7 +2807,7 @@ class MainWindow(QWidget):
             keys.insert(0, f"1〜{upper} 人物に割り当て" if upper > 1 else "1 人物に割り当て")
         if self.history.can_undo():
             keys.append(f"{UNDO_SHORTCUTS[0]} {ACTION_UNDO}")
-        head =f"顔を右クリックで操作（{selected:,} 件選択中）"
+        head = f"顔を右クリックで操作（{selected:,} 件選択中）"
         self.hint_label.setText(head + ("　｜　" + " / ".join(keys) if keys else ""))
 
     # ------------------------------------------------------------------
@@ -3581,7 +3599,8 @@ class MainWindow(QWidget):
             "減点の印を付けています" if penalize else "減点の印を外しています",
             face_ids,
             work,
-            f"完了 — {len(face_ids)} 件の" + ("顔を select で減点します" if penalize else "減点をやめました"),
+            # 完了の文が「元に戻す: 〈何を〉」の名前になるので「〜しました」にそろえる（PR #117 のレビュー指摘2）
+            f"完了 — {len(face_ids)} 件" + ("を他人(減点)にしました" if penalize else "の減点をやめました"),
         )
 
     def _reject_selected(self):

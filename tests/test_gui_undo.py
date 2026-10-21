@@ -166,3 +166,48 @@ def test_an_event_cluster_operation_is_undone_from_the_dialog_and_the_main_windo
     window.action_undo.trigger()
 
     assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == 0
+
+
+@pytest.mark.parametrize("in_dialog", [False, True])
+def test_a_write_error_is_explained_and_can_be_retried(window, monkeypatch, in_dialog):
+    """DB に書けなかったら知らせ、**もう一度押せば戻る**（PR #117 のレビュー指摘1）。"""
+    import sqlite3
+
+    from photoarchive_ai import undo
+
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda _parent, _title, text: warned.append(text))
+    )
+    _assign_all(window)
+    real_write = undo.write
+
+    def locked(_connection, _state):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(undo, "write", locked)
+    target = window
+    if in_dialog:
+        target = photoarchive_gui.EventClusterDialog(
+            window, window.connection, "/photos", None, history=window.history
+        )
+    target.action_undo.trigger()
+
+    assert warned and "書けませんでした" in warned[0]
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_MANUAL) == 3
+    assert target.action_undo.isEnabled()
+    if not in_dialog:
+        assert window.action_undo.text() == "元に戻す: 3 件を 父 に登録しました"
+
+    monkeypatch.setattr(undo, "write", real_write)
+    target.action_undo.trigger()
+
+    assert db.count_faces(window.connection, assign_source=db.ASSIGN_MANUAL) == 0
+
+
+def test_the_penalty_step_is_named_in_the_past_tense(window, monkeypatch):
+    """操作の名前は「〜しました」。「減点します」だと、戻すと減点するように読める（PR #117 のレビュー指摘2）。"""
+    window.face_list.selectAll()
+    window._set_penalty_selected(True)
+
+    assert window.action_undo.text() == "元に戻す: 3 件を他人(減点)にしました"
