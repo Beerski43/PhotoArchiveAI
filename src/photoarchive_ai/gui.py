@@ -9,6 +9,7 @@ BLOB を全件読むと数百MBになり、画面が固まる。
 
 import argparse
 import os
+import sqlite3
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
@@ -41,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import clustering, db, embedding, face, matcher, migration, recommend
+from . import clustering, db, embedding, face, matcher, migration, recommend, undo
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -214,6 +215,22 @@ ACTION_SET_AGE = "年齢を設定…"
 ACTION_UNDO_REJECTION = "「この人物ではない」を取り消す"
 ACTION_PENALIZE = "他人(減点)にする"
 ACTION_UNPENALIZE = "顔認証外に戻す"
+#: 顔の操作を元に戻す・やり直す（#116）。**打鍵 `Z`（「この人物ではない」の取り消し）とは別物。**
+ACTION_UNDO = "元に戻す"
+ACTION_REDO = "やり直す"
+UNDONE = "元に戻しました"
+REDONE = "やり直しました"
+UNDO_SHORTCUTS = ("Ctrl+Z",)
+REDO_SHORTCUTS = ("Ctrl+Shift+Z", "Ctrl+Y")
+
+
+def undo_write_failed(error: Exception) -> str:
+    """戻す・やり直すで DB に書けなかったときの知らせ（PR #117 のレビュー指摘1）。**操作は履歴に残る。**"""
+    return (
+        f"データベースに書けませんでした（{error}）。\n\n"
+        "ほかの処理（端末の match など）が書き込み中かもしれません。"
+        "何も変えていないので、しばらくしてからもう一度押してください。"
+    )
 #: 他人(減点)の顔（#110）の一覧の印。
 PENALIZE_MARK = "減点"
 ASSIGN_MENU = "人物に割り当て"
@@ -1319,9 +1336,12 @@ class EventClusterDialog(QDialog):
         day: Optional[str],
         source_roots: SourceRoots = None,
         threshold: Optional[float] = None,
+        history: Optional[undo.History] = None,
     ):
         super().__init__(parent)
         self.connection = connection
+        #: 元に戻すの履歴（#116）。**親の画面と同じものに積む**（閉じたあとも親で戻せる）。
+        self.history = history if history is not None else undo.History()
         self.folder = folder
         self.day = day
         self.source_roots = source_roots
@@ -1418,6 +1438,16 @@ class EventClusterDialog(QDialog):
         layout.addWidget(self.notice_label)
         layout.addLayout(actions)
         layout.addWidget(close_buttons)
+
+        # 元に戻す・やり直す（#116）。親の画面と同じ打鍵。
+        self.action_undo = QAction(ACTION_UNDO, self)
+        self.action_undo.setShortcuts(list(UNDO_SHORTCUTS))
+        self.action_undo.triggered.connect(lambda: self._undo_or_redo(redo=False))
+        self.action_redo = QAction(ACTION_REDO, self)
+        self.action_redo.setShortcuts(list(REDO_SHORTCUTS))
+        self.action_redo.triggered.connect(lambda: self._undo_or_redo(redo=True))
+        self.addAction(self.action_undo)
+        self.addAction(self.action_redo)
         self.resize(980, 640)
 
         self._reload_clusters()
@@ -1573,25 +1603,48 @@ class EventClusterDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _run_with_progress(self, label: str, face_ids: List[int], work) -> None:
-        row = self.cluster_list.currentRow()
         with busy_cursor():
             progress = WorkProgress(self, label, len(face_ids))
             try:
-                work(progress)
+                # 「〜しています」の題を、元に戻すときの名前にする（#116）。
+                self.history.record(
+                    self.connection, f"{label.removesuffix('ています')}た（{len(face_ids):,} 件）", face_ids,
+                    lambda: work(progress),
+                )
                 progress.step("束を数え直しています")
-                # **DBから読み直して、どの顔が判断済みかを更新する。**
-                # 束そのものは作り直さない（同じ画面で束が組み替わると、
-                # いま見ていたものがどこへ行ったのか分からなくなる）。
-                for record in db.faces_by_ids(self.connection, face_ids):
-                    self.records[record["id"]].update(
-                        {
-                            "assign_source": record["assign_source"],
-                            "person_id": record["person_id"],
-                        }
-                    )
-                self._reload_clusters(keep_row=row)
+                self._reread(face_ids)
             finally:
                 progress.finish()
+
+    def _reread(self, face_ids: Sequence[int]) -> None:
+        """**DBから読み直して、どの顔が判断済みかを更新する。**
+
+        束そのものは作り直さない（同じ画面で束が組み替わると、
+        いま見ていたものがどこへ行ったのか分からなくなる）。
+        """
+        row = self.cluster_list.currentRow()
+        mine = [face_id for face_id in face_ids if face_id in self.records]
+        for record in db.faces_by_ids(self.connection, mine):
+            self.records[record["id"]].update(
+                {
+                    "assign_source": record["assign_source"],
+                    "person_id": record["person_id"],
+                }
+            )
+        self._reload_clusters(keep_row=row)
+
+    def _undo_or_redo(self, redo: bool) -> None:
+        """元に戻す・やり直す（#116）。親の画面で積んだ操作も戻る。"""
+        try:
+            step = (self.history.redo if redo else self.history.undo)(self.connection)
+        except undo.UndoConflict as error:
+            QMessageBox.information(self, ACTION_REDO if redo else ACTION_UNDO, str(error))
+            return
+        except sqlite3.Error as error:
+            QMessageBox.warning(self, ACTION_REDO if redo else ACTION_UNDO, undo_write_failed(error))
+            return
+        self._reread(step.face_ids)
+        self.notice_label.setText(f"{REDONE if redo else UNDONE}: {step.label}")
 
     def _split_cluster(self) -> None:
         """選んだ束を、**もっと厳しい近さで割り直す。**
@@ -1725,6 +1778,8 @@ class MainWindow(QWidget):
         self.similarity: Optional[recommend.PersonSimilarity] = None
         #: 直前に並べたとき、根拠にした手本の件数。0 なら似た順に並べられていない。
         self.similarity_teachers: Optional[int] = None
+        #: 顔の操作を元に戻す・やり直す履歴（#116）。**開いている間だけ持つ**（利用者の決定）。
+        self.history = undo.History()
 
         person_panel = self._build_person_panel()
         face_panel = self._build_face_panel()
@@ -2093,6 +2148,19 @@ class MainWindow(QWidget):
         for action in (self.action_next_page, self.action_previous_page):
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.face_list.addAction(action)
+
+        # 元に戻す・やり直す（#116）。**顔の一覧に焦点が無くても効く**（左の一覧で人物を
+        # 選び直したあとにも戻したい）。文字の欄では、欄が先に受け取って文字の取り消しになる。
+        self.action_undo = QAction(ACTION_UNDO, self)
+        self.action_undo.setShortcuts(list(UNDO_SHORTCUTS))
+        self.action_undo.triggered.connect(lambda: self._undo_or_redo(redo=False))
+        self.action_redo = QAction(ACTION_REDO, self)
+        self.action_redo.setShortcuts(list(REDO_SHORTCUTS))
+        self.action_redo.triggered.connect(lambda: self._undo_or_redo(redo=True))
+        for action in (self.action_undo, self.action_redo):
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.addAction(action)
+        self._update_undo_actions()
 
     # ------------------------------------------------------------------
     # 左の一覧（見るもの）
@@ -2575,9 +2643,43 @@ class MainWindow(QWidget):
                 any(action.isEnabled() for action in self.not_this_person_actions)
             )
         menu.addSeparator()
+        self._update_undo_actions()
+        menu.addAction(self.action_undo)
+        menu.addAction(self.action_redo)
+        menu.addSeparator()
         menu.addAction(self.action_previous_page)
         menu.addAction(self.action_next_page)
         return menu
+
+    def _update_undo_actions(self) -> None:
+        """元に戻す・やり直すを、**何が戻るかの名前つき**で出す（#116）。"""
+        for action, name, step in (
+            (self.action_undo, ACTION_UNDO, self.history.next_undo()),
+            (self.action_redo, ACTION_REDO, self.history.next_redo()),
+        ):
+            action.setEnabled(step is not None)
+            action.setText(name if step is None else f"{name}: {step.label}")
+
+    def _undo_or_redo(self, redo: bool) -> None:
+        """いちばん新しい操作を元に戻す（やり直す）。**戻せなければ理由を出す**（`undo.History`）。"""
+        name = ACTION_REDO if redo else ACTION_UNDO
+        try:
+            with busy_cursor():
+                step = (self.history.redo if redo else self.history.undo)(self.connection)
+        except undo.UndoConflict as error:
+            QMessageBox.information(self, name, str(error))
+            self._update_undo_actions()
+            return
+        except sqlite3.Error as error:
+            # 書けなかっただけ。操作は履歴に残っている（`undo.History._apply_or_keep`）
+            QMessageBox.warning(self, name, undo_write_failed(error))
+            self._update_undo_actions()
+            return
+        self.reload_faces()
+        self._refresh_counts()
+        self._refresh_details()
+        self._update_undo_actions()
+        self._mark_preview_done(f"{REDONE if redo else UNDONE} — {step.label}")
 
     def _groups_not_this_person(self) -> bool:
         """「この人物ではない」を行き先のメニューにまとめる表示か（人物の表示・#113）。"""
@@ -2703,6 +2805,8 @@ class MainWindow(QWidget):
         if self.assign_actions:
             upper = min(len(self.assign_actions), 9)
             keys.insert(0, f"1〜{upper} 人物に割り当て" if upper > 1 else "1 人物に割り当て")
+        if self.history.can_undo():
+            keys.append(f"{UNDO_SHORTCUTS[0]} {ACTION_UNDO}")
         head = f"顔を右クリックで操作（{selected:,} 件選択中）"
         self.hint_label.setText(head + ("　｜　" + " / ".join(keys) if keys else ""))
 
@@ -2995,7 +3099,8 @@ class MainWindow(QWidget):
         folder, day = self.event
         try:
             dialog = EventClusterDialog(
-                self, self.connection, folder, day, source_roots=self.source_roots
+                self, self.connection, folder, day, source_roots=self.source_roots,
+                history=self.history,
             )
         except clustering.TooManyFacesError as error:
             # **黙って先頭だけ束ねない。** 出ていない顔が未分類のまま残る。
@@ -3015,6 +3120,7 @@ class MainWindow(QWidget):
         self._refresh_counts()
         self._refresh_details()
         self._sync_event_controls()
+        self._update_undo_actions()
 
     def _bulk_event_action(self) -> None:
         """行事単位のまとめ処理。**表示中のページではなく行事全体に効く。**"""
@@ -3213,13 +3319,18 @@ class MainWindow(QWidget):
         with busy_cursor():
             progress = WorkProgress(self, label, len(face_ids))
             try:
-                work(progress)
+                # **ここを通る操作は、すべて元に戻せる**（#116）。完了の文が操作の名前になる。
+                self.history.record(
+                    self.connection, done_message.removeprefix("完了 — "), face_ids,
+                    lambda: work(progress),
+                )
                 progress.step("一覧を作り直しています")
                 self.reload_faces()
                 self._refresh_counts()
                 self._refresh_details()
             finally:
                 progress.finish()
+        self._update_undo_actions()
         self._mark_preview_done(done_message)
 
     def _mark_preview_done(self, message: str) -> None:
@@ -3488,7 +3599,8 @@ class MainWindow(QWidget):
             "減点の印を付けています" if penalize else "減点の印を外しています",
             face_ids,
             work,
-            f"完了 — {len(face_ids)} 件の" + ("顔を select で減点します" if penalize else "減点をやめました"),
+            # 完了の文が「元に戻す: 〈何を〉」の名前になるので「〜しました」にそろえる（PR #117 のレビュー指摘2）
+            f"完了 — {len(face_ids)} 件" + ("を他人(減点)にしました" if penalize else "の減点をやめました"),
         )
 
     def _reject_selected(self):
