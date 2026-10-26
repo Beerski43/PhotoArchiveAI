@@ -73,6 +73,7 @@
 | `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未分類 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
 | `test_source_roots.py::test_select_copies_a_photo_outside_every_root` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（#83 で直下に平らに出力する形に替えたあとも、root の外を通す。`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
+| `test_gui_layout.py::test_the_assign_menu_stays_inside_the_window_even_with_many_persons` | **人物が多いと、右クリックの `人物に割り当て` の下の方が画面から飛び出て選べなかった**（#118・Windows から X11 転送で開いた GUI。Qt の知っている画面と見えている画面が食い違う） |
 
 ---
 
@@ -501,6 +502,17 @@
 | `test_many_faces_are_read_and_written_in_chunks` | 1,200 件のまとめ処理も戻る（SQLite の変数の上限） |
 | `test_a_failed_write_leaves_nothing_half_done` | 書き戻しが途中で落ちたら何も書かない |
 | `test_a_step_that_could_not_be_written_stays_in_history` | **書けなかっただけの操作は履歴に戻す**（`database is locked`。以前は操作だけが消えた。PR #117 のレビュー指摘1） |
+
+### `test_gui_layout.py` — 顔の割り当て画面の見え方（6件。#118）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_assign_menu_stays_inside_the_window_even_with_many_persons` | 人物 40 人・ウィンドウの下端近くで右クリックしても、メニューと `人物に割り当て ▸` がウィンドウの中に収まる |
+| `test_persons_beyond_the_window_height_scroll_instead_of_disappearing` | 収まらない人物は列に折り返さずスクロールで届く（折り返しは Qt の知っている画面の高さで決まるので、縮めると下が見えないまま残る） |
+| `test_the_person_menu_is_kept_inside_the_window_too` | 左の一覧の右クリックも同じ扱い |
+| `test_clamp_into_moves_a_rect_back_inside` | はみ出した矩形を枠の内側へずらす。枠より高いものは上端に揃える |
+| `test_the_person_panel_is_narrow_and_widening_goes_to_the_faces` | 左の既定の幅は `PERSON_PANEL_WIDTH`（以前の 320px より狭い）。ウィンドウを広げても左は広がらず、顔の一覧が広がる |
+| `test_the_person_panel_can_be_narrowed_below_the_old_minimum` | ボタンが Qt の既定の最小幅（1つ 80px）を取らず、左を既定の幅まで狭められる |
 
 ### `test_gui_undo.py` — GUI の元に戻す・やり直す（8件。#116）
 
