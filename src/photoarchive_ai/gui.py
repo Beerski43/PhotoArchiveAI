@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QAction, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -235,6 +235,8 @@ def undo_write_failed(error: Exception) -> str:
 PENALIZE_MARK = "減点"
 ASSIGN_MENU = "人物に割り当て"
 ASSIGN_MENU_OTHER = "別の人物に割り当て"
+#: 顔の割り当て画面の左（人物の一覧）の既定の幅（#118）。下の「自動割り当て（match）を実行…」が収まる幅。
+PERSON_PANEL_WIDTH = 220
 
 
 def _format_timestamp(value: Optional[str]) -> Optional[str]:
@@ -574,6 +576,62 @@ def busy_cursor():
         yield
     finally:
         QApplication.restoreOverrideCursor()
+
+
+def visible_bounds(window: QWidget) -> QRect:
+    """メニューを収める枠。**GUI のウィンドウ**（と Qt の画面の小さいほう）。
+
+    **Qt が知っている画面は、見えている画面と一致するとは限らない**（#118）。
+    Windows から X11 転送で開くと、Qt が見るのは X サーバーの root で、
+    モニタの区切りやタスクバーが入らない。Qt は収まると思ってメニューを置き、
+    実際には下が切れて選べなかった。**ウィンドウは利用者に見えている。**
+    """
+    window = window.window()
+    bounds = window.frameGeometry()
+    screen = window.screen()
+    if screen is not None:
+        bounds = bounds.intersected(screen.availableGeometry())
+    return bounds
+
+
+class KeepMenuInsideWindow(QObject):
+    """メニューを GUI のウィンドウの中に収める（#118）。
+
+    **高さはウィンドウまで、超えるぶんはスクロール。** 出たときにはみ出すぶんは
+    内側へずらす。サブメニューの位置は Qt が決めるので、出た直後に直す。
+    """
+
+    def __init__(self, widget: QWidget) -> None:
+        super().__init__(widget)
+        #: 枠はこの部品の**いまの**トップレベルのウィンドウ（タブに入れても追う）。
+        self.widget = widget
+
+    def attach(self, menu: QMenu) -> QMenu:
+        """``menu`` とそのサブメニューに掛ける。**サブメニューを足し終えてから呼ぶ。**"""
+        # 列に折り返すと、上限の高さを超えたぶんが見えないまま残る（Qt は折り返しを
+        # 自分の知っている画面の高さで決める）。
+        menu.setStyleSheet("QMenu { menu-scrollable: 1; }")
+        # 高さは出す前に決める（スクロールの量は出すときに計算される）。
+        menu.aboutToShow.connect(
+            lambda: menu.setMaximumHeight(visible_bounds(self.widget).height())
+        )
+        menu.installEventFilter(self)
+        for action in menu.actions():
+            if action.menu() is not None:
+                self.attach(action.menu())
+        return menu
+
+    def eventFilter(self, menu, event) -> bool:
+        if event.type() == QEvent.Type.Show and isinstance(menu, QMenu):
+            menu.move(clamp_into(menu.geometry(), visible_bounds(self.widget)))
+        return False
+
+
+def clamp_into(rect: QRect, bounds: QRect) -> QPoint:
+    """``rect`` を ``bounds`` の内側へずらした左上。**収まらない向きは上端・左端に揃える。**"""
+    x = max(bounds.left(), min(rect.left(), bounds.right() - rect.width() + 1))
+    y = max(bounds.top(), min(rect.top(), bounds.bottom() - rect.height() + 1))
+    return QPoint(x, y)
 
 
 class WorkProgress:
@@ -1780,6 +1838,8 @@ class MainWindow(QWidget):
         self.similarity_teachers: Optional[int] = None
         #: 顔の操作を元に戻す・やり直す履歴（#116）。**開いている間だけ持つ**（利用者の決定）。
         self.history = undo.History()
+        #: 右クリックのメニューをウィンドウの中に収める（#118）。
+        self.menu_keeper = KeepMenuInsideWindow(self)
 
         person_panel = self._build_person_panel()
         face_panel = self._build_face_panel()
@@ -1788,9 +1848,12 @@ class MainWindow(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(person_panel)
         splitter.addWidget(face_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([320, 860])
+        # **左は狭く、広げたぶんは顔の一覧へ**（#118・利用者「真ん中のサムネ一覧を
+        # 広くしたい」）。左は「見るもの」を選ぶだけなので、名前が読めれば足りる。
+        # 分割線を動かせば広げられる。
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([PERSON_PANEL_WIDTH, 1180 - PERSON_PANEL_WIDTH])
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(splitter)
@@ -1835,9 +1898,16 @@ class MainWindow(QWidget):
         self.match_button.clicked.connect(self._run_match)
 
         person_buttons = QHBoxLayout()
-        person_buttons.addWidget(self.add_person_button)
-        person_buttons.addWidget(self.edit_person_button)
-        person_buttons.addWidget(self.delete_person_button)
+        for button in (
+            self.add_person_button,
+            self.edit_person_button,
+            self.delete_person_button,
+        ):
+            # Qt の既定ではボタン1つが 80px 以上を取り、3つ並ぶと左が狭くならない（#118）。
+            button.setMinimumWidth(
+                button.fontMetrics().horizontalAdvance(button.text()) + 16
+            )
+            person_buttons.addWidget(button)
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -2397,7 +2467,7 @@ class MainWindow(QWidget):
         has_person = self._current_person() is not None
         edit.setEnabled(has_person)
         delete.setEnabled(has_person)
-        menu.exec(self.person_list.mapToGlobal(pos))
+        self.menu_keeper.attach(menu).exec(self.person_list.mapToGlobal(pos))
 
     def _validated_values(self, dialog: "PersonDialog") -> Optional[tuple]:
         """人物ダイアログの入力を検証して返す。落ちたら知らせて ``None``。
@@ -2649,7 +2719,7 @@ class MainWindow(QWidget):
         menu.addSeparator()
         menu.addAction(self.action_previous_page)
         menu.addAction(self.action_next_page)
-        return menu
+        return self.menu_keeper.attach(menu)
 
     def _update_undo_actions(self) -> None:
         """元に戻す・やり直すを、**何が戻るかの名前つき**で出す（#116）。"""
