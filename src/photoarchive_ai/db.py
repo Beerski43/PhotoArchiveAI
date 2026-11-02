@@ -2512,32 +2512,45 @@ def save_expressions(connection: sqlite3.Connection, rows: Sequence[Tuple[int, A
     return cursor.rowcount
 
 
-def _match_candidate_filter(include_auto: bool) -> str:
-    """match が対象にする顔の条件。
+def _match_candidate_filter(
+    include_auto: bool, person_id: Optional[int] = None
+) -> Tuple[str, Tuple[Any, ...]]:
+    """match が対象にする顔の条件と、その引数。
 
     ``include_auto`` は dry-run 用。本番実行は先に自動割り当てを取り消して
     から候補を数えるので、取り消しを行わない dry-run で ``auto`` を除くと、
     2回目以降の件数と距離の分布が実際より小さく出てしまう。
 
-    **`embed_version` のプレースホルダを1つ持つ。** 呼び出し側は必ず
-    `embedding_model.ACTIVE.version` を先頭の引数として渡すこと。
+    ``person_id`` を渡すと、``include_auto`` で足す自動割り当てを**その人物の
+    ものだけ**にする（人物ごとの `match`・#123）。ほかの人物の自動割り当ては
+    取り消さないので、候補にも入れない。
     """
-    assigned = "(assign_source IS NULL OR assign_source = 'auto')" if include_auto else "assign_source IS NULL"
-    return f" WHERE {assigned} AND embedding IS NOT NULL AND embed_version = ?"
+    params: List[Any] = [embedding_model.ACTIVE.version]
+    if not include_auto:
+        assigned = "assign_source IS NULL"
+    elif person_id is None:
+        assigned = "(assign_source IS NULL OR assign_source = 'auto')"
+    else:
+        assigned = "(assign_source IS NULL OR (assign_source = 'auto' AND person_id = ?))"
+        params.append(int(person_id))
+    return (
+        f" WHERE embedding IS NOT NULL AND embed_version = ? AND {assigned}",
+        tuple(params),
+    )
 
 
 def count_match_candidates(
-    connection: sqlite3.Connection, include_auto: bool = False
+    connection: sqlite3.Connection,
+    include_auto: bool = False,
+    person_id: Optional[int] = None,
 ) -> int:
     """``iter_unassigned_embeddings`` が返すのと同じ集合の件数。
 
     進捗の分母に使う。``count_faces`` だと埋め込みを持たない顔まで数えて
     しまい、100% に届かないまま終わる。
     """
-    where = _match_candidate_filter(include_auto)
-    row = connection.execute(
-        f"SELECT COUNT(*) FROM Face{where}", (embedding_model.ACTIVE.version,)
-    ).fetchone()
+    where, params = _match_candidate_filter(include_auto, person_id)
+    row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
 
 
@@ -2545,14 +2558,15 @@ def iter_unassigned_embeddings(
     connection: sqlite3.Connection,
     chunk_size: int = MATCH_CHUNK_SIZE,
     include_auto: bool = False,
+    person_id: Optional[int] = None,
 ) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
     """未分類かつ埋め込みを持つ顔を (id配列, 埋め込み行列) の塊で返す。"""
-    where = _match_candidate_filter(include_auto)
+    where, params = _match_candidate_filter(include_auto, person_id)
     offset = 0
     while True:
         rows = connection.execute(
             f"SELECT id, embedding FROM Face{where} ORDER BY id LIMIT ? OFFSET ?",
-            (embedding_model.ACTIVE.version, chunk_size, offset),
+            params + (chunk_size, offset),
         ).fetchall()
         if not rows:
             return

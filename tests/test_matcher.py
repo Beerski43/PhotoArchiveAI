@@ -509,3 +509,124 @@ def test_progress_is_reported_before_the_first_chunk(connection):
     assert calls[0] == (0, 0), "取り消しが済んだところ（件数はまだ分からない）"
     assert calls[1] == (0, 1), "手本を読み終え、照合する件数が決まったところ"
     assert calls[-1] == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# 人物ごとの match（#123）
+# ---------------------------------------------------------------------------
+
+
+def _two_people(connection):
+    """Alice と Bob の手本と、それぞれに近い未分類・自動割り当ての顔。"""
+    alice = db.add_person(connection, "Alice")
+    bob = db.add_person(connection, "Bob")
+    media = _add_media(connection, 1)
+    _add_face(connection, media, _vector(0.0, 0.0), alice, db.ASSIGN_MANUAL)
+    _add_face(connection, media, _vector(3.0, 0.0), bob, db.ASSIGN_MANUAL)
+    faces = {
+        "Alice に近い未分類": _add_face(connection, _add_media(connection, 2), _vector(0.01, 0.0)),
+        "Bob に近い未分類": _add_face(connection, _add_media(connection, 3), _vector(3.01, 0.0)),
+        # 全員で流せば外れる（どちらにも遠い）が、Bob の自動割り当てとして残っている
+        "Bob の古い自動": _add_face(
+            connection, _add_media(connection, 4), _vector(9.0, 9.0), bob, db.ASSIGN_AUTO
+        ),
+        # 全員で流せば Alice へ移るが、いまは Bob の自動割り当て
+        "Bob の自動だが Alice に近い": _add_face(
+            connection, _add_media(connection, 5), _vector(0.02, 0.0), bob, db.ASSIGN_AUTO
+        ),
+        # Alice の古い自動割り当て（いまの手本からは遠い）
+        "Alice の古い自動": _add_face(
+            connection, _add_media(connection, 6), _vector(9.0, -9.0), alice, db.ASSIGN_AUTO
+        ),
+    }
+    return alice, bob, faces
+
+
+def test_matching_one_person_leaves_every_other_person_untouched(connection):
+    """**指定した人物だけを付け直し、ほかの人物の自動割り当ても未分類の顔も触らない。**"""
+    alice, bob, faces = _two_people(connection)
+
+    summary = match_faces(connection, metric=EUCLIDEAN, threshold=0.5, person_id=alice)
+
+    def owner(name):
+        record = db.get_face(connection, faces[name])
+        return record["person_id"], record["assign_source"]
+
+    assert owner("Alice に近い未分類") == (alice, db.ASSIGN_AUTO)
+    assert owner("Alice の古い自動") == (None, None), "Alice の自動割り当ては付け直す"
+    assert owner("Bob に近い未分類") == (None, None), "Bob には付けない"
+    assert owner("Bob の古い自動") == (bob, db.ASSIGN_AUTO), "Bob の自動割り当ては外さない"
+    assert owner("Bob の自動だが Alice に近い") == (bob, db.ASSIGN_AUTO), "見直さない"
+    assert summary["reset"] == 1
+    assert summary["assigned"] == 1
+    assert summary["per_person"] == {alice: 1}
+    assert summary["left_for_others"] == 1
+    assert summary["person_teachers"] == 1
+    assert summary["teachers"] == 2, "手本は全員のものを読む"
+
+
+def test_matching_one_person_still_uses_the_others_as_rivals(connection):
+    """**ほかの人物の手本は対抗馬として効く。** 2人の中間の顔は、指定した人物にも付けない。
+
+    指定した人物の手本だけで照合すると、Bob が2位として止めていた顔が Alice に流れる。
+    """
+    alice = db.add_person(connection, "Alice")
+    bob = db.add_person(connection, "Bob")
+    media = _add_media(connection, 1)
+    _add_face(connection, media, _vector(0.0, 0.0), alice, db.ASSIGN_MANUAL)
+    _add_face(connection, media, _vector(0.2, 0.0), bob, db.ASSIGN_MANUAL)
+    ambiguous = _add_face(connection, _add_media(connection, 2), _vector(0.09, 0.0))
+
+    summary = match_faces(
+        connection, metric=EUCLIDEAN, threshold=0.5, margin=0.05, person_id=alice
+    )
+
+    assert db.get_face(connection, ambiguous)["person_id"] is None
+    assert summary["assigned"] == 0
+    assert summary["left_for_others"] == 0, "1位が決まらなかった顔は、ほかの人物の分に数えない"
+
+
+def test_matching_one_person_decides_unassigned_faces_like_matching_everyone(tmp_path):
+    """未分類の顔についての判断は、全員で流したときと同じ（規則を変えていない）。"""
+    results = {}
+    for mode in ("everyone", "alice"):
+        connection = db.ensure_database(str(tmp_path / f"{mode}.db"))
+        try:
+            alice, _bob, faces = _two_people(connection)
+            match_faces(
+                connection,
+                metric=EUCLIDEAN,
+                threshold=0.5,
+                person_id=alice if mode == "alice" else None,
+            )
+            results[mode] = db.get_face(connection, faces["Alice に近い未分類"])["person_id"]
+        finally:
+            connection.close()
+    assert results["everyone"] == results["alice"]
+
+
+def test_matching_one_person_as_a_dry_run_writes_nothing(connection):
+    """dry-run は書かない。数えるのは未分類とその人物の自動割り当てだけ。"""
+    alice, bob, faces = _two_people(connection)
+    before = {face_id: dict(db.get_face(connection, face_id)) for face_id in faces.values()}
+
+    summary = match_faces(
+        connection, metric=EUCLIDEAN, threshold=0.5, dry_run=True, person_id=alice
+    )
+
+    after = {face_id: dict(db.get_face(connection, face_id)) for face_id in faces.values()}
+    assert before == after
+    # 未分類2件 + Alice の自動1件（Bob の自動2件は候補に入らない）
+    assert summary["candidates"] == 3
+    assert summary["assigned"] == 1
+
+
+def test_matching_a_person_without_teachers_assigns_nothing(connection):
+    alice, bob, faces = _two_people(connection)
+    carol = db.add_person(connection, "Carol")
+
+    summary = match_faces(connection, metric=EUCLIDEAN, threshold=0.5, person_id=carol)
+
+    assert summary["person_teachers"] == 0
+    assert summary["assigned"] == 0
+    assert db.get_face(connection, faces["Alice に近い未分類"])["person_id"] is None

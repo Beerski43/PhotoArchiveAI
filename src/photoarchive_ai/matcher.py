@@ -242,8 +242,20 @@ def match_faces(
     dry_run: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     metric: Optional[str] = None,
+    person_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """未分類の顔を自動で人物に紐づける。
+
+    ``person_id`` を渡すと**その人物だけ**を付け直す（#123。省略は全員）。
+
+    - 取り消す自動割り当ては、その人物のものだけ。ほかの人物の自動割り当ては
+      取り消さず、候補にも入れない（全員で流せばこの人物へ移る顔があっても、
+      見直さない。「ほかの人物に影響させない」を字義どおりに取った）
+    - 付けるのは、**1位がその人物で受け入れられた顔だけ**。1位がほかの人物の顔は
+      未分類のまま残す（``left_for_others`` に数える）
+    - **手本は全員のものを使う。** その人物の手本だけにすると、2位の対抗馬として
+      他人を止めていた役目が消え、誤りが増える（`_best_match`）。判断の規則は
+      全員のときと同じなので、未分類の顔についての判断も全員のときと同じになる
 
     ``metric`` は距離尺度。省略するといま使うモデルのもの（`embedding.ACTIVE`）。
     **明示できるようにしているのは、尺度を前提にした判断を読み手に見せるため。**
@@ -260,6 +272,9 @@ def match_faces(
         # 誕生日で候補が1人も残らなかった顔。**未分類の内訳**で、
         # 「似た顔が無い」のではなく「その写真にいられる人が居ない」。
         "no_candidate": 0,
+        # 人物を指定したとき、1位がほかの人物で受け入れられた顔（触らずに残した）。
+        "left_for_others": 0,
+        "person_id": person_id,
         "reset": 0,
         "per_person": {},
         "histogram": {},
@@ -267,7 +282,7 @@ def match_faces(
     }
 
     if reset and not dry_run:
-        summary["reset"] = db.reset_auto_assignments(connection)
+        summary["reset"] = db.reset_auto_assignments(connection, person_id=person_id)
         # **工程の境目でも知らせる。** 照合の前の準備（取り消しと手本の読み込み）は
         # 実データで約5秒かかり、そのあいだ何も知らせないと GUI の窓が固まって
         # 見える（GNOME は5秒で「応答なし」と出す）。#67 で GUI から流す口を作って測った。
@@ -284,6 +299,9 @@ def match_faces(
     teachers, person_ids = faces.embeddings, faces.person_ids
     summary["teachers"] = int(teachers.shape[0])
     summary["unusable_teachers"] = int((~usable).sum())
+    if person_id is not None:
+        # 指定した人物の手本の数。0 なら何も付かない（全員の手本は対抗馬として読む）。
+        summary["person_teachers"] = int((np.asarray(person_ids) == int(person_id)).sum())
     limits = teacher_limits(faces, threshold)
     # **誕生日は候補を絞る材料。** 登録されていない人物は絞られない。
     birth_dates = {
@@ -302,7 +320,9 @@ def match_faces(
     # 見せるには auto の顔も候補に入れる必要がある。入れないと、2回目以降の
     # dry-run が「もう割り当て済みの顔」を数え落として空振りに見える。
     include_auto = dry_run and reset
-    total = db.count_match_candidates(connection, include_auto=include_auto)
+    total = db.count_match_candidates(
+        connection, include_auto=include_auto, person_id=person_id
+    )
     if progress_callback is not None:
         progress_callback(0, total, f"{summary['teachers']} teachers loaded")
     updates = []
@@ -311,7 +331,7 @@ def match_faces(
     # 年齢計算を顔の数だけ繰り返すと、日付の解析が候補数×人物数になる。
     alive_cache: Dict[Any, np.ndarray] = {}
     for ids, candidates in db.iter_unassigned_embeddings(
-        connection, CHUNK_SIZE, include_auto=include_auto
+        connection, CHUNK_SIZE, include_auto=include_auto, person_id=person_id
     ):
         takens = db.taken_by_face(connection, ids.tolist())
         distances = _distances(candidates, teachers, metric)
@@ -328,14 +348,14 @@ def match_faces(
             # **絞るのは `_best_match` に渡す前。** あとから捨てると、ありえない
             # 人物が2位に居座ってマージンを潰し、判断が保留のままになる。
             if alive.all():
-                person_id, distance = _best_match(
+                winner, distance = _best_match(
                     distances[row_index], person_ids, threshold, margin, usable, limits
                 )
             elif not alive.any():
                 # 手本のある人物が全員、この写真の時点でまだ生まれていない。
-                person_id, distance = None, float("inf")
+                winner, distance = None, float("inf")
             else:
-                person_id, distance = _best_match(
+                winner, distance = _best_match(
                     distances[row_index][alive],
                     person_ids[alive],
                     threshold,
@@ -353,11 +373,16 @@ def match_faces(
             capped = min(distance, HISTOGRAM_MAX)
             bucket = round(capped - (capped % 0.1), 1)
             summary["histogram"][bucket] = summary["histogram"].get(bucket, 0) + 1
-            if person_id is None:
+            if winner is None:
                 summary["unassigned"] += 1
                 continue
-            updates.append((int(ids[row_index]), person_id, distance_to_similarity(distance)))
-            summary["per_person"][person_id] = summary["per_person"].get(person_id, 0) + 1
+            if person_id is not None and winner != person_id:
+                # **ほかの人物には付けない**（#123）。未分類のまま残す。
+                summary["unassigned"] += 1
+                summary["left_for_others"] += 1
+                continue
+            updates.append((int(ids[row_index]), winner, distance_to_similarity(distance)))
+            summary["per_person"][winner] = summary["per_person"].get(winner, 0) + 1
             summary["assigned"] += 1
         processed += len(ids)
         summary["candidates"] = processed

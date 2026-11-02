@@ -348,7 +348,7 @@
 | `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
-### `test_matcher.py` — 自動割り当て（28件）
+### `test_matcher.py` — 自動割り当て（33件。人物ごとは #123）
 
 | テスト | 内容 |
 |---|---|
@@ -364,6 +364,11 @@
 | `test_dry_run_still_writes_nothing_after_a_real_match` | 上の変更で書き込みが起きていない |
 | `test_progress_reaches_the_end_even_when_some_faces_have_no_embedding` | 進捗の分母が実際の候補数と合う |
 | `test_progress_is_reported_before_the_first_chunk` | **照合の前の準備（取り消し・手本の読み込み）でも進み具合を知らせる。** GUI の窓が5秒固まって見えていた |
+| `test_matching_one_person_leaves_every_other_person_untouched` | **人物を指定すると、その人物だけを付け直す**。ほかの人物の自動割り当ては外さず見直さず、1位がほかの人物の未分類の顔にも付けない（#123） |
+| `test_matching_one_person_still_uses_the_others_as_rivals` | **人物を指定しても、全員の手本を対抗馬に使う**。2人の中間の顔を指定した人物に流さない（#123） |
+| `test_matching_one_person_decides_unassigned_faces_like_matching_everyone` | 未分類の顔の判断は全員で流したときと同じ（規則を変えていない・#123） |
+| `test_matching_one_person_as_a_dry_run_writes_nothing` | 人物を指定した dry-run は書かず、ほかの人物の自動割り当てを候補に数えない（#123） |
+| `test_matching_a_person_without_teachers_assigns_nothing` | 手本の無い人物を指定しても何も付かない（#123） |
 
 ### `test_evaluation.py` — 精度の実測（12件）
 
@@ -546,7 +551,7 @@
 | `test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation` | 未分類の顔認証外に確認を挟まない（毎件通る操作） |
 | `test_switching_back_from_unassigned_restores_the_persons_order` | 種別を戻すと人物の既定の並び（年齢順）に戻る |
 
-### `test_gui_match.py` — `match` を画面から流す（8件）
+### `test_gui_match.py` — `match` を画面から流す（11件。人物ごとは #123）
 
 | テスト | 内容 |
 |---|---|
@@ -558,6 +563,9 @@
 | `test_the_progress_bar_reaches_every_candidate` | 進み具合が件数で出て、最後まで届く |
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
+| `test_matching_only_the_selected_person_from_the_window` | **左で選んだ人物だけを付け直せる**。ほかの人物の顔には触らず、1位がほかの人物だった件数を結果に出す（#123） |
+| `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
+| `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
 ### `test_gui_select.py` — 写真の選定タブ（31件。#104・#106・#113・#120）
 
@@ -942,7 +950,7 @@
 | `test_restore_does_not_touch_the_file_while_the_database_is_locked` | **DB に書けないときはファイルに触らない**。以前はファイルだけ変わって止まり、次の scan が割り当てを消した（PR #80 のレビュー指摘4） |
 | `test_restore_finishes_a_file_left_half_done` | ファイルだけ書き換わった1件を、再実行で DB だけ揃えて回収する |
 
-### `test_cli_commands.py` — サブコマンドの配線（34件）
+### `test_cli_commands.py` — サブコマンドの配線（35件）
 
 | テスト | 内容 |
 |---|---|
@@ -958,6 +966,7 @@
 | `test_scan_falls_back_to_the_roots_recorded_in_the_database` | **設定を失っても DB に記録された root で走査する**（#24 の動機） |
 | `test_scan_without_any_source_names_the_setting_to_write` | root がどこにも無ければ `source_roots` を書くよう言う |
 | `test_match_arguments_reach_the_matcher` | `match` の全オプションが下へ届く |
+| `test_match_can_be_limited_to_one_person` | `match --person` は名前でも id でも人物を渡す。打ち間違いは全員ぶんを流さずに止まる（#123） |
 | `test_the_database_path_falls_back_to_the_settings_file` | 設定ファイルへのフォールバック |
 | `test_evaluate_arguments_reach_the_evaluation` | `evaluate` の全オプションが下へ届く |
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
