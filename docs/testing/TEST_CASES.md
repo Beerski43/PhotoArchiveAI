@@ -559,7 +559,7 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（26件。#104・#106・#113）
+### `test_gui_select.py` — 写真の選定タブ（30件。#104・#106・#113・#120）
 
 | テスト | 内容 |
 |---|---|
@@ -589,6 +589,10 @@
 | `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |
 | `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
 | `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
+| `test_each_weight_has_a_gauge_that_moves_its_value_by_the_step` | **重みと似た写真の判定の各項目に横ゲージ**。動かすと入力欄に刻みの倍数が入り、ルールに届く（#120） |
+| `test_a_value_off_the_gauge_is_kept_as_typed` | ゲージは値の上限でも目盛りでもない。右端より大きい値・目盛りに合わない値を丸めずにルールへ（#120・PR #108 の指摘3） |
+| `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
+| `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（24件）
 
