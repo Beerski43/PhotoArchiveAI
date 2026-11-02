@@ -11,6 +11,15 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
+## 2026-11-02 — Windows 対応の調査（ライセンス・Windows・Store）
+
+**#124 の調査（ROADMAP 4.11.2）。** PR #125（#123）はマージ済みなので ROADMAP 4.11.1 を済に。方針は #124 のコメント（2026-11-02）。**コードは変えていない。** 記録は [details/2026-11-02-windows-investigation.md](details/2026-11-02-windows-investigation.md)。
+- **商用: いまのままでは問題がある。** ArcFace（`w600k_r50`）の重みは InsightFace が非商用の研究目的に限っている。MUSIQ・NIMA の重みは pyiqa（PolyForm Noncommercial）から。pillow-heif の wheel は x265 を同梱して GPLv2（読むだけの `pi-heif` は LGPLv3）。MediaPipe のモデルは Apache 2.0
+- **Windows: 動かせる見込み。** 依存はすべて Windows 用 wheel がある（mediapipe 0.10.21 は Python 3.12 まで・退役した dlib は無い）。コードに Linux 前提: パスの `/` 決め打ち（フォルダが取れず似た写真の束ねと root の判定が外れる）・`sys.stderr` の無い画面のアプリで顔検出が落ちる・`data/` が作業フォルダ相対
+- **Store: MSIX に包めば出せる**（Store が署名する）。データの置き場所を書き込める場所へ。PySide6 の LGPL を MSIX でどう満たすかは未確認
+- Windows の実機では動かしていない。法的な判断ではない
+**次は利用者の判断**（商用にするか・ArcFace と MUSIQ/NIMA をどうするか。記録の §4）。それまで 7 は着手しない。順序の次は 4.12（#121・着手は指示待ち）。
+
 ## 2026-11-02 — match を人物ごとに実行できるように
 
 **#123（ROADMAP 4.11.1）。** 利用者「他の人物には影響させずに、個別に match できるようにしたい」。方針は #123 のコメント（2026-11-02）。
@@ -182,12 +191,6 @@ MUSIQ の下位はほぼ全部が手ぶれ・ピンぼけ・暗い写真。NIMA 
 本筋の外: ROADMAP の 4.7 を済に（PR #108 はマージ済み）。
 レビュー対応（PR #109）: 指摘1 記録の「測り直すと別の 200 枚になる」は誤りだった（実データでは古い版と同じ 200 枚。SQLite が索引の順に返していた）→ 直した。指摘2 並べ直しを守るテストが無かった → 索引の無い表で確かめるテストを足した。指摘3 出力先を「リポジトリの外か `data/` の下」に揃えた。
 次は 4.9（#106・MUSIQ と NIMA を測って残し、点に入れる）。
-
-## 2026-10-13 — 引き継ぎを書いた（#104 のあと・IQA の試験の途中）
-
-申し送りは [details/2026-10-13-handoff-after-pr108.md](details/2026-10-13-handoff-after-pr108.md)。**PR #108 マージ待ち**（#104・写真の選定タブ。レビュー対応済み）。
-**#105（IQA の試験）は途中**: NIMA（0.5 秒/枚）・MUSIQ（1.5 秒）・TOPIQ NR（2.9 秒・一晩に収まらない）は 200 枚を測った。MUSIQ と TOPIQ NR は順位の相関 0.90、NIMA とは 0.64。TOPIQ IAA の読み込みで止まり、CLIP-IQA は未測定。記録は [details/2026-10-13-iqa-trial-measured.md](details/2026-10-13-iqa-trial-measured.md)、結果とスクリプトは `data/iqa-trial-2026-10-13/`（git 管理外）。
-次は、上位と下位の写真を利用者に見せて採るモデルを決める → #106。
 
 ## 過去の履歴
 
