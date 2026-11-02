@@ -504,8 +504,8 @@ def _run_match(args, db_path: str) -> None:
     if person:
         if not summary.get("person_teachers"):
             print(
-                f"{person['name']} の手本がありません。photoarchive-gui で顔を割り当ててから"
-                " 再実行してください。"
+                f"{person['name']} の根拠にできる手本がありません（5点整列ができない手本だけのときも"
+                "含みます）。photoarchive-gui で、顔のよく写った写真を割り当ててから再実行してください。"
             )
         if summary.get("left_for_others"):
             print(

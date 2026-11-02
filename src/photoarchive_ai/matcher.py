@@ -300,8 +300,12 @@ def match_faces(
     summary["teachers"] = int(teachers.shape[0])
     summary["unusable_teachers"] = int((~usable).sum())
     if person_id is not None:
-        # 指定した人物の手本の数。0 なら何も付かない（全員の手本は対抗馬として読む）。
-        summary["person_teachers"] = int((np.asarray(person_ids) == int(person_id)).sum())
+        # 指定した人物の**根拠にできる**手本の数。0 なら何も付かない（全員の手本は
+        # 対抗馬として読む）。整列できない手本は数えない — 行数で数えると、
+        # 整列できない手本しか無い人物で何も付かないのに理由が出ない（PR #125 の指摘3）。
+        summary["person_teachers"] = int(
+            ((np.asarray(person_ids) == int(person_id)) & usable).sum()
+        )
     limits = teacher_limits(faces, threshold)
     # **誕生日は候補を絞る材料。** 登録されていない人物は絞られない。
     birth_dates = {

@@ -953,7 +953,10 @@ def format_match_summary(
         name = names.get(int(summary["person_id"]), summary["person_id"])
         if not summary.get("person_teachers"):
             lines.append("")
-            lines.append(f"{name} の手本がありません。先に顔を割り当ててください。")
+            lines.append(
+                f"{name} の根拠にできる手本がありません（5点整列ができない手本だけのときも"
+                "含みます）。顔のよく写った写真を割り当ててください。"
+            )
         if summary.get("left_for_others"):
             lines.append("")
             lines.append(

@@ -348,7 +348,7 @@
 | `test_distance_to_similarity`（5件） | **モデルの基準距離**を使った 0-100 への変換とクリップ |
 | `test_media_scores_take_the_best_face` ほか2件 | メディアのスコアは最良の顔で代表する |
 
-### `test_matcher.py` — 自動割り当て（33件。人物ごとは #123）
+### `test_matcher.py` — 自動割り当て（34件。人物ごとは #123）
 
 | テスト | 内容 |
 |---|---|
@@ -369,6 +369,7 @@
 | `test_matching_one_person_decides_unassigned_faces_like_matching_everyone` | 未分類の顔の判断は全員で流したときと同じ（規則を変えていない・#123） |
 | `test_matching_one_person_as_a_dry_run_writes_nothing` | 人物を指定した dry-run は書かず、ほかの人物の自動割り当てを候補に数えない（#123） |
 | `test_matching_a_person_without_teachers_assigns_nothing` | 手本の無い人物を指定しても何も付かない（#123） |
+| `test_matching_a_person_whose_teachers_cannot_be_aligned_says_so` | **整列できない手本しか無い人物は「根拠にできる手本が無い」と数える**。行数で数えると、何も付かないのに理由が出なかった（PR #125 の指摘3） |
 
 ### `test_evaluation.py` — 精度の実測（12件）
 

@@ -630,3 +630,26 @@ def test_matching_a_person_without_teachers_assigns_nothing(connection):
     assert summary["person_teachers"] == 0
     assert summary["assigned"] == 0
     assert db.get_face(connection, faces["Alice に近い未分類"])["person_id"] is None
+
+
+def test_matching_a_person_whose_teachers_cannot_be_aligned_says_so(connection, monkeypatch):
+    """**整列できない手本しか無い人物は「根拠にできる手本が無い」と数える**（PR #125 の指摘3）。
+
+    手本の行数で数えていたので、何も付かないのに理由が出なかった。
+    """
+    from photoarchive_ai import matcher
+
+    alice = db.add_person(connection, "Alice")
+    _add_face(connection, _add_media(connection, 1), _vector(0.0, 0.0), alice, db.ASSIGN_MANUAL)
+    near = _add_face(connection, _add_media(connection, 2), _vector(0.01, 0.0))
+    monkeypatch.setattr(
+        matcher,
+        "teacher_usable",
+        lambda conn, faces, **kwargs: np.zeros(len(faces.face_ids), dtype=bool),
+    )
+
+    summary = match_faces(connection, metric=EUCLIDEAN, threshold=0.5, person_id=alice)
+
+    assert summary["person_teachers"] == 0
+    assert summary["assigned"] == 0
+    assert db.get_face(connection, near)["person_id"] is None
