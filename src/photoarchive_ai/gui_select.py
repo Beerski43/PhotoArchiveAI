@@ -266,6 +266,42 @@ def _number_text(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+class _WheelOnlyWhenFocused:
+    """**フォーカスの無いときはホイールを受けず、親（設定欄のスクロール）へ渡す**（PR #122 のレビュー指摘1）。
+
+    Qt のゲージと入力欄はフォーカスが無くてもホイールで値を動かす。設定欄は `QScrollArea` の中にあり、
+    ゲージが行の幅の大半を取るので、ホイールで下へ送るつもりがマウスの下の重みを黙って変えていた
+    （「選ぶ」まで結果に出ず、そのまま「ルールを保存」すると残る）。クリックかタブで選んだときだけ動かす。
+    """
+
+    def _init_wheel_guard(self) -> None:
+        self.setFocusPolicy(Qt.StrongFocus)  # ホイールでフォーカスを取らない
+
+    def wheelEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class WheelSafeSlider(_WheelOnlyWhenFocused, QSlider):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class WheelSafeDoubleSpinBox(_WheelOnlyWhenFocused, QDoubleSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class WheelSafeSpinBox(_WheelOnlyWhenFocused, QSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
 class ParameterRow(QWidget):
     """1つの設定の行: 横ゲージ・入力欄・「既定」ボタン（#120）。
 
@@ -281,7 +317,7 @@ class ParameterRow(QWidget):
         self.spin = spin
         self.step = step
         self.default = default
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = WheelSafeSlider(Qt.Horizontal)
         self.slider.setRange(0, int(round(slider_maximum / step)))
         self.slider.setPageStep(max(1, self.slider.maximum() // 10))
         self.slider.setMinimumWidth(120)
@@ -365,7 +401,7 @@ class SelectionPanel(QWidget):
         self.weight_rows: Dict[str, ParameterRow] = {}
         defaults = scoring.Weights.default()
         for key, label, step in WEIGHT_FIELDS:
-            spin = QDoubleSpinBox()
+            spin = WheelSafeDoubleSpinBox()
             spin.setRange(0.0, WEIGHT_MAXIMUM)
             spin.setDecimals(WEIGHT_DECIMALS)
             spin.setSingleStep(step)
@@ -391,7 +427,7 @@ class SelectionPanel(QWidget):
         self.number_spins: Dict[str, QSpinBox] = {}
         self.number_rows: Dict[str, ParameterRow] = {}
         for key, label, maximum, slider_maximum in NUMBER_FIELDS:
-            spin = QSpinBox()
+            spin = WheelSafeSpinBox()
             spin.setRange(0, maximum)
             self.number_spins[key] = spin
             row = ParameterRow(spin, 1, slider_maximum, selection.RULE_NUMBERS[key])

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from photoarchive_ai import db, gui, gui_select, scoring, selection
@@ -450,3 +451,43 @@ def test_the_quality_weights_name_their_models():
     """画質と美しさがどちらのモデルかを画面で分かるように（#120。MUSIQ と NIMA は別々の重み）。"""
     labels = {key: label for key, label, _ in gui_select.WEIGHT_FIELDS}
     assert "MUSIQ" in labels["technical"] and "NIMA" in labels["aesthetic"]
+
+
+def _wheel(widget, notches=-1):
+    """フォーカスに関係なく、ウィジェットの真ん中へホイールを送る（下向きが負）。"""
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    centre = QPointF(widget.width() / 2, widget.height() / 2)
+    event = QWheelEvent(centre, QPointF(widget.mapToGlobal(centre.toPoint())), QPoint(0, 0),
+                        QPoint(0, 120 * notches), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
+                        False)
+    QApplication.sendEvent(widget, event)
+
+
+def test_a_gauge_ignores_the_wheel_unless_focused(window):
+    """**設定欄をホイールでスクロールしても、マウスの下の重みが変わらない**（PR #122 のレビュー指摘1）。
+
+    ゲージと入力欄はフォーカスが無ければホイールを受けない。クリックかタブで選んだときだけ動く。
+    """
+    panel = window.selection
+    window.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    panel.weight_rows["smile"].reset_button.setFocus()
+    before = panel.current_rule()["weights"]
+    for key in ("technical", "aesthetic"):
+        row = panel.weight_rows[key]
+        assert not row.slider.hasFocus() and not row.spin.hasFocus()
+        _wheel(row.slider)
+        _wheel(row.spin)
+    _wheel(panel.number_rows["similar_distance"].slider)
+    _wheel(panel.number_spins["similar_distance"])
+    assert panel.current_rule()["weights"] == before
+    assert panel.number_spins["similar_distance"].value() == selection.RULE_NUMBERS["similar_distance"]
+
+    technical = panel.weight_rows["technical"]
+    technical.slider.setFocus()
+    QApplication.processEvents()
+    _wheel(technical.slider)
+    assert panel.weight_spins["technical"].value() != pytest.approx(before["technical"]), "選んだゲージは動く"

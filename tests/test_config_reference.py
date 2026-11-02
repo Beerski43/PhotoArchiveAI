@@ -123,3 +123,21 @@ def test_the_reference_is_reachable_from_the_indexes():
     """索引から辿れない説明は、無いのと同じ。"""
     for index in ("README.md", "docs/README.md", "docs/spec/Specification.md"):
         assert "operation/CONFIG.md" in (REPO_ROOT / index).read_text(encoding="utf-8"), index
+
+
+def test_the_quality_weights_name_their_models_everywhere():
+    """画質＝MUSIQ・美しさ＝NIMA を、サンプル・CONFIG.md・画面で揃える（PR #122 のレビュー指摘2）。
+
+    設定ファイルから入った人も「どちらに寄せるかは2つの比」に行き着けるように。
+    """
+    from photoarchive_ai import gui_select
+
+    rule = (REPO_ROOT / "config/rule.sample.yml").read_text(encoding="utf-8")
+    reference = (REPO_ROOT / "docs/operation/CONFIG.md").read_text(encoding="utf-8")
+    labels = {key: label for key, label, _ in gui_select.WEIGHT_FIELDS}
+    for key, model in (("technical", "MUSIQ"), ("aesthetic", "NIMA")):
+        sample_line = next(line for line in rule.splitlines() if f"{key}:" in line)
+        reference_line = next(line for line in reference.splitlines() if line.startswith(f"| `{key}`"))
+        assert model in sample_line, key
+        assert model in reference_line, key
+        assert model in labels[key], key

@@ -559,7 +559,7 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 
-### `test_gui_select.py` — 写真の選定タブ（30件。#104・#106・#113・#120）
+### `test_gui_select.py` — 写真の選定タブ（31件。#104・#106・#113・#120）
 
 | テスト | 内容 |
 |---|---|
@@ -593,6 +593,7 @@
 | `test_a_value_off_the_gauge_is_kept_as_typed` | ゲージは値の上限でも目盛りでもない。右端より大きい値・目盛りに合わない値を丸めずにルールへ（#120・PR #108 の指摘3） |
 | `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
 | `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
+| `test_a_gauge_ignores_the_wheel_unless_focused` | **フォーカスの無いゲージと入力欄はホイールで値を変えない**（設定欄をスクロールすると、マウスの下の重みが黙って変わっていた。PR #122 のレビュー指摘1）。選んだゲージは動く |
 
 ### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（24件）
 
@@ -981,7 +982,7 @@ editable install のときだけ出すこと（通常のインストールでは
 モジュールの位置で判断する**）。同じ場所を2度並べないこと。
 検出元は `source_roots`（配列。1つなら文字列でもよい。**古い `source_root` は読まずに WARNING**（PR #75 で利用者が決めた）。#24）。
 
-### `test_config_reference.py` — 設定ファイルの説明が実装から古くならない（4件。#96）
+### `test_config_reference.py` — 設定ファイルの説明が実装から古くならない（5件。#96・#120）
 
 | テスト | 内容 |
 |---|---|
@@ -989,6 +990,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_check_would_catch_a_missing_key_and_a_stale_default` | 番人自身が働く（行を消す・既定を変えると落ちる） |
 | `test_the_samples_mention_every_key` | 3つの `*.sample.yml` に、書けるキーがコメントでも載っている |
 | `test_the_reference_is_reachable_from_the_indexes` | README・`docs/README.md`・仕様書から辿れる |
+| `test_the_quality_weights_name_their_models_everywhere` | 画質＝MUSIQ・美しさ＝NIMA を、`rule.sample.yml`・CONFIG.md・画面のラベルで揃える（PR #122 のレビュー指摘2） |
 
 ### `test_source_roots.py` — 検出元の root を複数持つ（20件。#24）
 
