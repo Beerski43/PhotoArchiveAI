@@ -599,6 +599,7 @@ class KeepMenuInsideWindow(QObject):
 
     **高さはウィンドウまで、超えるぶんはスクロール。** 出たときにはみ出すぶんは
     内側へずらす。サブメニューの位置は Qt が決めるので、出た直後に直す。
+    **右に入らないサブメニューは親の左へ出す**（押し戻すだけだと親に重なる）。
     """
 
     def __init__(self, widget: QWidget) -> None:
@@ -623,7 +624,19 @@ class KeepMenuInsideWindow(QObject):
 
     def eventFilter(self, menu, event) -> bool:
         if event.type() == QEvent.Type.Show and isinstance(menu, QMenu):
-            menu.move(clamp_into(menu.geometry(), visible_bounds(self.widget)))
+            bounds = visible_bounds(self.widget)
+            rect = QRect(menu.geometry())
+            parent = menu.parentWidget()
+            if (
+                isinstance(parent, QMenu)
+                and parent.isVisible()
+                and rect.right() > bounds.right()
+            ):
+                # 右に入らないサブメニューは親の左へ（Qt が画面の端でするのと同じ）。
+                # 押し戻すだけだと親の上に重なり、カーソルの真下の人物にクリック1つで
+                # 割り当たった（PR #119 のレビュー指摘1）。
+                rect.moveRight(parent.geometry().left() - 1)
+            menu.move(clamp_into(rect, bounds))
         return False
 
 

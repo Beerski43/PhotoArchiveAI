@@ -503,12 +503,13 @@
 | `test_a_failed_write_leaves_nothing_half_done` | 書き戻しが途中で落ちたら何も書かない |
 | `test_a_step_that_could_not_be_written_stays_in_history` | **書けなかっただけの操作は履歴に戻す**（`database is locked`。以前は操作だけが消えた。PR #117 のレビュー指摘1） |
 
-### `test_gui_layout.py` — 顔の割り当て画面の見え方（6件。#118）
+### `test_gui_layout.py` — 顔の割り当て画面の見え方（7件。#118）
 
 | テスト | 内容 |
 |---|---|
 | `test_the_assign_menu_stays_inside_the_window_even_with_many_persons` | 人物 40 人・ウィンドウの下端近くで右クリックしても、メニューと `人物に割り当て ▸` がウィンドウの中に収まる |
 | `test_persons_beyond_the_window_height_scroll_instead_of_disappearing` | 収まらない人物は列に折り返さずスクロールで届く（折り返しは Qt の知っている画面の高さで決まるので、縮めると下が見えないまま残る） |
+| `test_a_submenu_that_does_not_fit_on_the_right_opens_on_the_left` | Qt の画面がウィンドウより広いとき（X11 転送）、右に入らない `人物に割り当て ▸` は親の左へ出て親に重ならない（押し戻すだけだとカーソルの真下に人物が来て、クリック1つで割り当たった・PR #119 のレビュー指摘1）。見えている枠を Qt の画面より狭くして確かめる |
 | `test_the_person_menu_is_kept_inside_the_window_too` | 左の一覧の右クリックも同じ扱い |
 | `test_clamp_into_moves_a_rect_back_inside` | はみ出した矩形を枠の内側へずらす。枠より高いものは上端に揃える |
 | `test_the_person_panel_is_narrow_and_widening_goes_to_the_faces` | 左の既定の幅は `PERSON_PANEL_WIDTH`（以前の 320px より狭い）。ウィンドウを広げても左は広がらず、顔の一覧が広がる |

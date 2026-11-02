@@ -9,7 +9,8 @@
 import os
 
 import pytest
-from PySide6.QtCore import QPoint, QRect
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu, QSplitter
 
 from photoarchive_ai import db
@@ -108,6 +109,30 @@ def test_persons_beyond_the_window_height_scroll_instead_of_disappearing(window)
     assert last.left() == submenu.actionGeometry(submenu.actions()[0]).left()
     assert last.top() > geometry.height()
     submenu.hide()
+
+
+def test_a_submenu_that_does_not_fit_on_the_right_opens_on_the_left(window, monkeypatch):
+    """**押し戻したサブメニューが親に重ならない**（PR #119 のレビュー指摘1）。
+
+    Qt の画面がウィンドウより広いとき（X11 転送）、Qt はサブメニューを親の右に置く。
+    ウィンドウの内側へ押し戻すだけだと親の上に重なり、カーソルの真下に来た人物へ
+    クリック1つで割り当たった。offscreen の画面（800px）はウィンドウより狭く、
+    Qt 自身が左へ折り返してしまうので、**見えている枠を画面より狭くして**確かめる。
+    """
+    narrow = QRect(0, 0, 600, 800)
+    monkeypatch.setattr(photoarchive_gui, "visible_bounds", lambda _window: narrow)
+    menu = window._build_face_menu()
+    submenu = _assign_submenu(menu)
+    menu.popup(QPoint(600 - menu.sizeHint().width(), 50))
+    QApplication.processEvents()
+    menu.setActiveAction(submenu.menuAction())
+    QTest.keyClick(menu, Qt.Key_Right)
+    QApplication.processEvents()
+    sub, parent = submenu.geometry(), menu.geometry()
+
+    assert narrow.left() <= sub.left() and sub.right() <= narrow.right()
+    assert sub.right() <= parent.left() + 2  # Qt が付ける数 px の重なりは許す
+    menu.hide()
 
 
 def test_the_person_menu_is_kept_inside_the_window_too(window, monkeypatch):
