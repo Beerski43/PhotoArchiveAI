@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -59,7 +60,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, selection, similar
+from . import db, scoring, selection, similar
 
 #: 結果の1ページの枚数。**ページャの無い一覧を作らない**（CLAUDE.md §8）。
 RESULT_PAGE_SIZE = 60
@@ -69,7 +70,7 @@ RESULT_THUMBNAIL = 180
 PREVIEW_SIZE = 1200
 PREVIEW_PROMPT = "写真を選ぶと、ここに大きく出ます"
 
-#: 重みの項目と、画面に出す名前・刻み・上限。順は `scoring.Weights` と同じ。
+#: 重みの項目と、画面に出す名前・刻み。順は `scoring.Weights` と同じ。
 WEIGHT_FIELDS = (
     ("sharpness", "鮮明さ（ボケていない）", 0.05),
     ("frontal", "正面を向いている", 0.05),
@@ -77,13 +78,17 @@ WEIGHT_FIELDS = (
     ("smile", "笑顔", 0.05),
     ("member_bonus", "家族1人ごとの加点", 1.0),
     ("stranger_penalty", "他人(減点)の顔の減点（顔認証外にした顔のうち選んだ顔）", 1.0),
-    # 写真全体（#106・`photoarchive assess` で測る）
-    ("technical", "画質（ぶれ・ピンぼけ・暗さ）", 0.05),
-    ("aesthetic", "美しさ（構図）", 0.05),
+    # 写真全体（#106・`photoarchive assess` で測る）。**MUSIQ と NIMA は別々の重み**で、どちらに寄せるかは
+    # この2つの比で決まる（#120・利用者の要望）
+    ("technical", "画質（ぶれ・ピンぼけ・暗さ・MUSIQ）", 0.05),
+    ("aesthetic", "美しさ（構図・NIMA）", 0.05),
     ("highlights", "白飛びの減点", 0.05),
     ("shadows", "黒つぶれの減点", 0.05),
     ("cutoff", "顔の見切れの減点", 0.05),
 )
+#: 横ゲージの右端（#120）。**ゲージは入力欄の写しで、値の上限ではない**（右端より大きい値も入力欄で入れられ、
+#: ゲージは右端に止まるだけ）。刻みが 0.05 の重みは 1、点（刻み 1）の重みは 100。
+WEIGHT_SLIDER_MAXIMUM = {0.05: 1.0, 1.0: 100.0}
 #: 重みの入力の桁と上限。**ルールの値を丸めない・頭打ちにしない**（PR #108 のレビュー指摘3。
 #: 画面の値が CLI と黙ってずれ、保存すると丸めた値が残っていた）。`load_rule` は 0 以上なら受け付ける。
 WEIGHT_DECIMALS = 4
@@ -98,13 +103,15 @@ FLAG_FIELDS = (
     ("include_video", "動画を含める"),
 )
 
-#: 似た写真の判定の数（`selection.RULE_NUMBERS`）と、画面に出す名前・上限。
+#: 似た写真の判定の数（`selection.RULE_NUMBERS`）と、画面に出す名前・入力の上限・横ゲージの右端。
 NUMBER_FIELDS = (
-    ("similar_distance", "似た写真の見た目の距離（連写）", 64),
-    ("similar_far_distance", "似た写真の見た目の距離（時刻の離れた2枚）", 64),
-    ("copy_distance", "写しとみなす見た目の距離", 64),
-    ("similar_seconds", "連写とみなす撮影の間隔（秒）", 3600),
+    ("similar_distance", "似た写真の見た目の距離（連写）", 64, 64),
+    ("similar_far_distance", "似た写真の見た目の距離（時刻の離れた2枚）", 64, 64),
+    ("copy_distance", "写しとみなす見た目の距離", 64, 64),
+    ("similar_seconds", "連写とみなす撮影の間隔（秒）", 3600, 120),
 )
+#: 各行の「既定に戻す」ボタンの文字（#120）。
+DEFAULT_LABEL = "既定"
 
 #: 点の内訳の項目と名前（`scoring.photo_breakdown`）。
 BREAKDOWN_LABELS = (
@@ -254,6 +261,92 @@ class _Progress:
         self.dialog.close()
 
 
+def _number_text(value: float) -> str:
+    """既定値の見せ方（``0.35`` / ``20`` / ``0``）。"""
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+class _WheelOnlyWhenFocused:
+    """**フォーカスの無いときはホイールを受けず、親（設定欄のスクロール）へ渡す**（PR #122 のレビュー指摘1）。
+
+    Qt のゲージと入力欄はフォーカスが無くてもホイールで値を動かす。設定欄は `QScrollArea` の中にあり、
+    ゲージが行の幅の大半を取るので、ホイールで下へ送るつもりがマウスの下の重みを黙って変えていた
+    （「選ぶ」まで結果に出ず、そのまま「ルールを保存」すると残る）。クリックかタブで選んだときだけ動かす。
+    """
+
+    def _init_wheel_guard(self) -> None:
+        self.setFocusPolicy(Qt.StrongFocus)  # ホイールでフォーカスを取らない
+
+    def wheelEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class WheelSafeSlider(_WheelOnlyWhenFocused, QSlider):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class WheelSafeDoubleSpinBox(_WheelOnlyWhenFocused, QDoubleSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class WheelSafeSpinBox(_WheelOnlyWhenFocused, QSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class ParameterRow(QWidget):
+    """1つの設定の行: 横ゲージ・入力欄・「既定」ボタン（#120）。
+
+    **値の正は入力欄**（`spin`）。ゲージは入力欄を刻み（``step``）の目盛りで写したもので、
+    動かすと入力欄に刻みの倍数を入れる。入力欄から写すときはゲージの信号を止めるので、
+    ゲージの目盛りに合わない値（0.33 や右端より大きい値）も**丸めずにそのまま残る**
+    （ルールの値を丸めない・頭打ちにしない。PR #108 のレビュー指摘3）。
+    「既定」ボタンはこの行だけを既定値に戻し、既定のときは押せない。
+    """
+
+    def __init__(self, spin, step: float, slider_maximum: float, default: float):
+        super().__init__()
+        self.spin = spin
+        self.step = step
+        self.default = default
+        self.slider = WheelSafeSlider(Qt.Horizontal)
+        self.slider.setRange(0, int(round(slider_maximum / step)))
+        self.slider.setPageStep(max(1, self.slider.maximum() // 10))
+        self.slider.setMinimumWidth(120)
+        self.reset_button = QPushButton(DEFAULT_LABEL)
+        self.reset_button.setToolTip(f"既定値（{_number_text(default)}）に戻します")
+        self.reset_button.clicked.connect(self.reset)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.slider, 1)
+        layout.addWidget(spin)
+        layout.addWidget(self.reset_button)
+        self.slider.valueChanged.connect(self._slider_moved)
+        spin.valueChanged.connect(self._spin_changed)
+        self._spin_changed(spin.value())
+
+    def _slider_moved(self, position: int) -> None:
+        self.spin.setValue(position * self.step)
+
+    def _spin_changed(self, value) -> None:
+        position = int(round(value / self.step))
+        self.slider.blockSignals(True)
+        self.slider.setValue(max(self.slider.minimum(), min(self.slider.maximum(), position)))
+        self.slider.blockSignals(False)
+        self.reset_button.setEnabled(abs(value - self.default) > 1e-9)
+
+    def reset(self) -> None:
+        self.spin.setValue(self.default)
+
+
 class SelectionPanel(QWidget):
     """「写真の選定」タブ。左に設定、右に結果。"""
 
@@ -301,14 +394,21 @@ class SelectionPanel(QWidget):
 
         weights_box = QGroupBox("並びの重み")
         weights_form = QFormLayout(weights_box)
+        # 名前を行の上に置き、ゲージに幅を残す（#120。名前の長い行でゲージが潰れないように）
+        weights_form.setRowWrapPolicy(QFormLayout.WrapAllRows)
         self.weight_spins: Dict[str, QDoubleSpinBox] = {}
+        #: 横ゲージと「既定」ボタンの行（#120）。値は `weight_spins` が持つ。
+        self.weight_rows: Dict[str, ParameterRow] = {}
+        defaults = scoring.Weights.default()
         for key, label, step in WEIGHT_FIELDS:
-            spin = QDoubleSpinBox()
+            spin = WheelSafeDoubleSpinBox()
             spin.setRange(0.0, WEIGHT_MAXIMUM)
             spin.setDecimals(WEIGHT_DECIMALS)
             spin.setSingleStep(step)
             self.weight_spins[key] = spin
-            weights_form.addRow(label, spin)
+            row = ParameterRow(spin, step, WEIGHT_SLIDER_MAXIMUM[step], getattr(defaults, key))
+            self.weight_rows[key] = row
+            weights_form.addRow(label, row)
         layout.addWidget(weights_box)
 
         flags_box = QGroupBox("絞り込み")
@@ -323,12 +423,16 @@ class SelectionPanel(QWidget):
 
         numbers_box = QGroupBox("似た写真の判定")
         numbers_form = QFormLayout(numbers_box)
+        numbers_form.setRowWrapPolicy(QFormLayout.WrapAllRows)
         self.number_spins: Dict[str, QSpinBox] = {}
-        for key, label, maximum in NUMBER_FIELDS:
-            spin = QSpinBox()
+        self.number_rows: Dict[str, ParameterRow] = {}
+        for key, label, maximum, slider_maximum in NUMBER_FIELDS:
+            spin = WheelSafeSpinBox()
             spin.setRange(0, maximum)
             self.number_spins[key] = spin
-            numbers_form.addRow(label, spin)
+            row = ParameterRow(spin, 1, slider_maximum, selection.RULE_NUMBERS[key])
+            self.number_rows[key] = row
+            numbers_form.addRow(label, row)
         layout.addWidget(numbers_box)
 
         years_box = QGroupBox("年ごとの枚数（0 の年からは選ばない）")

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from photoarchive_ai import db, gui, gui_select, scoring, selection
@@ -395,3 +396,98 @@ def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
     panel.set_year_range(2019, None)
     assert shown() == ["2019 dated.jpg", "年不明 undated.jpg"]
     window.close()
+
+
+def test_each_weight_has_a_gauge_that_moves_its_value_by_the_step(window):
+    """**横ゲージで重みを動かせる**（#120・利用者の要望）。ゲージは刻みの目盛りで入力欄に写る。"""
+    panel = window.selection
+    assert set(panel.weight_rows) == set(scoring.Weights._fields)
+    assert set(panel.number_rows) == set(selection.RULE_NUMBERS)
+    technical = panel.weight_rows["technical"]
+    technical.slider.setValue(14)
+    assert panel.weight_spins["technical"].value() == pytest.approx(0.70)
+    assert panel.current_rule()["weights"]["technical"] == pytest.approx(0.70)
+    panel.weight_rows["member_bonus"].slider.setValue(35)
+    assert panel.current_rule()["weights"]["member_bonus"] == pytest.approx(35.0)
+    panel.number_rows["copy_distance"].slider.setValue(12)
+    assert panel.current_rule()["copy_distance"] == 12
+
+
+def test_a_value_off_the_gauge_is_kept_as_typed(window):
+    """**ゲージは値の上限でも目盛りでもない。** 入力欄の 3.0 や 0.33 を丸めずにルールへ（PR #108 の指摘3）。"""
+    panel = window.selection
+    row = panel.weight_rows["smile"]
+    panel.weight_spins["smile"].setValue(3.0)
+    assert row.slider.value() == row.slider.maximum(), "ゲージは右端に止まる"
+    assert panel.current_rule()["weights"]["smile"] == pytest.approx(3.0)
+    panel.weight_spins["smile"].setValue(0.33)
+    assert panel.current_rule()["weights"]["smile"] == pytest.approx(0.33), "目盛りに丸めない"
+    panel.number_spins["similar_seconds"].setValue(600)
+    assert panel.current_rule()["similar_seconds"] == 600
+
+
+def test_the_default_button_puts_back_only_its_own_value(window):
+    """**項目ごとに1クリックで既定へ戻す**（#120）。既定のときは押せない。ほかの項目には触らない。"""
+    panel = window.selection
+    defaults = scoring.Weights.default()
+    technical, aesthetic = panel.weight_rows["technical"], panel.weight_rows["aesthetic"]
+    assert not technical.reset_button.isEnabled(), "既定のままなら押せない"
+    panel.weight_spins["technical"].setValue(0.9)
+    panel.weight_spins["aesthetic"].setValue(0.6)
+    assert technical.reset_button.isEnabled()
+    technical.reset_button.click()
+    assert panel.weight_spins["technical"].value() == pytest.approx(defaults.technical)
+    assert technical.slider.value() == round(defaults.technical / 0.05)
+    assert not technical.reset_button.isEnabled()
+    assert panel.weight_spins["aesthetic"].value() == pytest.approx(0.6), "ほかの項目はそのまま"
+
+    distance = panel.number_rows["similar_distance"]
+    panel.number_spins["similar_distance"].setValue(30)
+    distance.reset_button.click()
+    assert panel.number_spins["similar_distance"].value() == selection.RULE_NUMBERS["similar_distance"]
+
+
+def test_the_quality_weights_name_their_models():
+    """画質と美しさがどちらのモデルかを画面で分かるように（#120。MUSIQ と NIMA は別々の重み）。"""
+    labels = {key: label for key, label, _ in gui_select.WEIGHT_FIELDS}
+    assert "MUSIQ" in labels["technical"] and "NIMA" in labels["aesthetic"]
+
+
+def _wheel(widget, notches=-1):
+    """フォーカスに関係なく、ウィジェットの真ん中へホイールを送る（下向きが負）。"""
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    centre = QPointF(widget.width() / 2, widget.height() / 2)
+    event = QWheelEvent(centre, QPointF(widget.mapToGlobal(centre.toPoint())), QPoint(0, 0),
+                        QPoint(0, 120 * notches), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
+                        False)
+    QApplication.sendEvent(widget, event)
+
+
+def test_a_gauge_ignores_the_wheel_unless_focused(window):
+    """**設定欄をホイールでスクロールしても、マウスの下の重みが変わらない**（PR #122 のレビュー指摘1）。
+
+    ゲージと入力欄はフォーカスが無ければホイールを受けない。クリックかタブで選んだときだけ動く。
+    """
+    panel = window.selection
+    window.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    panel.weight_rows["smile"].reset_button.setFocus()
+    before = panel.current_rule()["weights"]
+    for key in ("technical", "aesthetic"):
+        row = panel.weight_rows[key]
+        assert not row.slider.hasFocus() and not row.spin.hasFocus()
+        _wheel(row.slider)
+        _wheel(row.spin)
+    _wheel(panel.number_rows["similar_distance"].slider)
+    _wheel(panel.number_spins["similar_distance"])
+    assert panel.current_rule()["weights"] == before
+    assert panel.number_spins["similar_distance"].value() == selection.RULE_NUMBERS["similar_distance"]
+
+    technical = panel.weight_rows["technical"]
+    technical.slider.setFocus()
+    QApplication.processEvents()
+    _wheel(technical.slider)
+    assert panel.weight_spins["technical"].value() != pytest.approx(before["technical"]), "選んだゲージは動く"
