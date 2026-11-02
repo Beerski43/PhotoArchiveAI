@@ -231,6 +231,38 @@ def test_match_arguments_reach_the_matcher(tmp_path, monkeypatch):
     assert captured["margin"] == pytest.approx(0.1)
     assert captured["reset"] is False
     assert captured["dry_run"] is True
+    assert captured["person_id"] is None, "省略は全員"
+
+
+def test_match_can_be_limited_to_one_person(tmp_path, monkeypatch, capsys):
+    """`match --person` は名前か id を人物の id にして渡す（#123）。打ち間違いは止まる。"""
+    database, people = _two_people_with_automatic_faces(tmp_path)
+    captured = {}
+
+    def fake_match(connection, **kwargs):
+        captured.update(kwargs)
+        return {
+            "teachers": 3, "candidates": 5, "assigned": 2, "unassigned": 3,
+            "left_for_others": 1, "person_teachers": 1, "person_id": kwargs["person_id"],
+            "reset": 2, "per_person": {}, "histogram": {}, "dry_run": False,
+        }
+
+    monkeypatch.setattr(cli, "match_faces", fake_match)
+    capsys.readouterr()
+    run_cli(["match", "--db", str(database), "--person", "Alice"], tmp_path)
+    assert captured["person_id"] == people["Alice"]
+    out = capsys.readouterr().out
+    assert "Matched 2 faces for Alice" in out
+    assert "1位がほかの人物だった顔 1 件" in out
+
+    run_cli(["match", "--db", str(database), "--person", str(people["Bob"])], tmp_path)
+    assert captured["person_id"] == people["Bob"]
+
+    captured.clear()
+    with pytest.raises(SystemExit) as error:
+        run_cli(["match", "--db", str(database), "--person", "Carol"], tmp_path)
+    assert "人物が見つかりません" in str(error.value)
+    assert captured == {}, "全員ぶんを流さない"
 
 
 def test_the_database_path_falls_back_to_the_settings_file(tmp_path, monkeypatch):

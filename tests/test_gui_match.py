@@ -69,12 +69,17 @@ def seeded(tmp_path):
     window.connection.close()
 
 
-def _accepting(backup: bool):
+def _accepting(backup: bool, person_id=None):
     class _Dialog:
         opened = False
+        offered = None
 
-        def __init__(self, parent, counts, database_path):
+        def __init__(self, parent, counts, database_path, person=None, person_auto=0):
             _Dialog.opened = True
+            _Dialog.offered = person
+
+        def chosen_person_id(self):
+            return person_id
 
         def exec(self):
             return QDialog.Accepted
@@ -233,3 +238,82 @@ def test_the_summary_names_each_person_and_the_backup():
     # 多い順に並ぶ
     assert text.index("${PERSON_3}: 6,245 件") < text.index("${PERSON_4}: 6,208 件")
     assert "控え: data/photoarchive.db.bak-20261009" in text
+
+
+# ---------------------------------------------------------------------------
+# 人物ごとの match（#123）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def two_people(tmp_path):
+    """手本のある2人と、それぞれと同じ顔の未分類・もう1人の自動割り当て。"""
+    database = tmp_path / "two.db"
+    connection = db.ensure_database(str(database))
+    first = db.add_person(connection, "${PERSON_4}")
+    second = db.add_person(connection, "${PERSON_3}")
+    db.assign_faces(connection, [_face(connection, 0, axis=0)], first, db.ASSIGN_MANUAL)
+    db.assign_faces(connection, [_face(connection, 1, axis=5)], second, db.ASSIGN_MANUAL)
+    faces = {
+        "1人目と同じ顔": _face(connection, 2, axis=0),
+        "2人目と同じ顔": _face(connection, 3, axis=5),
+        "2人目の自動": _face(connection, 4, axis=9),
+    }
+    db.assign_faces(connection, [faces["2人目の自動"]], second, db.ASSIGN_AUTO)
+    connection.commit()
+    connection.close()
+    window = photoarchive_gui.MainWindow(str(database))
+    yield window, database, first, second, faces
+    window.connection.close()
+
+
+def _select_person(window, person_id):
+    for row in range(window.person_list.count()):
+        person = window.person_list.item(row).data(photoarchive_gui.Qt.UserRole)
+        if person and int(person["id"]) == person_id:
+            window.person_list.setCurrentRow(row)
+            return
+    raise AssertionError("人物が左の一覧に無い")
+
+
+def test_matching_only_the_selected_person_from_the_window(two_people, monkeypatch, shown):
+    """**左で選んだ人物だけを付け直せる。** ほかの人物の顔には触らない。"""
+    window, _database, first, second, faces = two_people
+    _select_person(window, first)
+    dialog = _accepting(backup=False, person_id=first)
+    monkeypatch.setattr(photoarchive_gui, "MatchDialog", dialog)
+
+    window._run_match()
+
+    assert int(dialog.offered["id"]) == first, "選んでいる人物を確認の窓へ渡す"
+    rows = {row["id"]: row for row in db.list_faces(window.connection)}
+    assert rows[faces["1人目と同じ顔"]]["person_id"] == first
+    assert rows[faces["2人目と同じ顔"]]["person_id"] is None, "ほかの人物には付けない"
+    assert rows[faces["2人目の自動"]]["person_id"] == second, "ほかの人物の自動は外さない"
+    text = shown[-1][2]
+    assert "1位がほかの人物だった顔 1 件" in text
+
+
+def test_the_dialog_offers_the_selected_person_but_defaults_to_everyone(two_people):
+    window, database, first, _second, _faces = two_people
+    person = next(p for p in db.list_persons(window.connection) if int(p["id"]) == first)
+
+    dialog = photoarchive_gui.MatchDialog(
+        window, db.face_counts(window.connection), str(database), person=person, person_auto=3
+    )
+
+    assert dialog.chosen_person_id() is None, "既定は全員（いままでどおり）"
+    assert "全員の手本を対抗馬として" not in dialog.detail.text()
+    dialog.person_button.setChecked(True)
+    assert dialog.chosen_person_id() == first
+    assert "自動割当 3 件" in dialog.detail.text()
+    assert "全員の手本を対抗馬として" in dialog.detail.text()
+
+
+def test_without_a_selected_person_the_choice_is_not_offered(two_people):
+    window, database, _first, _second, _faces = two_people
+
+    dialog = photoarchive_gui.MatchDialog(window, db.face_counts(window.connection), str(database))
+
+    assert dialog.person_button.isHidden()
+    assert dialog.chosen_person_id() is None

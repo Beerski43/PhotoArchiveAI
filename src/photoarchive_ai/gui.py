@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -814,26 +815,49 @@ class MatchDialog(QDialog):
     結果も後から再現できる（`match` は決定的。2026-10-08 に、利用者が解除した
     1,778 件を流す前の控えから特定できた）。毎回 DB と同じ大きさのファイルが
     できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
+
+    **左で人物を選んでいれば、その人物だけを付け直すこともできる**（#123。
+    `photoarchive match --person` と同じ）。既定は全員（いままでどおり）。
+    人物を選んでいないときは、選ぶ欄そのものを出さない。
     """
 
-    def __init__(self, parent, counts: dict, database_path: str):
+    def __init__(
+        self,
+        parent,
+        counts: dict,
+        database_path: str,
+        person: Optional[dict] = None,
+        person_auto: int = 0,
+    ):
         super().__init__(parent)
         self.setWindowTitle("自動割り当て（match）を実行")
+        self.counts = counts
+        self.person = person
+        self.person_auto = int(person_auto)
         layout = QVBoxLayout(self)
 
-        detail = QLabel(
-            f"手本 {counts['manual']:,} 件をもとに、未分類と自動割当の顔を付け直します。\n"
-            f"いまの自動割当 {counts['auto']:,} 件は、いったん外してから付け直します。\n\n"
-            "変わらないもの: 手本（手動の割り当て）・顔認証外・「この人物ではない」・年齢\n"
-            "「割り当てを解除」しただけの顔は、また付くことがあります"
-            "（判断を残すには「この人物ではない」を使います）。\n\n"
-            f"閾値 {matcher.DEFAULT_THRESHOLD} / マージン {matcher.DEFAULT_MARGIN}"
-            "（photoarchive match と同じ既定）"
+        self.everyone_button = QRadioButton("全員を付け直す", self)
+        self.person_button = QRadioButton(
+            f"{person['name']} だけを付け直す（ほかの人物の自動割当には触らない）"
+            if person
+            else "",
+            self,
         )
-        detail.setWordWrap(True)
-        detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
-        layout.addWidget(detail)
+        self.everyone_button.setChecked(True)
+        if person is not None:
+            layout.addWidget(self.everyone_button)
+            layout.addWidget(self.person_button)
+        else:
+            self.everyone_button.hide()
+            self.person_button.hide()
+
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        layout.addWidget(self.detail)
+        self._update_detail()
+        self.everyone_button.toggled.connect(self._update_detail)
 
         source = Path(database_path)
         size = source.stat().st_size if source.exists() else 0
@@ -869,6 +893,35 @@ class MatchDialog(QDialog):
     def makes_backup(self) -> bool:
         return self.backup_box.isChecked()
 
+    def chosen_person_id(self) -> Optional[int]:
+        """付け直す人物。全員なら ``None``（`matcher.match_faces` の ``person_id``）。"""
+        if self.person is not None and self.person_button.isChecked():
+            return int(self.person["id"])
+        return None
+
+    def _update_detail(self, *_args) -> None:
+        if self.chosen_person_id() is None:
+            scope = (
+                f"手本 {self.counts['manual']:,} 件をもとに、未分類と自動割当の顔を付け直します。\n"
+                f"いまの自動割当 {self.counts['auto']:,} 件は、いったん外してから付け直します。\n\n"
+            )
+        else:
+            name = self.person["name"]
+            scope = (
+                f"手本 {self.counts['manual']:,} 件（全員の手本を対抗馬として使います）をもとに、"
+                f"未分類の顔のうち {name} にいちばん近い顔だけを割り当てます。\n"
+                f"{name} のいまの自動割当 {self.person_auto:,} 件は、いったん外してから付け直します。\n"
+                "ほかの人物の自動割当は外さず、ほかの人物に近い顔は未分類のまま残します。\n\n"
+            )
+        self.detail.setText(
+            scope
+            + "変わらないもの: 手本（手動の割り当て）・顔認証外・「この人物ではない」・年齢\n"
+            "「割り当てを解除」しただけの顔は、また付くことがあります"
+            "（判断を残すには「この人物ではない」を使います）。\n\n"
+            f"閾値 {matcher.DEFAULT_THRESHOLD} / マージン {matcher.DEFAULT_MARGIN}"
+            "（photoarchive match と同じ既定）"
+        )
+
 
 def format_match_summary(
     summary: dict, persons: List[dict], backup: Optional[Path]
@@ -896,6 +949,20 @@ def format_match_summary(
         lines.append("人物ごと:")
         for person_id, count in sorted(per_person.items(), key=lambda item: -item[1]):
             lines.append(f"  {names.get(int(person_id), person_id)}: {count:,} 件")
+    if summary.get("person_id") is not None:
+        name = names.get(int(summary["person_id"]), summary["person_id"])
+        if not summary.get("person_teachers"):
+            lines.append("")
+            lines.append(
+                f"{name} の根拠にできる手本がありません（5点整列ができない手本だけのときも"
+                "含みます）。顔のよく写った写真を割り当ててください。"
+            )
+        if summary.get("left_for_others"):
+            lines.append("")
+            lines.append(
+                f"1位がほかの人物だった顔 {summary['left_for_others']:,} 件は、"
+                "割り当てずに残しました（全員を付け直すと付きます）。"
+            )
     lines.append("")
     lines.append(f"控え: {backup}" if backup else "控え: 取っていません")
     return "\n".join(lines)
@@ -2578,9 +2645,23 @@ class MainWindow(QWidget):
                 "先に顔を人物へ割り当ててから実行してください。",
             )
             return
-        dialog = MatchDialog(self, counts, self.db_path)
+        person = self._current_person()
+        dialog = MatchDialog(
+            self,
+            counts,
+            self.db_path,
+            person=person,
+            person_auto=(
+                db.count_faces(
+                    self.connection, assign_source=db.ASSIGN_AUTO, person_id=int(person["id"])
+                )
+                if person
+                else 0
+            ),
+        )
         if dialog.exec() != QDialog.Accepted:
             return
+        person_id = dialog.chosen_person_id()
 
         backup: Optional[Path] = None
         progress = WorkProgress(self, "自動割り当ての準備をしています", 1, delay_ms=0)
@@ -2603,6 +2684,7 @@ class MainWindow(QWidget):
                 progress.base_label = "顔を照合しています"
                 summary = matcher.match_faces(
                     self.connection,
+                    person_id=person_id,
                     # 件数の分からない工程（取り消しの直後）は、文言だけ変える
                     progress_callback=lambda done, total, detail: (
                         progress(done, total)

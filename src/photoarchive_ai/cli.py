@@ -215,6 +215,13 @@ def _build_parser() -> argparse.ArgumentParser:
     match_parser.add_argument(
         "--dry-run", action="store_true", help="Report what would be assigned without writing."
     )
+    match_parser.add_argument(
+        "--person",
+        help=(
+            "人物の名前か id。指定すると、その人物だけを付け直す（ほかの人物の"
+            "自動割り当てには触らない。手本は全員のものを対抗馬として使う）。"
+        ),
+    )
     _add_log_level(match_parser)
 
     unassign_parser = subparsers.add_parser(
@@ -470,8 +477,10 @@ def _run_match(args, db_path: str) -> None:
     logger.info("Match started. Log file: %s", log_file)
     _reset_progress_state()
     with ensure_database(db_path) as connection:
+        person = _resolve_person(connection, args.person) if args.person else None
         summary = match_faces(
             connection,
+            person_id=int(person["id"]) if person else None,
             threshold=args.threshold,
             margin=args.margin,
             reset=not args.no_reset,
@@ -487,10 +496,22 @@ def _run_match(args, db_path: str) -> None:
         )
         return
     label = "(dry-run) " if summary["dry_run"] else ""
+    scope = f" for {person['name']}" if person else ""
     print(
-        f"{label}Matched {summary['assigned']} faces from {summary['teachers']} assigned faces; "
+        f"{label}Matched {summary['assigned']} faces{scope} from {summary['teachers']} assigned faces; "
         f"{summary['unassigned']} left unassigned."
     )
+    if person:
+        if not summary.get("person_teachers"):
+            print(
+                f"{person['name']} の根拠にできる手本がありません（5点整列ができない手本だけのときも"
+                "含みます）。photoarchive-gui で、顔のよく写った写真を割り当ててから再実行してください。"
+            )
+        if summary.get("left_for_others"):
+            print(
+                f"1位がほかの人物だった顔 {summary['left_for_others']} 件は、割り当てずに残しました"
+                "（全員で match を流すと付きます）。"
+            )
     if summary.get("unusable_teachers"):
         print(
             f"5点整列ができなかった手本 {summary['unusable_teachers']} 件は、"
