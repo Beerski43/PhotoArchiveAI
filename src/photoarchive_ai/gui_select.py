@@ -877,17 +877,23 @@ class SelectionPanel(QWidget):
         if not self.output_root:
             QMessageBox.warning(self, "出力できません", "設定に output_root がありません。")
             return
+        try:
+            layout = selection.output_layout(self.chosen_rule)
+        except ValueError as error:
+            QMessageBox.warning(self, "出力できません", str(error))
+            return
+        where = "年ごとのフォルダ" if layout == selection.OUTPUT_LAYOUT_YEAR else "直下"
         answer = QMessageBox.question(
             self,
             "出力",
-            f"{len(self.selected)} 枚を {self.output_root} にコピーします。前の出力は消えます。",
+            f"{len(self.selected)} 枚を {self.output_root} の{where}にコピーします。前の出力は消えます。",
         )
         if answer != QMessageBox.Yes:
             return
         progress = _Progress(self, "コピーしています")
         try:
             copied = selection.copy_selected_media(
-                self.selected, self.output_root, self.source_roots, progress
+                self.selected, self.output_root, self.source_roots, progress, layout=layout
             )
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "出力が止まりました", str(error))

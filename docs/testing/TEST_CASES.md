@@ -581,7 +581,8 @@
 | `test_saving_writes_the_rule_and_keeps_a_backup` | **保存の前に `.bak` に控える**（コメントは消える）。書いたルールは CLI でも読める |
 | `test_the_breakdown_adds_up_to_the_score` | 点の内訳の合計が並びの点と一致する |
 | `test_the_results_are_paged` | 結果はページ送り（CLAUDE.md §8） |
-| `test_exporting_copies_the_chosen_photos` | 出力は CLI の `select` と同じコピー |
+| `test_exporting_copies_the_chosen_photos` | 出力は CLI の `select` と同じコピー。既定は年ごとのフォルダで、確認の窓にそう出す（#121） |
+| `test_exporting_follows_a_flat_output_layout_in_the_rule` | ルールの `output_layout: flat` なら直下に置き、確認の窓に「直下」と出す（#121） |
 | `test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation` | サムネイルは EXIF の埋め込みから（先頭だけ読む）。読めなければ None |
 | `test_the_breakdown_never_shows_minus_zero` | 内訳に `-0.0` を出さない |
 | `test_selecting_a_photo_shows_where_it_is_and_why` | 写真を選ぶと場所と点の内訳が出る |
@@ -738,15 +739,23 @@
 | `test_duplicate_groups_fall_back_to_the_path_when_there_is_no_hash` | ハッシュが無いときはパスで分ける |
 | `test_media_year_prefers_the_shooting_date_and_falls_back_to_created_time` | 年の決め方 |
 | `test_date_filter_falls_back_to_created_time_and_drops_unreadable_dates` | 読めない日付は範囲外 |
-| `test_copies_sit_directly_under_the_output` | 出力先の直下に平らにコピーする（リンクではない）。元ファイルは変えない（#83） |
+| `test_copies_sit_directly_under_the_output` | `flat` なら出力先の直下に平らにコピーする（リンクではない）。元ファイルは変えない（#83） |
 | `test_output_names_follow_the_selected_order_and_mark_unknown_years` | 名前は `<順位>_<年>_m<ID><拡張子>`。年が無ければ `unknown` |
 | `test_rank_is_padded_to_the_number_of_selected_media` | 順位の桁は件数に合わせる（4桁以上）。名前順が並び順になる |
-| `test_rerun_removes_every_file_directly_under_the_output_but_keeps_folders` | **再実行で直下のファイルを全部消す**（利用者が置いたもの・リンクも。出力先は `select` 専用）。**サブフォルダは残す** |
+| `test_rerun_removes_every_file_directly_under_the_output_but_keeps_folders` | **再実行で直下のファイルを全部消す**（利用者が置いたもの・リンクも。出力先は `select` 専用）。**年の名前でないサブフォルダは残す** |
 | `test_a_missing_original_stops_before_removing_the_previous_output` | 元のファイルが無ければ、**前回の出力を消す前に**止まる（PR #85 のレビュー指摘1） |
 | `test_a_folder_with_the_same_name_stops_before_removing_anything` | 出力する名前と同じフォルダがあれば、何も消さずに止まる |
 | `test_an_output_inside_a_root_is_refused_before_removing_the_originals` | **出力先が root やその中なら止まる。** 直下のファイルを全部消すので、元写真が消える（2件） |
 | `test_an_output_holding_an_original_outside_every_root_is_refused` | root の外でも、選んだ写真が出力先の直下にあれば止まる |
 | `test_copy_skips_entries_without_a_path_but_keeps_their_rank` | パスが無い行を飛ばすが、順位は詰めない |
+| `test_copies_go_into_a_folder_per_year_by_default` | **既定は `<出力先>/<年>/`**（年が無ければ `unknown/`）。名前は平らのときと同じで、順位は通し番号のまま（#121） |
+| `test_switching_the_layout_leaves_nothing_from_the_previous_output` | `flat` ↔ `year` を切り替えても前回の出力が混ざらない（#121） |
+| `test_rerun_keeps_folders_that_select_did_not_make` | 年のフォルダの直下のファイルは消すが、年の名前でないフォルダ（`20190` も）と年のフォルダの中のフォルダは残す（#83 より前のコピーを壊さない・#121） |
+| `test_an_original_directly_in_a_year_folder_of_the_output_is_refused` | **元写真が年のフォルダの直下にあれば、何も消さずに止まる**（どちらの形でも・#121） |
+| `test_a_folder_with_the_same_name_inside_a_year_folder_stops_before_removing_anything` | 年のフォルダの中に出力と同じ名前のフォルダがあれば、何も消さずに止まる（#121） |
+| `test_an_unknown_layout_is_refused` | `copy_selected_media` に知らない形を渡すと、何も作らずに止まる（#121） |
+| `test_load_rule_reads_the_output_layout`（3件） | `output_layout` は省略で `year`。`year` / `flat` を読む（#121） |
+| `test_load_rule_refuses_an_unknown_output_layout`（4件） | **`output_layout` の知らない値は読むときに止める**（綴りの誤りで、平らな出力を前提にした連携が黙って空振りしないように・#121） |
 | `test_a_burst_keeps_only_its_best_shot` | **同じ場面の連写は並びの先頭1枚だけ**。1秒後でも別の場面は残る（#86） |
 | `test_the_burst_check_can_be_turned_off` | `remove_similar: false` で束ねない |
 | `test_a_burst_counts_once_against_the_yearly_limit` | 束ねてから年ごとに数える（連写が年の枠を食わない） |
@@ -973,6 +982,8 @@
 | `test_a_threshold_that_cannot_be_read_stops_instead_of_being_dropped` | 読めない閾値を黙って捨てない |
 | `test_evaluate_runs_end_to_end_on_a_database_with_assigned_faces` | CLI から実際に数字が出るところまで通す |
 | `test_select_reports_a_name_clash_without_a_traceback` | `select` の出力先に同じ名前のフォルダがあれば、トレースバックではなく1行で止まる（PR #85 のレビュー指摘1） |
+| `test_select_copies_by_the_output_layout_of_the_rule`（2件） | CLI の `select` はルールの `output_layout` で出す（既定は年ごとのフォルダ・`flat` は直下・#121） |
+| `test_select_stops_on_an_unknown_output_layout_before_copying` | `output_layout` の知らない値で、何もコピーせずに止まる（#121） |
 | `test_select_warns_about_old_automatic_assignments_only_when_it_uses_them`（2件） | 自動割り当てを使わない `select` は、その規則が古いという知らせを出さない（#89） |
 | `test_assess_measures_with_the_models_and_reports_the_counts` | `assess` が測って件数を出し、2回目は「測る写真はありません」（#106） |
 | `test_assess_without_the_models_says_how_to_make_them` | モデルが無ければ置き方を示して止まる |
@@ -1272,8 +1283,8 @@ git と GitHub の状態（PR の無いブランチなど）は `scripts/check_h
 ### `test_system.py` — 通し（2件、`system` マーカー）
 
 `init-db` → `scan` → GUIでの割り当て → `match` → `select` を一通り流す。
-2回目のスキャンが差分になることも確認する。`select` は出力先の直下に1つコピーし、
-2回流しても前回の出力が残らない（#83）。
+2回目のスキャンが差分になることも確認する。`select` は出力先の年のフォルダに1つコピーし、
+2回流しても前回の出力が残らない（#83・#121）。
 
 ### `test_face_real.py` — 実物のモデル（5件、`models` マーカー）
 

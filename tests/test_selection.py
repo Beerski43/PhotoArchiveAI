@@ -12,6 +12,7 @@ from photoarchive_ai.selection import (
     _build_duplicate_groups,
     _get_media_year,
     copy_selected_media,
+    output_layout,
     RULE_FLAGS,
     load_rule,
     select_media,
@@ -132,7 +133,8 @@ def test_select_media_filters_by_rule(tmp_path: Path):
 
     copied = copy_selected_media(selected, str(output_dir), str(root))
     assert copied == 1
-    [output] = list(output_dir.iterdir())
+    [output] = list((output_dir / "2025").iterdir())
+    assert [path.name for path in output_dir.iterdir()] == ["2025"]
     assert output.name == f"0001_2025_m{selected[0]['id']}.jpg"
     assert output.read_text() == "dummy"
 
@@ -482,7 +484,7 @@ def _photo(path: Path, text: str = "a") -> Path:
 
 
 def test_copies_sit_directly_under_the_output(tmp_path: Path):
-    """#83: 階層を作らず、出力先の直下にコピーを置く（リンクではない）。元ファイルは変えない。"""
+    """#83: ``flat`` なら階層を作らず、出力先の直下にコピーを置く（リンクではない）。元ファイルは変えない。"""
     root = tmp_path / "src"
     original = _photo(root / "2019" / "trip" / "photo.jpg", "original")
     output = tmp_path / "out"
@@ -491,6 +493,7 @@ def test_copies_sit_directly_under_the_output(tmp_path: Path):
         [{"id": 7, "path": "2019/trip/photo.jpg", "shooting_date": "2019-05-03T14:22:10"}],
         str(output),
         str(root),
+        layout="flat",
     )
 
     assert copied == 1
@@ -515,6 +518,7 @@ def test_output_names_follow_the_selected_order_and_mark_unknown_years(tmp_path:
         ],
         str(output),
         str(root),
+        layout="flat",
     )
 
     assert sorted(path.name for path in output.iterdir()) == [
@@ -529,30 +533,32 @@ def test_rank_is_padded_to_the_number_of_selected_media(tmp_path: Path):
     selected = [{"id": number, "path": None} for number in range(9_999)]
     selected.append({"id": 9_999, "path": "p.jpg", "shooting_date": None, "created_time": None})
 
-    copy_selected_media(selected, str(tmp_path / "out"), str(root))
+    copy_selected_media(selected, str(tmp_path / "out"), str(root), layout="flat")
 
     assert [path.name for path in (tmp_path / "out").iterdir()] == ["10000_unknown_m9999.jpg"]
 
 
 def test_rerun_removes_every_file_directly_under_the_output_but_keeps_folders(tmp_path: Path):
-    """出力は平らなので、前回の出力が残ると区別できない。**出力先は select 専用**で、
+    """前回の出力が残ると区別できない。**出力先は select 専用**で、
     直下のファイルは置いたのが誰でも消す（利用者が決めた・PR #85）。
-    リンクで出力していた頃のリンク（壊れたものも）も消す。サブフォルダには触らない。
+    リンクで出力していた頃のリンク（壊れたものも）も消す。年の名前でないサブフォルダには触らない。
     """
     root = tmp_path / "src"
     _photo(root / "a.jpg")
     output = tmp_path / "out"
     copy_selected_media([{"id": 1, "path": "a.jpg", "created_time": None},
-                         {"id": 2, "path": "a.jpg", "created_time": None}], str(output), str(root))
+                         {"id": 2, "path": "a.jpg", "created_time": None}], str(output), str(root), layout="flat")
     _photo(output / "mine.txt", "mine")
     (output / "old-link.jpg").symlink_to(root / "a.jpg")
     (output / "broken-link.jpg").symlink_to(root / "gone.jpg")
-    kept_folder = _photo(output / "2019" / "old.jpg", "copied before")
+    kept_folder = _photo(output / "trip" / "old.jpg", "copied before")
 
-    copied = copy_selected_media([{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root))
+    copied = copy_selected_media(
+        [{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root), layout="flat"
+    )
 
     assert copied == 1
-    assert sorted(path.name for path in output.iterdir()) == ["0001_unknown_m1.jpg", "2019"]
+    assert sorted(path.name for path in output.iterdir()) == ["0001_unknown_m1.jpg", "trip"]
     assert kept_folder.read_text(encoding="utf-8") == "copied before"
     assert (root / "a.jpg").exists()
 
@@ -591,7 +597,7 @@ def test_a_folder_with_the_same_name_stops_before_removing_anything(tmp_path: Pa
     (output / "0001_unknown_m1.jpg").mkdir()
 
     message = _stops_without_touching_the_output(output, lambda: copy_selected_media(
-        [{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root),
+        [{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root), layout="flat",
     ))
 
     assert "0001_unknown_m1.jpg" in message
@@ -1154,3 +1160,140 @@ def test_the_photo_weights_can_be_written_in_the_rule(tmp_path: Path):
     path.write_text("weights:\n  technical: 0.3\n  aesthetic: 0.1\n  cutoff: 0.2\n", encoding="utf-8")
     weights = rule_weights(load_rule(str(path)))
     assert (weights.technical, weights.aesthetic, weights.cutoff) == (0.3, 0.1, 0.2)
+
+
+# ---------------------------------------------------------------------------
+# 年ごとのフォルダ（#121）
+# ---------------------------------------------------------------------------
+
+
+def _tree(output: Path):
+    """出力先の中身（出力先からの相対パス）。フォルダは末尾に ``/``。"""
+    return sorted(
+        str(path.relative_to(output)) + ("/" if path.is_dir() and not path.is_symlink() else "")
+        for path in output.rglob("*")
+    )
+
+
+def test_copies_go_into_a_folder_per_year_by_default(tmp_path: Path):
+    """#121: 既定は ``<出力先>/<年>/``。名前は平らのときと同じで、順位は通し番号のまま。"""
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    _photo(root / "b.mp4")
+    output = tmp_path / "out"
+
+    copied = copy_selected_media(
+        [
+            {"id": 12, "path": "a.jpg", "shooting_date": "2016-01-01T09:00:00"},
+            {"id": 3, "path": "b.mp4", "shooting_date": None, "created_time": None},
+            {"id": 4, "path": "a.jpg", "shooting_date": "2019-05-03T14:22:10"},
+            {"id": 5, "path": "a.jpg", "shooting_date": "2016-07-01T09:00:00"},
+        ],
+        str(output),
+        str(root),
+    )
+
+    assert copied == 4
+    assert _tree(output) == [
+        "2016/", "2016/0001_2016_m12.jpg", "2016/0004_2016_m5.jpg",
+        "2019/", "2019/0003_2019_m4.jpg",
+        "unknown/", "unknown/0002_unknown_m3.mp4",
+    ]
+
+
+def test_switching_the_layout_leaves_nothing_from_the_previous_output(tmp_path: Path):
+    """形を切り替えても前回の出力が混ざらない（どちらの形でも、直下と年のフォルダの直下を消す）。"""
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    first = [{"id": 1, "path": "a.jpg", "shooting_date": "2018-01-01T00:00:00"}]
+    second = [{"id": 2, "path": "a.jpg", "shooting_date": "2020-01-01T00:00:00"}]
+
+    copy_selected_media(first, str(output), str(root), layout="flat")
+    copy_selected_media(second, str(output), str(root))
+    assert _tree(output) == ["2020/", "2020/0001_2020_m2.jpg"]
+
+    copy_selected_media(first, str(output), str(root), layout="flat")
+    assert _tree(output) == ["0001_2018_m1.jpg"]
+
+
+def test_rerun_keeps_folders_that_select_did_not_make(tmp_path: Path):
+    """年の名前でないサブフォルダと、年のフォルダの中のサブフォルダには触らない
+    （#83 より前の、root からの相対パスを再現したコピーを壊さない）。年のフォルダの直下のファイルは消す。"""
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    trip = _photo(output / "trip" / "old.jpg", "kept")
+    nested = _photo(output / "2019" / "event" / "old.jpg", "kept")
+    _photo(output / "2019" / "loose.jpg", "previous")
+    _photo(output / "2017" / "loose.jpg", "previous")
+    _photo(output / "20190" / "not-a-year.jpg", "kept")
+
+    copy_selected_media(
+        [{"id": 1, "path": "a.jpg", "shooting_date": "2021-01-01T00:00:00"}], str(output), str(root)
+    )
+
+    assert _tree(output) == [
+        "2019/", "2019/event/", "2019/event/old.jpg",
+        "20190/", "20190/not-a-year.jpg",
+        "2021/", "2021/0001_2021_m1.jpg",
+        "trip/", "trip/old.jpg",
+    ]
+    assert trip.read_text(encoding="utf-8") == nested.read_text(encoding="utf-8") == "kept"
+
+
+def test_an_original_directly_in_a_year_folder_of_the_output_is_refused(tmp_path: Path):
+    """年のフォルダの直下は前回の出力として消すので、そこに元写真があれば何も消さずに止まる。"""
+    output = tmp_path / "out"
+    original = _photo(output / "2019" / "stray.jpg", "original")
+    _photo(output / "previous.jpg")
+
+    for layout in ("year", "flat"):
+        message = _stops_without_touching_the_output(output, lambda: copy_selected_media(
+            [{"id": 1, "path": str(original), "created_time": None}],
+            str(output), str(tmp_path / "src"), layout=layout,
+        ))
+        assert "stray.jpg" in message
+    assert original.read_text(encoding="utf-8") == "original"
+
+
+def test_a_folder_with_the_same_name_inside_a_year_folder_stops_before_removing_anything(tmp_path: Path):
+    root = tmp_path / "src"
+    _photo(root / "a.jpg")
+    output = tmp_path / "out"
+    _photo(output / "previous.jpg")
+    (output / "unknown" / "0001_unknown_m1.jpg").mkdir(parents=True)
+
+    message = _stops_without_touching_the_output(output, lambda: copy_selected_media(
+        [{"id": 1, "path": "a.jpg", "created_time": None}], str(output), str(root),
+    ))
+
+    assert "0001_unknown_m1.jpg" in message
+
+
+def test_an_unknown_layout_is_refused(tmp_path: Path):
+    _photo(tmp_path / "src" / "a.jpg")
+
+    with pytest.raises(ValueError, match="year"):
+        copy_selected_media([{"id": 1, "path": "a.jpg"}], str(tmp_path / "out"), str(tmp_path / "src"),
+                            layout="years")
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("text, expected", [("", "year"), ("output_layout: year\n", "year"),
+                                            ("output_layout: flat\n", "flat")])
+def test_load_rule_reads_the_output_layout(tmp_path: Path, text, expected):
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text(text, encoding="utf-8")
+
+    assert output_layout(load_rule(str(rule_path))) == expected
+
+
+@pytest.mark.parametrize("value", ["Flat", "yearly", "true", "1"])
+def test_load_rule_refuses_an_unknown_output_layout(tmp_path: Path, value):
+    """綴りを誤ったまま既定の形で出すと、平らな出力を前提にした連携が黙って空振りする。"""
+    rule_path = tmp_path / "rule.yml"
+    rule_path.write_text(f"output_layout: {value}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="output_layout"):
+        load_rule(str(rule_path))

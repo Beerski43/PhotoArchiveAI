@@ -30,7 +30,7 @@ def _terms_keys() -> List[str]:
 
 def _rule_keys() -> List[str]:
     """ルールの最上位に書けるキー（`selection.load_rule` が確かめるものと、日付・枚数・重み）。"""
-    return sorted([*selection.RULE_FLAGS, *selection.RULE_NUMBERS, "count_per_year", "date", "weights"])
+    return sorted([*selection.RULE_FLAGS, *selection.RULE_NUMBERS, "count_per_year", "date", "output_layout", "weights"])
 
 
 def _row(text: str, key: str) -> Optional[List[str]]:
@@ -56,6 +56,8 @@ def _same(written: Optional[str], default) -> bool:
         return False
     if isinstance(default, bool):
         return written == ("true" if default else "false")
+    if isinstance(default, str):
+        return written == default
     try:
         return float(written) == float(default)
     except ValueError:
@@ -78,6 +80,7 @@ def missing_from_reference(text: str) -> List[str]:
         **selection.RULE_FLAGS,
         **selection.RULE_NUMBERS,
         **scoring.Weights.default()._asdict(),
+        "output_layout": selection.DEFAULT_OUTPUT_LAYOUT,
     }
     for key, default in defaults.items():
         cells = _row(text, key)
