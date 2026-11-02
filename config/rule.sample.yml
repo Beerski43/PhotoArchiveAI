@@ -31,6 +31,8 @@ include_auto_assigned: true
 #   highlights: 0      # 白飛びの減点
 #   shadows: 0         # 黒つぶれの減点
 #   cutoff: 0          # 家族の顔が写真の縁で切れているときの減点
+# 出力の形。year は出力先の中に年ごとのフォルダ（既定）、flat は出力先の直下に平らに。
+# output_layout: year
 # 年ごとの枚数は年ごとにも書ける（書いていない年からは選ばない）。
 # count_per_year:
 #   2018: 50

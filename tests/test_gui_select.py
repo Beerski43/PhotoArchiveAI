@@ -163,11 +163,27 @@ def test_the_results_are_paged(window, monkeypatch):
 
 
 def test_exporting_copies_the_chosen_photos(window, tmp_path, monkeypatch):
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    """#121: 既定は年ごとのフォルダ。確認の文言にもそう出す。"""
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.Yes)
     panel = window.selection
     panel.choose()
     panel.export()
-    assert len(list((tmp_path / "out").iterdir())) == len(panel.selected) == 3
+    copies = [path for path in (tmp_path / "out").rglob("*") if path.is_file()]
+    assert len(copies) == len(panel.selected) == 3
+    assert all(copy.parent.parent == tmp_path / "out" for copy in copies)
+    assert "年ごとのフォルダ" in asked[0]
+
+
+def test_exporting_follows_a_flat_output_layout_in_the_rule(window, tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.Yes)
+    panel = window.selection
+    panel.rule = {**panel.rule, "output_layout": "flat"}
+    panel.choose()
+    panel.export()
+    assert sorted(path.is_file() for path in (tmp_path / "out").iterdir()) == [True, True, True]
+    assert "直下" in asked[0]
 
 
 def test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation(tmp_path):

@@ -39,6 +39,7 @@ from .selection import (
     copy_selected_media,
     include_auto_assigned,
     load_rule,
+    output_layout,
     select_media,
     stale_assignment_notice,
 )
@@ -273,7 +274,7 @@ def _build_parser() -> argparse.ArgumentParser:
     select_parser = subparsers.add_parser("select", help="Select media by rule and copy them into output.")
     select_parser.add_argument("--db", help="SQLite database path.")
     select_parser.add_argument("--rule", help="YAML rule file path (JSON is not read).")
-    select_parser.add_argument("--output", help="Output directory, used only by select. Files are copied directly under it; every file already there is removed first (subfolders are kept).")
+    select_parser.add_argument("--output", help="Output directory, used only by select. Files are copied into one folder per year (rule output_layout: year, the default) or directly under it (flat); the previous output there is removed first (other subfolders are kept).")
     select_parser.add_argument(
         "--source",
         action="append",
@@ -750,6 +751,7 @@ def main() -> None:
                         progress_callback=lambda current, total, detail: _emit_progress(
                             current, total, detail, prefix="Copying"
                         ),
+                        layout=output_layout(rule),
                     )
                 except (OSError, ValueError) as error:
                     raise SystemExit(f"Copying stopped: {error}") from error

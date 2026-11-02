@@ -692,8 +692,7 @@ def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
     rule = tmp_path / "rule.yml"
     rule.write_text("include_video: true\n", encoding="utf-8")
     output = tmp_path / "out"
-    output.mkdir()
-    (output / f"0001_2020_m{media_id}.jpg").mkdir()
+    (output / "2020" / f"0001_2020_m{media_id}.jpg").mkdir(parents=True)
 
     with pytest.raises(SystemExit) as raised:
         run_cli(["select", "--db", str(database), "--rule", str(rule),
@@ -702,7 +701,53 @@ def test_select_reports_a_name_clash_without_a_traceback(tmp_path):
     message = str(raised.value)
     assert message.startswith("Copying stopped:")
     assert f"0001_2020_m{media_id}.jpg" in message
-    assert (output / f"0001_2020_m{media_id}.jpg").is_dir()
+    assert (output / "2020" / f"0001_2020_m{media_id}.jpg").is_dir()
+
+
+def _one_photo_database(tmp_path):
+    root = tmp_path / "photos"
+    write_image(root / "a.jpg")
+    database = tmp_path / "photoarchive.db"
+    connection = db.ensure_database(str(database))
+    media_id = db.save_media(connection, {
+        "path": str(root / "a.jpg"), "filename": "a.jpg", "type": "image",
+        "file_hash": "h", "file_size": 1, "created_time": "2020-01-01T00:00:00",
+    })
+    connection.commit()
+    connection.close()
+    return root, database, media_id
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("include_video: true\n", "2020/0001_2020_m{id}.jpg"),
+    ("output_layout: flat\n", "0001_2020_m{id}.jpg"),
+])
+def test_select_copies_by_the_output_layout_of_the_rule(tmp_path, text, expected):
+    """#121: 既定は年ごとのフォルダ。ルールの ``output_layout: flat`` なら直下（#83）。"""
+    root, database, media_id = _one_photo_database(tmp_path)
+    rule = tmp_path / "rule.yml"
+    rule.write_text(text, encoding="utf-8")
+    output = tmp_path / "out"
+
+    run_cli(["select", "--db", str(database), "--rule", str(rule),
+             "--source", str(root), "--output", str(output)], tmp_path)
+
+    files = [str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()]
+    assert files == [expected.format(id=media_id)]
+
+
+def test_select_stops_on_an_unknown_output_layout_before_copying(tmp_path):
+    root, database, _ = _one_photo_database(tmp_path)
+    rule = tmp_path / "rule.yml"
+    rule.write_text("output_layout: yearly\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(["select", "--db", str(database), "--rule", str(rule),
+                 "--source", str(root), "--output", str(output)], tmp_path)
+
+    assert "output_layout" in str(raised.value)
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("include_auto, warned", [(True, True), (False, False)])

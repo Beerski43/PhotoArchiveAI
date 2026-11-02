@@ -333,7 +333,7 @@ def test_select_copies_same_named_photos_from_different_roots(tmp_path):
     )
 
     assert copied == 2
-    copies = sorted(output.iterdir())
+    copies = sorted(path for path in output.rglob("*") if path.is_file())
     assert [copy.read_bytes() for copy in copies] == [first.read_bytes(), second.read_bytes()]
 
 
@@ -347,7 +347,7 @@ def test_select_resolves_a_relative_path_from_the_first_root(tmp_path):
     )
 
     assert copied == 1
-    [copy] = list(output.iterdir())
+    [copy] = [path for path in output.rglob("*") if path.is_file()]
     assert copy.read_bytes() == first.read_bytes()
 
 
@@ -369,6 +369,6 @@ def test_select_copies_a_photo_outside_every_root(tmp_path):
     )
 
     assert copied == 1
-    [copy] = list(output.iterdir())
+    [copy] = [path for path in output.rglob("*") if path.is_file()]
     assert copy.read_bytes() == outside.read_bytes()
     assert progress == [copy.name]

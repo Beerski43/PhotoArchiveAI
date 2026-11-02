@@ -42,6 +42,7 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
         _rule_flag(rule, key)
     rule_weights(rule)
     year_limits(rule)
+    output_layout(rule)
     return rule
 
 
@@ -162,6 +163,28 @@ def _rule_flag(rule: Dict[str, Any], key: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(
             f"ルールの {key} は true か false で書いてください（いまの値: {value!r}）。"
+        )
+    return value
+
+
+#: 出力の形（#121）。``year`` は年ごとのフォルダ、``flat`` は出力先の直下（#83）。
+OUTPUT_LAYOUT_YEAR = "year"
+OUTPUT_LAYOUT_FLAT = "flat"
+OUTPUT_LAYOUTS = (OUTPUT_LAYOUT_YEAR, OUTPUT_LAYOUT_FLAT)
+#: 既定は年ごと（利用者の決定・#121）。**既定はここにだけ書く。**
+DEFAULT_OUTPUT_LAYOUT = OUTPUT_LAYOUT_YEAR
+
+
+def output_layout(rule: Dict[str, Any]) -> str:
+    """出力の形（``output_layout``）。**読むとき（`load_rule`）に確かめる。**
+
+    知らない値は止める。綴りを誤ったまま既定の形で出すと、平らな出力を前提に
+    した連携が黙って空振りする。
+    """
+    value = rule.get("output_layout", DEFAULT_OUTPUT_LAYOUT)
+    if value not in OUTPUT_LAYOUTS:
+        raise ValueError(
+            f"ルールの output_layout は {' か '.join(OUTPUT_LAYOUTS)} で書いてください（いまの値: {value!r}）。"
         )
     return value
 
@@ -772,43 +795,79 @@ def choose(candidates: Candidates, rule: Dict[str, Any]) -> List[Dict[str, Any]]
     return [dict(media) for media in picked]
 
 
+def _year_label(media: Dict[str, Any]) -> str:
+    """出力の名前と年のフォルダに使う年。分からなければ ``unknown``。"""
+    year = _get_media_year(media)
+    return str(year) if year is not None else COUNT_UNKNOWN
+
+
 def _output_name(rank: int, width: int, media: Dict[str, Any], source_path: Path) -> str:
     """出力の名前。``<順位>_<年>_m<Media.id><元の拡張子>``（#83）。
 
     名前を見れば `select` の並びと年が分かり、名前順に並べると `select` の順になる。
     **元のファイル名は引き継がない。** ID が入るので、別の root にある同じ名前の
-    写真もぶつからない。
+    写真もぶつからない。**年ごとのフォルダに出すときも同じ名前**（順位は通し番号のまま）。
     """
-    year = _get_media_year(media)
-    return f"{rank:0{width}d}_{year if year is not None else 'unknown'}_m{media.get('id')}{source_path.suffix}"
+    return f"{rank:0{width}d}_{_year_label(media)}_m{media.get('id')}{source_path.suffix}"
+
+
+def _output_path(
+    output_root: Path, layout: str, rank: int, width: int, media: Dict[str, Any], source_path: Path
+) -> Path:
+    """出力先のパス。``year`` なら ``<出力先>/<年>/<名前>``、``flat`` なら ``<出力先>/<名前>``（#121）。"""
+    name = _output_name(rank, width, media, source_path)
+    if layout == OUTPUT_LAYOUT_YEAR:
+        return output_root / _year_label(media) / name
+    return output_root / name
+
+
+def _is_year_folder(entry: Path) -> bool:
+    """年ごとの出力のフォルダか（名前が4桁の数字か ``unknown``・シンボリックリンクでない）。"""
+    name = entry.name
+    is_year_name = (len(name) == 4 and name.isascii() and name.isdigit()) or name == COUNT_UNKNOWN
+    return is_year_name and entry.is_dir() and not entry.is_symlink()
+
+
+def _previous_output_folders(output_root: Path) -> List[Path]:
+    """前回の出力を消すフォルダ。出力先と、その直下の年のフォルダ（#121）。"""
+    if not output_root.is_dir():
+        return [output_root]
+    return [output_root, *sorted(entry for entry in output_root.iterdir() if _is_year_folder(entry))]
 
 
 def _remove_previous_output(output_root: Path) -> None:
-    """前回の出力（出力先の**直下にあるファイル**）を消す。
+    """前回の出力（出力先の**直下にあるファイル**と、**年のフォルダの直下にあるファイル**）を消す。
 
-    出力は平らなので、残すと前回の結果と区別が付かない。**出力先は `select`
-    専用**で、このツールが置いたかどうかは見ない（利用者が決めた・PR #85）。
-    シンボリックリンクも消す（リンクで出力していた頃の残り）。**サブフォルダには
-    触らない。**
+    残すと前回の結果と区別が付かない。**出力先は `select` 専用**で、このツールが
+    置いたかどうかは見ない（利用者が決めた・PR #85）。シンボリックリンクも消す
+    （リンクで出力していた頃の残り）。**出力の形（`output_layout`）によらず両方を消す**
+    （形を切り替えたときに前回の残りが混ざらないように）。空になった年のフォルダは消す。
+
+    **年の名前でないサブフォルダと、年のフォルダの中のサブフォルダには触らない**
+    （#83 より前の、root からの相対パスを再現したコピーを壊さない）。
     """
-    for entry in output_root.iterdir():
-        if entry.is_symlink() or entry.is_file():
-            entry.unlink()
+    for folder in _previous_output_folders(output_root):
+        for entry in folder.iterdir():
+            if entry.is_symlink() or entry.is_file():
+                entry.unlink()
+        if folder != output_root and not any(folder.iterdir()):
+            folder.rmdir()
 
 
 def _check_output_is_not_an_input(
     output_root: Path, root_paths: Sequence[Path], sources: Sequence[Path]
 ) -> None:
-    """出力先が root やその中なら止める。**直下のファイルを消すので、元写真が消える。**"""
+    """出力先が root やその中なら止める。**消すフォルダに元写真があれば、それが消える。**"""
     output = output_root.resolve()
     for root in root_paths:
         if output == root or root in output.parents:
             raise ValueError(
                 f"出力先が写真の root の中にあります。直下のファイルを消すので使えません: {output}"
             )
+    cleared = {folder.resolve() for folder in _previous_output_folders(output_root)}
     for source in sources:
-        if source.parent == output:
-            raise ValueError(f"出力先に元の写真があります。直下のファイルを消すので使えません: {source}")
+        if source.parent.resolve() in cleared:
+            raise ValueError(f"出力先に元の写真があります。前回の出力として消すので使えません: {source}")
 
 
 def copy_selected_media(
@@ -816,10 +875,12 @@ def copy_selected_media(
     output_dir: str,
     source_roots: Union[str, Sequence[str]],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    layout: str = DEFAULT_OUTPUT_LAYOUT,
 ) -> int:
-    """選んだメディアを、出力先の**直下**へ平らにコピーする（#83）。
+    """選んだメディアを、出力先へコピーする。
 
-    名前は `_output_name`。コピーする前に、前回の出力（直下のファイル）を消す
+    ``layout`` が ``year`` なら年ごとのフォルダへ（#121・既定）、``flat`` なら出力先の
+    **直下**へ平らに（#83）。名前は `_output_name`。コピーする前に、前回の出力を消す
     （`_remove_previous_output`）。順位は渡された並びの 1 からで、``path`` の無い
     項目は飛ばすが**順位は詰めない**（番号が `select` の並びと一致する）。
     相対パスで登録されたメディアは先頭の root から解く。
@@ -831,6 +892,8 @@ def copy_selected_media(
     - 元のファイルが無ければ止める
     - 同じ名前のサブフォルダがあれば止める（ファイルは前回の出力として消す）
     """
+    if layout not in OUTPUT_LAYOUTS:
+        raise ValueError(f"出力の形は {' か '.join(OUTPUT_LAYOUTS)} です: {layout!r}")
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots]
@@ -843,7 +906,7 @@ def copy_selected_media(
         if path_value is None:
             continue
         source_path = _source_path(path_value, root_paths)
-        entries.append((rank, output_root / _output_name(rank, width, media, source_path), source_path))
+        entries.append((rank, _output_path(output_root, layout, rank, width, media, source_path), source_path))
 
     _check_output_is_not_an_input(output_root, root_paths, [source for _, _, source in entries])
     missing = [str(source) for _, _, source in entries if not source.is_file()]
@@ -852,7 +915,9 @@ def copy_selected_media(
         raise FileNotFoundError(f"元のファイルがありません（何も消していません）: {missing[0]}{more}")
     if output_root.exists():
         clashes = [
-            target.name for _, target, _ in entries if target.is_dir() and not target.is_symlink()
+            str(target.relative_to(output_root))
+            for _, target, _ in entries
+            if target.is_dir() and not target.is_symlink()
         ]
         if clashes:
             more = f" ほか {len(clashes) - 1} 件" if len(clashes) > 1 else ""
@@ -863,6 +928,7 @@ def copy_selected_media(
     output_root.mkdir(parents=True, exist_ok=True)
     _remove_previous_output(output_root)
     for rank, target, source_path in entries:
+        target.parent.mkdir(exist_ok=True)
         shutil.copy2(source_path, target)
         if progress_callback is not None:
             progress_callback(rank, total, target.name)
