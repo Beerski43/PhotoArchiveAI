@@ -882,10 +882,15 @@ def add_person(
     relation: Optional[str] = None,
     memo: Optional[str] = None,
     birth_date: Optional[str] = None,
+    commit: bool = True,
 ) -> int:
     """人物を登録する。``birth_date`` は ``YYYY-MM-DD``。未設定は ``None``。
 
     同じ名前の人物がすでにいれば `DuplicatePersonName`。
+
+    ``commit=False`` は、続けて書くもの（区分と重み）と1つのトランザクションにするとき
+    （GUI・PR #133 のレビュー指摘1）。別々に commit すると、2つ目が書き込みロックで落ちた
+    ときに人物だけが残る。呼び出し側が commit か rollback をすること。
     """
     cursor = connection.cursor()
     try:
@@ -898,7 +903,8 @@ def add_person(
         if _is_duplicate_name(error):
             raise DuplicatePersonName(name) from error
         raise
-    connection.commit()
+    if commit:
+        connection.commit()
     return cursor.lastrowid
 
 
@@ -909,8 +915,9 @@ def update_person(
     relation: Optional[str],
     memo: Optional[str],
     birth_date: Any = KEEP_BIRTH_DATE,
+    commit: bool = True,
 ) -> None:
-    """人物を更新する。
+    """人物を更新する。``commit`` は `add_person` と同じ。
 
     ``birth_date`` を**省くと触らない**。``None`` は「未設定へ戻す」指示。
     既定を ``None`` にしていたため、**名前だけ直すつもりの呼び出しで
@@ -933,7 +940,8 @@ def update_person(
         if _is_duplicate_name(error):
             raise DuplicatePersonName(name) from error
         raise
-    connection.commit()
+    if commit:
+        connection.commit()
 
 
 def delete_person(connection: sqlite3.Connection, person_id: int) -> None:
@@ -2725,16 +2733,17 @@ def is_family(row: Dict[str, Any]) -> bool:
 
 
 def set_person_scoring(
-    connection: sqlite3.Connection, person_id: int, close: bool, weight: float
+    connection: sqlite3.Connection, person_id: int, close: bool, weight: float, commit: bool = True
 ) -> None:
-    """人物の区分（家族か親しい人か）と重みを書く（#110）。重みは 0 以上。"""
+    """人物の区分（家族か親しい人か）と重みを書く（#110）。重みは 0 以上。``commit`` は `add_person` と同じ。"""
     if not (weight >= 0 and weight != float("inf")):
         raise ValueError(f"人物の重みは 0 以上の数にしてください: {weight!r}")
     connection.execute(
         "UPDATE Person SET category = ?, weight = ? WHERE id = ?",
         (CATEGORY_CLOSE if close else None, float(weight), person_id),
     )
-    connection.commit()
+    if commit:
+        connection.commit()
 
 
 def set_face_penalty(

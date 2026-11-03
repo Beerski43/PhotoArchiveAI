@@ -636,7 +636,7 @@
 | `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
 | `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（64件）
+### `test_gui_person.py` — 人物編集とプレビュー（66件）
 
 | テスト | 内容 |
 |---|---|
@@ -647,6 +647,7 @@
 | `test_an_empty_name_is_rejected` | 名前は必須。空で上書きしない |
 | `test_adding_a_person_with_an_existing_name_is_refused` | 同名の人物を追加しようとすると警告を出し、作らない（#90） |
 | `test_renaming_a_person_to_another_persons_name_is_refused` | 他人の名前への改名は警告を出し、変えない |
+| `test_adding_a_person_under_a_write_lock_leaves_no_half_written_person` / `test_editing_a_person_under_a_write_lock_changes_nothing` | **区分と重みを書くところで書き込みロックで落ちても、人物の追加・編集は何も残さない**（人物と区分・重みを1つのトランザクションに。以前は人物だけ commit され「何も変えていません」が事実と違った・PR #133 のレビュー指摘1） |
 | `test_keeping_the_same_name_while_editing_other_fields_is_allowed` | 自分の名前のまま他の欄を直すのは重複ではない |
 | `test_editing_without_a_selection_does_not_open_a_dialog` | 人物未選択ならダイアログを開かない |
 | `test_selecting_a_face_previews_it_from_the_original_photo` | サムネイルではなく元写真から取り直して表示する |

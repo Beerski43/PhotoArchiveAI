@@ -2585,13 +2585,20 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
+        # **人物と区分・重みを1つのトランザクションで書く**（PR #133 のレビュー指摘1）。
+        # 別々に commit すると、2つ目が書き込みロックで落ちたときに人物だけが残り、
+        # 「何も変えていません」の知らせ（`report_unhandled_error`）が事実と違っていた。
         try:
-            person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+            person_id = db.add_person(
+                self.connection, name, relation, memo, birth_date=birth_date, commit=False
+            )
+            db.set_person_scoring(self.connection, person_id, *dialog.scoring_values(), commit=False)
         except db.DuplicatePersonName as error:
             # 名前は重複不可（#90）。同名の2人目を作ると、どちらに割り当てたのか見分けられない
+            self.connection.rollback()
             QMessageBox.warning(self, "入力エラー", str(error))
             return
-        db.set_person_scoring(self.connection, person_id, *dialog.scoring_values())
+        self.connection.commit()
         self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
@@ -2613,14 +2620,17 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
+        # 追加と同じく、1つのトランザクションで書く（PR #133 のレビュー指摘1）
         try:
             db.update_person(
-                self.connection, person["id"], name, relation, memo, birth_date=birth_date
+                self.connection, person["id"], name, relation, memo, birth_date=birth_date, commit=False
             )
+            db.set_person_scoring(self.connection, person["id"], *dialog.scoring_values(), commit=False)
         except db.DuplicatePersonName as error:
+            self.connection.rollback()
             QMessageBox.warning(self, "入力エラー", str(error))
             return
-        db.set_person_scoring(self.connection, person["id"], *dialog.scoring_values())
+        self.connection.commit()
         # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
         self._reload_person_list(select_person_id=person["id"])
 
