@@ -9,7 +9,7 @@
 
 - **未計測の顔は絞り込みに出ない**（ボケているか分からない顔をまとめて外さない）
 - まとめて顔認証外にするのは**ボケた未分類だけ**。割り当て済み・くっきりした顔・未計測の顔は残る
-- 行事を選ばずに押せるのは、未分類を鮮明さで絞っているときだけ（いまの安全弁は残す）
+- まとめ処理は**何かで絞っているときだけ**押せる（絞らずには押せない・裏の処理中も押せない）
 - 測る処理は未分類も測り、止めたら次は残りから。**測れない環境では何も書かない**
 """
 
@@ -307,6 +307,37 @@ def test_changing_the_threshold_while_unchecked_keeps_the_page(window, monkeypat
     window.blur_check.setChecked(True)
     window.blur_spin.setValue(50)
     assert window.page == 0, "絞っているときは先頭へ戻す"
+
+
+def test_the_sharpness_slider_and_spin_box_stay_in_step(window):
+    """ゲージと数値欄は同じ値を指す（PR #136 の再レビュー指摘1・利用者「鮮明さもゲージで調整したい」）。"""
+    window, faces = window
+    window.blur_check.setChecked(True)
+
+    window.blur_slider.setValue(20)
+
+    assert window.blur_spin.value() == 20
+    assert _ids(window) == [faces["ボケ"]]
+    window.blur_spin.setValue(50)
+    assert window.blur_slider.value() == 50
+    assert _ids(window) == sorted([faces["ボケ"], faces["境目"]])
+
+
+def test_moving_the_sharpness_slider_reloads_the_list_once(window, monkeypatch):
+    """ゲージで値を変えても、一覧の読み直しは1回（数値欄と互いに書き換えて二度走らない）。
+    ドラッグの途中（`sliderMoved`）では読み直さない。"""
+    window, _ = window
+    window.blur_check.setChecked(True)
+    calls = []
+    real = window.reload_faces
+    monkeypatch.setattr(window, "reload_faces", lambda: (calls.append(1), real()))
+
+    window.blur_slider.sliderMoved.emit(40)
+    assert calls == [] and window.blur_spin.value() == 40, "動かしている間は数値だけ"
+    window.blur_slider.setValue(45)
+    assert len(calls) == 1
+    window.blur_spin.setValue(60)
+    assert len(calls) == 2
 
 
 def test_the_window_shows_how_many_unassigned_faces_are_unmeasured(window):

@@ -44,6 +44,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, face, matcher, migration, recommend, scoring, undo
+# 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
+# gui_select は gui を関数の中でしか import しないので、循環しない
+from .gui_select import WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -1557,7 +1560,8 @@ class MainWindow(QWidget):
         # 「ボケている順」で見ながら決める（利用者「ぶれ方の閾値を調整して選定したい」）。
         self.blur_check = QCheckBox("鮮明さが")
         self.blur_check.setToolTip(BLURRY_TOOLTIP)
-        self.blur_spin = QSpinBox()
+        # **ホイールはフォーカスのあるときだけ**（`WheelSafeSpinBox`）。上を通っただけで閾値が動かない
+        self.blur_spin = WheelSafeSpinBox()
         self.blur_spin.setRange(0, BLURRY_MAX)
         self.blur_spin.setValue(BLURRY_DEFAULT)
         self.blur_spin.setSuffix(" 以下")
@@ -1565,6 +1569,18 @@ class MainWindow(QWidget):
         self.blur_spin.setKeyboardTracking(False)
         self.blur_check.stateChanged.connect(self._blur_changed)
         self.blur_spin.valueChanged.connect(self._blur_value_changed)
+        # **ゲージでも動かせる**（PR #136 の再レビュー指摘1・利用者「鮮明さもゲージで調整したい」）。
+        # 値の正は数値欄で、ゲージはその写し。**離したときだけ確定する**（`setTracking(False)`）:
+        # 動かすたびに一覧を読み直すと、ドラッグ1回で DB とサムネイルを数十回読む。
+        # 動かしている間は数値欄の表示だけを追わせる（`sliderMoved`）。
+        self.blur_slider = WheelSafeSlider(Qt.Horizontal)
+        self.blur_slider.setRange(0, BLURRY_MAX)
+        self.blur_slider.setValue(BLURRY_DEFAULT)
+        self.blur_slider.setTracking(False)
+        self.blur_slider.setToolTip(BLURRY_TOOLTIP)
+        self.blur_slider.setMinimumWidth(160)
+        self.blur_slider.sliderMoved.connect(self._show_blur_value)
+        self.blur_slider.valueChanged.connect(self._blur_slider_changed)
         self.measure_button = QPushButton("鮮明さを測る")
         self.measure_button.setToolTip(MEASURE_TOOLTIP)
         self.measure_button.clicked.connect(self.measure_requested.emit)
@@ -1573,6 +1589,7 @@ class MainWindow(QWidget):
 
         blur_filters = QHBoxLayout()
         blur_filters.addWidget(self.blur_check)
+        blur_filters.addWidget(self.blur_slider)
         blur_filters.addWidget(self.blur_spin)
         blur_filters.addWidget(QLabel("（ボケ・ぶれた顔）"))
         blur_filters.addSpacing(12)
@@ -2671,8 +2688,30 @@ class MainWindow(QWidget):
     def _blur_changed(self, *_args) -> None:
         self._reset_page()
 
+    def _show_blur_value(self, value: int) -> None:
+        """ゲージを動かしている間、数値欄に値だけ写す（一覧は読み直さない）。"""
+        blocked = self.blur_spin.blockSignals(True)
+        try:
+            self.blur_spin.setValue(value)
+        finally:
+            self.blur_spin.blockSignals(blocked)
+
+    def _blur_slider_changed(self, value: int) -> None:
+        """ゲージを離した（またはキーで動かした）とき。数値欄に写して確定する。"""
+        self._show_blur_value(value)
+        self._apply_blur_value()
+
     def _blur_value_changed(self, *_args) -> None:
-        """値を変えたとき。**絞っていなければ一覧に効かないので、ページを動かさない**
+        """数値欄の値を変えたとき。ゲージを合わせて確定する。"""
+        blocked = self.blur_slider.blockSignals(True)
+        try:
+            self.blur_slider.setValue(self.blur_spin.value())
+        finally:
+            self.blur_slider.blockSignals(blocked)
+        self._apply_blur_value()
+
+    def _apply_blur_value(self) -> None:
+        """**絞っていなければ一覧に効かないので、ページを動かさない**
         （PR #136 のレビュー指摘2。数値欄の上でホイールを回しただけで先頭へ飛んでいた）。"""
         if self._blur_filtering():
             self._reset_page()

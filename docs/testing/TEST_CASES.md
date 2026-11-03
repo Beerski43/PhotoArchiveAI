@@ -1035,7 +1035,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
 | `test_status_lines_read_naturally` | 進み具合の文 |
 
-### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（15件。#135）
+### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 
 | テスト | 内容 |
 |---|---|
@@ -1052,6 +1052,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_month_range_alone_also_unlocks_the_bulk_action` | 行事の行を外したあと、撮影年月で絞ってもまとめ処理を押せる |
 | `test_bulk_actions_wait_for_the_background_job` | **裏の処理が流れているあいだはまとめ処理を押せない**（一覧に出ていない顔が混ざる・PR #136 のレビュー指摘1） |
 | `test_changing_the_threshold_while_unchecked_keeps_the_page` | チェックを外していれば、値を動かしてもページが動かない（レビュー指摘2） |
+| `test_the_sharpness_slider_and_spin_box_stay_in_step` | 鮮明さのゲージと数値欄は同じ値を指し、どちらから動かしても一覧が絞られる（再レビュー指摘1） |
+| `test_moving_the_sharpness_slider_reloads_the_list_once` | ゲージで値を変えても読み直しは1回。動かしている途中は読み直さない |
 | `test_the_window_shows_how_many_unassigned_faces_are_unmeasured` | 未分類の未計測の件数を出す |
 | `test_the_measure_button_measures_in_the_background` | 「鮮明さを測る」で裏で測る。測っている間はボタンが押せず、終わると結果が出る |
 
