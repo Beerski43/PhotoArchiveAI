@@ -203,23 +203,23 @@ def _ids(window):
     return sorted(window.face_list.item(i).data(Qt.UserRole)["id"] for i in range(window.face_list.count()))
 
 
-def test_without_the_sharpness_filter_bulk_rejecting_still_needs_an_event(window):
+def test_without_any_filter_bulk_actions_cannot_be_pressed(window):
     window, _ = window
     assert window._current_scope() == photoarchive_gui.SCOPE_UNASSIGNED
-    assert not window.bulk_event_button.isEnabled()
+    assert not window.bulk_button.isEnabled()
 
 
-def test_blurry_unassigned_faces_are_rejected_at_once_without_an_event_and_undone(window):
+def test_blurry_unassigned_faces_are_rejected_at_once_and_undone(window):
     window, faces = window
     window.blur_spin.setValue(30)
     window.blur_check.setChecked(True)
 
     assert _ids(window) == sorted([faces["ボケ"], faces["境目"]])
-    assert window.bulk_event_button.isEnabled()
-    assert "鮮明さ 30 以下" in window.bulk_event_button.text()
+    assert window.bulk_button.isEnabled()
+    assert "鮮明さ 30 以下" in window.bulk_button.text()
     assert all("鮮明さ" in window.face_list.item(i).text() for i in range(window.face_list.count()))
 
-    window._bulk_event_action()
+    window._bulk_action()
 
     connection = window.connection
     source = lambda name: db.get_face(connection, faces[name])["assign_source"]  # noqa: E731
@@ -242,20 +242,71 @@ def test_a_lower_threshold_narrows_what_is_rejected(window):
     window.blur_spin.setValue(20)
 
     assert _ids(window) == [faces["ボケ"]]
-    window._bulk_event_action()
+    window._bulk_action()
     assert db.get_face(window.connection, faces["境目"])["assign_source"] is None
 
 
-def test_the_sharpness_filter_does_not_unlock_bulk_actions_on_a_person(window):
-    """鮮明さで絞っても、**人物の割り当ての解除**は行事を選ばないと押せない（未分類だけの決定）。"""
-    window, _ = window
+def test_unassigning_a_person_by_sharpness_touches_only_the_blurry_faces_of_that_person(window):
+    """人物の表示でも、鮮明さで絞れば**その人物のボケた顔だけ**を未分類へ戻せる。"""
+    window, faces = window
     window.blur_check.setChecked(True)
     for row in range(window.person_list.count()):
         if window.person_list.item(row).data(Qt.UserRole) is not None:
             window.person_list.setCurrentRow(row)
             break
     assert window._current_scope() == photoarchive_gui.SCOPE_PERSON
-    assert not window.bulk_event_button.isEnabled()
+    assert window.bulk_button.isEnabled()
+    assert "解除" in window.bulk_button.text()
+
+    window._bulk_action()
+
+    assert db.get_face(window.connection, faces["ボケた手本"])["assign_source"] is None
+    assert db.get_face(window.connection, faces["ボケた自動"])["assign_source"] is None
+    assert db.get_face(window.connection, faces["ボケ"])["assign_source"] is None, "未分類は触らない"
+
+
+def test_a_month_range_alone_also_unlocks_the_bulk_action(window):
+    """行事の行は消した（#135・利用者「これいらない」）。**撮影年月で絞っても**押せる。"""
+    window, faces = window
+    window.month_from_box.setCurrentIndex(window.month_from_box.findText("2020-05"))
+
+    assert window.bulk_button.isEnabled()
+    window._bulk_action()
+
+    assert db.get_face(window.connection, faces["未計測"])["assign_source"] == db.ASSIGN_REJECTED
+
+
+def test_bulk_actions_wait_for_the_background_job(window):
+    """**裏の処理が流れているあいだは押せない**（PR #136 のレビュー指摘1）。
+
+    計測は 500 件ずつ書くので、押した時点の対象に**一覧に出ていない顔**が混ざる。
+    """
+    window, faces = window
+    window.blur_check.setChecked(True)
+    window.set_job_running(True)
+
+    assert not window.bulk_button.isEnabled()
+    assert window.bulk_button.toolTip() == photoarchive_gui.BULK_BLOCKED_BY_JOB
+    window._bulk_action()
+    assert db.get_face(window.connection, faces["ボケ"])["assign_source"] is None
+
+    window.set_job_running(False)
+    assert window.bulk_button.isEnabled()
+
+
+def test_changing_the_threshold_while_unchecked_keeps_the_page(window, monkeypatch):
+    """チェックを外していれば、値を動かしてもページは動かない（PR #136 のレビュー指摘2）。"""
+    window, _ = window
+    monkeypatch.setattr(photoarchive_gui, "PAGE_SIZE", 1)
+    window.page = 2
+    window.reload_faces()
+
+    window.blur_spin.setValue(40)
+
+    assert window.page == 2
+    window.blur_check.setChecked(True)
+    window.blur_spin.setValue(50)
+    assert window.page == 0, "絞っているときは先頭へ戻す"
 
 
 def test_the_window_shows_how_many_unassigned_faces_are_unmeasured(window):

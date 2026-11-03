@@ -582,33 +582,32 @@ def test_a_broken_shooting_date_is_not_counted_as_before_birth():
 
 
 # ---------------------------------------------------------------------------
-# 行事のまとめ処理が、表示に合わせて意味を変える
+# まとめ処理が、表示に合わせて意味を変える
 # ---------------------------------------------------------------------------
 
 
-def test_the_bulk_event_action_follows_the_view(seeded):
+def test_the_bulk_action_follows_the_view(seeded):
     """**表示を切り替えたら、まとめて処理の意味も変える。**
 
     「この人物ではない」の一覧には、まとめて効く操作がない。**押せなくする**
     （押せると、何が起きるか分からないまま数百件に効いてしまう）。
     """
     window, _faces, persons = seeded
-    window.event = ("/photos/2018", "2018-07-07")
-    window._sync_event_controls()
+    window.undated_only_box.setChecked(True)
 
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
-    assert "未分類をすべて顔認証外" in window.bulk_event_button.text()
-    assert window.bulk_event_button.isEnabled()
+    assert "未分類をすべて顔認証外" in window.bulk_button.text()
+    assert window.bulk_button.isEnabled()
 
     _select(window, person_id=persons["${PERSON_4}"])
-    assert "${PERSON_4}" in window.bulk_event_button.text()
-    assert "解除" in window.bulk_event_button.text()
+    assert "${PERSON_4}" in window.bulk_button.text()
+    assert "解除" in window.bulk_button.text()
 
     window.source_box.setCurrentIndex(
         window.source_box.findText(photoarchive_gui.NOT_THIS_PERSON_FILTER)
     )
-    assert window.bulk_event_button.isEnabled() is False
-    assert "この表示では無し" in window.bulk_event_button.text()
+    assert window.bulk_button.isEnabled() is False
+    assert "この表示では無し" in window.bulk_button.text()
 
 
 # ---------------------------------------------------------------------------

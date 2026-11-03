@@ -140,36 +140,7 @@ def test_a_conflict_is_explained_and_nothing_is_written(window, monkeypatch):
     assert window.action_undo.isEnabled() is False
 
 
-def test_an_event_cluster_operation_is_undone_from_the_dialog_and_the_main_window(window, monkeypatch):
-    """束ねる画面の操作も同じ履歴に積む。**画面の中でも、閉じたあとの親でも戻せる。**"""
-    monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
-    )
-    dialog = photoarchive_gui.EventClusterDialog(
-        window, window.connection, "/photos", None, history=window.history
-    )
-    dialog.cluster_list.setCurrentRow(0)
-    dialog._reject_cluster()
-    rejected = db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED)
-    assert rejected > 0
-    assert "済" in dialog.cluster_list.item(0).text()
-
-    dialog.action_undo.trigger()
-
-    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == 0
-    assert "済" not in dialog.cluster_list.item(0).text()
-
-    dialog.action_redo.trigger()
-    window._update_undo_actions()
-    assert window.action_undo.text().startswith("元に戻す: まとめて顔認証外にした")
-
-    window.action_undo.trigger()
-
-    assert db.count_faces(window.connection, assign_source=db.ASSIGN_REJECTED) == 0
-
-
-@pytest.mark.parametrize("in_dialog", [False, True])
-def test_a_write_error_is_explained_and_can_be_retried(window, monkeypatch, in_dialog):
+def test_a_write_error_is_explained_and_can_be_retried(window, monkeypatch):
     """DB に書けなかったら知らせ、**もう一度押せば戻る**（PR #117 のレビュー指摘1）。"""
     import sqlite3
 
@@ -187,17 +158,12 @@ def test_a_write_error_is_explained_and_can_be_retried(window, monkeypatch, in_d
 
     monkeypatch.setattr(undo, "write", locked)
     target = window
-    if in_dialog:
-        target = photoarchive_gui.EventClusterDialog(
-            window, window.connection, "/photos", None, history=window.history
-        )
     target.action_undo.trigger()
 
     assert warned and "書けませんでした" in warned[0]
     assert db.count_faces(window.connection, assign_source=db.ASSIGN_MANUAL) == 3
     assert target.action_undo.isEnabled()
-    if not in_dialog:
-        assert window.action_undo.text() == "元に戻す: 3 件を 父 に登録しました"
+    assert window.action_undo.text() == "元に戻す: 3 件を 父 に登録しました"
 
     monkeypatch.setattr(undo, "write", real_write)
     target.action_undo.trigger()
