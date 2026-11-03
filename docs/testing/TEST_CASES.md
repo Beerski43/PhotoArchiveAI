@@ -68,9 +68,6 @@
 | `test_face_io.py::test_embed_version_records_the_padding` | パディングを変えても `EMBED_VERSION` が据え置かれ、古い特徴量と新しい特徴量が同じ版として混ざる |
 | `test_evaluation.py::test_a_teacher_in_the_same_photo_is_not_allowed_to_answer_for_the_face` | 交差検証で、抜いた顔とほぼ同じ手本が残っていると取りこぼし率が0に見え、閾値の判断を誤る |
 | `test_scoring.py::test_smile_score_follows_the_mouth_aspect_ratio` | フェイクの都合で笑顔スコアの式が一度も通っておらず、常に 0.0 を返していても気づけなかった |
-| `test_gui_event_clusters.py::test_assigning_a_cluster_never_touches_the_teacher_in_it` | **束をまとめて割り当てる操作が、束に混ざった手本を巻き込まないこと。** 1回の操作が数百件に効くので、手本が消えると `match` の土台が崩れる |
-| `test_gui_event_clusters.py::test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **`day=None`（日で絞らない）と「日が読めない顔だけ」を同じ値で表さない。** 取り違えると、まとめて顔認証外がフォルダ全体に効く（`KEEP_AGE` と同じ罠） |
-| `test_gui_event_clusters.py::test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **上の変換が束ねる画面の経路で抜けていた。** 日付不明の行事を束ねると同じフォルダの別の日の顔まで束に入り、まとめて押すとそちらにも効いた（実データで日付つきの未分類 18,000 件が 363 フォルダで巻き込まれる。PR #62 のレビュー指摘1） |
 | `test_source_roots.py::test_select_copies_a_photo_outside_every_root` | **設定の root の外のメディアを `select` がコピーしようとすると落ちた**（#83 で直下に平らに出力する形に替えたあとも、root の外を通す。`str` に `as_posix()`。実データでは `${PERSON_2}携帯` の 5,323 件が外側だった。#24 で見つけた） |
 | `test_system.py::test_scan_is_incremental_on_second_run` | 上と同じ差分スキャンを、CLI の通し実行で確認する |
 | `test_gui_layout.py::test_the_assign_menu_stays_inside_the_window_even_with_many_persons` | **人物が多いと、右クリックの `人物に割り当て` の下の方が画面から飛び出て選べなかった**（#118・Windows から X11 転送で開いた GUI。Qt の知っている画面と見えている画面が食い違う） |
@@ -458,7 +455,7 @@
 | `test_the_month_range_also_narrows_a_person_s_faces` | 共通の絞り込みが人物の表示にも効く（別ウィンドウには無かった） |
 | `test_the_rejection_list_can_also_be_narrowed_and_paged` | 「この人物ではない」の一覧もページ単位で読み、年月で絞れる |
 | `test_a_broken_shooting_date_is_not_counted_as_before_birth` | **読めない撮影日時を「誕生前」に数えない**（判断は `dates.parse_date` に1つだけ） |
-| `test_the_bulk_event_action_follows_the_view` | 行事のまとめ処理が表示に合わせて意味を変える。**「この人物ではない」では押せない** |
+| `test_the_bulk_action_follows_the_view` | まとめ処理が表示に合わせて意味を変える。**「この人物ではない」では押せない** |
 | `test_a_small_thumbnail_at_the_top_does_not_shrink_the_whole_page` | **枠はサムネイルの寸法に任せない**（先頭の顔が小さいとページ全体が縮んでいた） |
 | `test_the_cell_leaves_room_for_the_thumbnail_and_two_lines_of_text` | 枠にサムネイルと文字2行が入る |
 | `test_both_face_lists_are_built_the_same_way` | 一覧の設定を2か所に書かない（`make_face_list`） |
@@ -521,7 +518,7 @@
 | `test_the_person_panel_is_narrow_and_widening_goes_to_the_faces` | 左の既定の幅は `PERSON_PANEL_WIDTH`（以前の 320px より狭い）。ウィンドウを広げても左は広がらず、顔の一覧が広がる |
 | `test_the_person_panel_can_be_narrowed_below_the_old_minimum` | ボタンが Qt の既定の最小幅（1つ 80px）を取らず、左を既定の幅まで狭められる |
 
-### `test_gui_undo.py` — GUI の元に戻す・やり直す（8件。#116）
+### `test_gui_undo.py` — GUI の元に戻す・やり直す（6件。#116）
 
 | テスト | 内容 |
 |---|---|
@@ -529,8 +526,7 @@
 | `test_the_menu_says_what_will_be_undone` | 右クリックに「元に戻す: 〈何を〉」、一覧の下の案内に `Ctrl+Z` |
 | `test_ctrl_z_undoes_and_plain_z_is_left_alone` | 打鍵は `Ctrl+Z` / `Ctrl+Shift+Z`・`Ctrl+Y`。**`Z` は「この人物ではない」の取り消しのまま** |
 | `test_a_conflict_is_explained_and_nothing_is_written` | 戻せないときは理由を出し、何も書かない |
-| `test_an_event_cluster_operation_is_undone_from_the_dialog_and_the_main_window` | 束ねる画面の操作も同じ履歴に積み、画面の中でも親でも戻せる |
-| `test_a_write_error_is_explained_and_can_be_retried` | DB に書けなければ知らせ、メニューは押せるまま、もう一度押せば戻る（親と束ねる画面の2通り・指摘1） |
+| `test_a_write_error_is_explained_and_can_be_retried` | DB に書けなければ知らせ、メニューは押せるまま、もう一度押せば戻る（指摘1。束ねる画面は #135 で外した） |
 | `test_the_penalty_step_is_named_in_the_past_tense` | 減点の操作の名前は「〜を他人(減点)にしました」（「減点します」だと戻すと減点するように読める・指摘2） |
 
 ### `test_gui_recommend.py` — 人物の未分類を似た順に見る画面（12件）
@@ -604,37 +600,6 @@
 | `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
 | `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
 | `test_a_gauge_ignores_the_wheel_unless_focused` | **フォーカスの無いゲージと入力欄はホイールで値を変えない**（設定欄をスクロールすると、マウスの下の重みが黙って変わっていた。PR #122 のレビュー指摘1）。選んだゲージは動く |
-
-### `test_gui_event_clusters.py` — 行事で絞って束ねる画面（24件）
-
-**1回の操作が数百件に効く画面**なので、手本を巻き込まないことを中心に固定する。
-
-| テスト | 内容 |
-|---|---|
-| `test_the_picker_offers_events_not_folders` | 同じフォルダが日ごとに分かれて並ぶ |
-| `test_the_picker_filter_matches_what_is_on_screen` | 絞り込みは画面に出ている文字で照合する |
-| `test_the_main_window_filters_by_the_chosen_event` | 選んだ行事で一覧が絞られる |
-| `test_an_event_without_a_readable_day_is_filtered_by_the_undated_mark` | **日が読めない行事を「日で絞らない」と取り違えない**（一覧の経路） |
-| `test_the_cluster_dialog_bundles_only_undated_faces_of_an_undated_event` | **同じことを束ねる画面の経路でも守る**（ここが抜けていた） |
-| `test_the_two_paths_turn_an_event_into_the_same_filter` | 両方の経路が `event_filters` の同じ変換を通る |
-| `test_the_dialog_bundles_only_the_chosen_day` | 束ねるのはその日の顔だけ |
-| `test_near_faces_land_in_one_cluster` | 近い顔が1つの束になる |
-| `test_rejected_and_auto_faces_are_left_out_of_the_bundles` | 顔認証外と自動割当は束ねない |
-| `test_a_cluster_shows_the_teacher_it_contains` | 束に混ざった手本の名前を出す |
-| `test_assigning_a_cluster_never_touches_the_teacher_in_it` | **手本を巻き込まない**（いちばん大事な一線） |
-| `test_a_cluster_becomes_done_after_it_is_assigned` | 押した束は「済」になる（二度押さない） |
-| `test_rejecting_a_cluster_only_rejects_the_pending_faces` | まとめて顔認証外にするのも未判断の顔だけ |
-| `test_only_one_page_of_thumbnails_is_read_at_a_time` | **サムネイルは1ページ分だけ読む** |
-| `test_people_born_after_the_event_are_not_offered` | その日に生まれていない人物は選べない |
-| `test_people_without_a_birth_date_stay_in_the_list` | 誕生日が未設定の人物は残す |
-| `test_too_many_faces_is_reported_instead_of_truncated` | 上限超過を黙って切らない |
-| `test_bulk_reject_covers_the_whole_event_but_not_other_days` | 行事まるごとの処理が別の日に漏れない |
-| `test_bulk_unpenalize_keeps_the_faces_rejected` | 他人(減点)のまとめ処理は**印だけを外す**（未分類へ戻さない）。別の日の印は残す（#113） |
-| `test_bulk_buttons_stay_disabled_until_an_event_is_chosen` | **行事を選ぶまで押せない**（押し間違いで全件に効くのを防ぐ） |
-| `test_the_bulk_button_changes_meaning_with_the_view` | 表示に応じてボタンの意味が変わる |
-| `test_splitting_a_cluster_uses_a_tighter_distance` | 大きい束を割れる（実データは 380 件の束を作る） |
-| `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
-| `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（66件）
 
@@ -1069,6 +1034,28 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_window_waits_for_other_writers` | 画面の接続はほかの書き込みを待つ（`busy_timeout`） |
 | `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
 | `test_status_lines_read_naturally` | 進み具合の文 |
+
+### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_sharpness_filter_includes_the_threshold_and_never_the_unmeasured` | 閾値ちょうどの顔は入る。**未計測の顔は出ない**。一覧・件数・id がそろう |
+| `test_blurry_first_order_puts_the_unmeasured_last_both_ways` | ボケている順・くっきりした順。未計測はどちらでも最後。一覧の列に鮮明さがある |
+| `test_unassigned_faces_can_be_picked_for_measuring` | 未分類も測る対象にできる（既定は割り当てのある顔だけのまま）。未計測の件数 |
+| `test_filling_can_include_unassigned_faces_and_stops_between_chunks` | 止める合図で塊の切れ目で止まり、次は残りから |
+| `test_the_measure_job_writes_nothing_when_landmarks_are_unavailable` | **目印の検出器が無い環境では何も書かずに失敗を知らせる**（「測れない」と「整列できなかった」を混ぜない） |
+| `test_the_measure_job_runs_in_another_process` | 子プロセスで測り、集計が届く |
+| `test_without_any_filter_bulk_actions_cannot_be_pressed` | **何も絞っていなければ、まとめ処理は押せない**（一度の押し間違いで未分類が全部動くのを防ぐ） |
+| `test_blurry_unassigned_faces_are_rejected_at_once_and_undone` | **ボケた未分類だけを顔認証外にする。** くっきりした顔・未計測・手本・自動は残る。Ctrl+Z で戻る |
+| `test_a_lower_threshold_narrows_what_is_rejected` | 閾値を下げると対象が減る |
+| `test_unassigning_a_person_by_sharpness_touches_only_the_blurry_faces_of_that_person` | 人物の表示で鮮明さで絞ると、その人物のボケた顔だけを未分類へ戻す（未分類は触らない） |
+| `test_a_month_range_alone_also_unlocks_the_bulk_action` | 行事の行を外したあと、撮影年月で絞ってもまとめ処理を押せる |
+| `test_bulk_actions_wait_for_the_background_job` | **裏の処理が流れているあいだはまとめ処理を押せない**（一覧に出ていない顔が混ざる・PR #136 のレビュー指摘1） |
+| `test_changing_the_threshold_while_unchecked_keeps_the_page` | チェックを外していれば、値を動かしてもページが動かない（レビュー指摘2） |
+| `test_the_sharpness_slider_and_spin_box_stay_in_step` | 鮮明さのゲージと数値欄は同じ値を指し、どちらから動かしても一覧が絞られる（再レビュー指摘1） |
+| `test_moving_the_sharpness_slider_reloads_the_list_once` | ゲージで値を変えても読み直しは1回。動かしている途中は読み直さない |
+| `test_the_window_shows_how_many_unassigned_faces_are_unmeasured` | 未分類の未計測の件数を出す |
+| `test_the_measure_button_measures_in_the_background` | 「鮮明さを測る」で裏で測る。測っている間はボタンが押せず、終わると結果が出る |
 
 ### `test_heic_excluded.py` — scan 以降から HEIC を外す（6件。#26）
 

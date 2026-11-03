@@ -14,7 +14,8 @@
 特徴量はすべてサムネイルから作り直したもの（`reembed`）なので、整列の判定と
 特徴量の作り方が一致する。
 
-測るのは**使う顔だけ**（割り当てのある顔）。1件 約17ms。
+測るのは**使う顔だけ**（割り当てのある顔）。1件 約17ms。**未分類の顔は GUI の
+「鮮明さを測る」が測る**（#135。ボケた未分類を鮮明さで絞って顔認証外にするため）。
 """
 
 from __future__ import annotations
@@ -122,11 +123,16 @@ def fill_missing(
     assign_sources=None,
     write: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    unassigned: bool = False,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """見え方が未計測の顔を測る。``{face_id: Appearance}`` を返す。
 
     ``assign_sources`` で対象を絞る（既定は手本と自動割り当て）。
+    ``unassigned`` なら未分類の顔も測る（#135。GUI でボケた未分類の顔を絞るため）。
     ``write=False`` なら DB に書かない（**`evaluate` は書かない約束**なので）。
+    ``should_stop`` が真を返したら、**塊の切れ目で**止める（済んだ塊は書いてある。
+    次に呼べば残りから測る）。
 
     **測れなかった顔（サムネイルが壊れている）は書かない。** 書くと「測った」
     ことになり、二度と測り直されない。
@@ -136,13 +142,15 @@ def fill_missing(
     sources = assign_sources or (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
     # **サムネイルを全件まとめて読まない**（数万件で数百MB。CLAUDE.md §8）。
     # id だけ先に取り、塊ごとに読む。
-    face_ids = db.faces_without_appearance(connection, sources)
+    face_ids = db.faces_without_appearance(connection, sources, unassigned=unassigned)
     measured = {}
     total = len(face_ids)
     if total and progress_callback is not None:
         progress_callback(0, total, "measuring faces")
     done = 0
     for start in range(0, total, FILL_CHUNK_SIZE):
+        if should_stop is not None and should_stop():
+            break
         chunk = face_ids[start : start + FILL_CHUNK_SIZE]
         rows = []
         for face_id, thumbnail in db.face_thumbnails(connection, chunk).items():

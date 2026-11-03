@@ -106,6 +106,58 @@ def run_scan(
         connection.close()
 
 
+#: 顔の見え方を測れない環境（FaceMesh が読めない）で返す文
+MEASURE_UNAVAILABLE = (
+    "顔の見え方を測る部品（MediaPipe の FaceMesh）が読めないため、鮮明さを測れません。"
+    "何も書いていません。"
+)
+
+
+def run_measure_faces(
+    report: Report,
+    should_stop: Callable[[], bool],
+    database_path: str,
+) -> Dict[str, Any]:
+    """子プロセスの中で、**未計測の顔の見え方（鮮明さ・向き・整列）**を測る（#135）。
+
+    対象は未分類・手動・自動の顔（顔認証外は測らない）。**サムネイルだけを読む**
+    （元写真＝NFS は読まない）。500 件ずつ書くので、止めても次は残りから。
+
+    **測れない環境では何も書かない**（`appearance.measure` が None を返す）。
+    「測れない」と「整列できなかった」を混ぜない（CLAUDE.md §8）。
+    """
+    from . import appearance, scoring
+
+    if scoring._load_mediapipe_face_mesh() is None:
+        raise RuntimeError(MEASURE_UNAVAILABLE)
+    connection = db.ensure_database(database_path)
+    connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    try:
+        progress = {"done": 0, "total": 0}
+
+        def on_progress(current: int, total: int, _detail: str) -> None:
+            progress.update(done=current, total=total)
+            report({"kind": "progress", "current": current, "total": total, "detail": "顔"})
+
+        measured = appearance.fill_missing(
+            connection,
+            unassigned=True,
+            progress_callback=on_progress,
+            should_stop=should_stop,
+        )
+        summary = {
+            "measured": len(measured),
+            "remaining": len(db.faces_without_appearance(
+                connection, (db.ASSIGN_MANUAL, db.ASSIGN_AUTO), unassigned=True
+            )),
+        }
+        if should_stop() and summary["remaining"]:
+            raise _Stopped(summary)
+        return summary
+    finally:
+        connection.close()
+
+
 class _Stopped(Exception):
     def __init__(self, summary: Dict[str, Any]):
         super().__init__("stopped")
@@ -266,7 +318,13 @@ def scan_log_file() -> str:
 
 
 def describe_summary(summary: Dict[str, Any]) -> str:
-    """`scan` の集計を1行にする（CLI の最後の行と同じ中身）。"""
+    """集計を1行にする。`scan` は CLI の最後の行と同じ中身。"""
+    if "measured" in summary:
+        # `run_measure_faces`（#135）
+        return (
+            f"測った顔 {summary.get('measured', 0):,} 件・"
+            f"未計測のまま {summary.get('remaining', 0):,} 件"
+        )
     return (
         f"走査 {summary.get('processed', 0):,} 件・飛ばした {summary.get('skipped', 0):,} 件・"
         f"顔 {summary.get('faces', 0):,} 件・削除 {summary.get('pruned', 0):,} 件・"

@@ -1026,6 +1026,11 @@ ORDER_QUALITY_ASC = "quality_asc"
 ORDER_SHOT_ASC = "shooting_asc"
 ORDER_AGE_DESC = "age_desc"
 ORDER_SCORE_DESC = "score_desc"
+#: 鮮明さ（`Face.sharpness`）の**低い順＝ボケている順**と、その逆（#135）。
+#: ボケた顔を閾値で絞り、まとめて顔認証外にするときに、境目の顔を目で見るための並び。
+#: **未計測（NULL）の顔はどちらの向きでも最後。**
+ORDER_SHARPNESS_ASC = "sharpness_asc"
+ORDER_SHARPNESS_DESC = "sharpness_desc"
 
 FACE_LIST_COLUMNS = (
     "id",
@@ -1037,6 +1042,8 @@ FACE_LIST_COLUMNS = (
     "quality_score",
     "smile_score",
     "penalize",
+    # 鮮明さ（#135）。一覧の顔の下に出し、閾値を決める手がかりにする
+    "sharpness",
 )
 
 
@@ -1119,6 +1126,7 @@ def count_faces(
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
     penalized: Optional[bool] = None,
+    max_sharpness: Optional[float] = None,
 ) -> int:
     """``list_faces`` と同じ条件での件数。ページャの総数に使う。"""
     where, params = _face_filter(
@@ -1138,6 +1146,7 @@ def count_faces(
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
         penalized=penalized,
+        max_sharpness=max_sharpness,
     )
     row = connection.execute(f"SELECT COUNT(*) FROM Face{where}", params).fetchone()
     return int(row[0])
@@ -1210,11 +1219,12 @@ def face_ids(
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
     penalized: Optional[bool] = None,
+    max_sharpness: Optional[float] = None,
 ) -> List[int]:
     """``list_faces`` と同じ条件に当たる顔の id を**全件**返す。
 
     **まとめて処理する操作のためにある。** `list_faces` はページ単位で読むので、
-    「この行事の未分類をすべて顔認証外にする」のように**ページをまたぐ操作**には使えない。
+    「いまの絞り込みに当たる未分類をすべて顔認証外にする」のように**ページをまたぐ操作**には使えない。
     ここは id だけを読むのでサムネイルの BLOB を持ち上げない
     （実データで最大の行事が 1,357 件）。
 
@@ -1241,6 +1251,7 @@ def face_ids(
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
         penalized=penalized,
+        max_sharpness=max_sharpness,
     )
     rows = connection.execute(f"SELECT id FROM Face{where} ORDER BY id", params).fetchall()
     return [int(row[0]) for row in rows]
@@ -1603,6 +1614,7 @@ def _face_filter(
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
     penalized: Optional[bool] = None,
+    max_sharpness: Optional[float] = None,
 ) -> Tuple[str, List[Any]]:
     """顔の絞り込み条件。``list_faces`` と ``count_faces`` で同じものを使う。
 
@@ -1655,6 +1667,10 @@ def _face_filter(
     - ``False``: 印の無い顔だけ。GUI の「顔認証外」がこれを使い、他人(減点)に
       移った顔を出さない（利用者の指定「減点対象になった顔は除外済み選択時は
       表示しないで」）
+
+    ``max_sharpness`` は「**鮮明さ（`Face.sharpness`）がこれ以下の顔**」だけ（#135）。
+    ボケた顔を絞り、まとめて顔認証外にするためのもの。**未計測（NULL）の顔は出さない**
+    （ボケているか分からない顔を、ボケた顔としてまとめて外さない）。
     """
     clauses: List[str] = []
     params: List[Any] = []
@@ -1663,6 +1679,9 @@ def _face_filter(
         params.append(ASSIGN_REJECTED)
     elif penalized is False:
         clauses.append(f"({prefix}penalize IS NULL OR {prefix}penalize <> 1)")
+    if max_sharpness is not None:
+        clauses.append(f"{prefix}sharpness IS NOT NULL AND {prefix}sharpness <= ?")
+        params.append(float(max_sharpness))
     if unassigned:
         clauses.append(f"{prefix}assign_source IS NULL")
     elif assign_source is not None:
@@ -1792,6 +1811,7 @@ def list_faces(
     born_by: Optional[str] = None,
     not_rejected_for_person: Optional[int] = None,
     penalized: Optional[bool] = None,
+    max_sharpness: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """顔を一覧する。
 
@@ -1809,6 +1829,8 @@ def list_faces(
     - ``ORDER_SCORE_ASC``: 自動割り当ての確信度が低い順。**持たない顔は最後**
     - ``ORDER_QUALITY_ASC`` / ``ORDER_SHOT_ASC`` / ``ORDER_AGE_DESC`` /
       ``ORDER_SCORE_DESC``: 上の逆向き。**値を持たない顔はやはり最後**
+    - ``ORDER_SHARPNESS_ASC`` / ``ORDER_SHARPNESS_DESC``: 鮮明さの低い順（ボケている順）と
+      高い順（#135）。**未計測の顔はどちらでも最後**
 
     「この人物に似た順」はここでは並べない（手本との距離が要る。`recommend`）。
 
@@ -1838,6 +1860,7 @@ def list_faces(
         born_by=born_by,
         not_rejected_for_person=not_rejected_for_person,
         penalized=penalized,
+        max_sharpness=max_sharpness,
     )
     if order in (ORDER_AGE, ORDER_AGE_DESC):
         # **年齢順だけは SQL で並べない。** 下の `_ids_in_age_order` を見ること。
@@ -1860,6 +1883,11 @@ def list_faces(
             order_by = "assign_score IS NULL ASC, assign_score ASC, id ASC"
         elif order == ORDER_SCORE_DESC:
             order_by = "assign_score IS NULL ASC, assign_score DESC, id ASC"
+        elif order == ORDER_SHARPNESS_ASC:
+            # 未計測は最後（SQLite は NULL を最小として扱うので明示する）
+            order_by = "sharpness IS NULL ASC, sharpness ASC, id ASC"
+        elif order == ORDER_SHARPNESS_DESC:
+            order_by = "sharpness IS NULL ASC, sharpness DESC, id ASC"
         elif order == ORDER_QUALITY_ASC:
             # SQLite は NULL を最小として扱う。**明示しないと先頭に来る。**
             order_by = "quality_score IS NULL ASC, quality_score ASC, id ASC"
@@ -2433,22 +2461,41 @@ def _teacher_age(row) -> float:
 
 
 def faces_without_appearance(
-    connection: sqlite3.Connection, assign_sources: Sequence[str]
+    connection: sqlite3.Connection, assign_sources: Sequence[str], unassigned: bool = False
 ) -> List[int]:
     """見え方（`Face.sharpness` ほか）が未計測で、サムネイルのある顔の id。
 
     ``assign_sources`` の割り当ての顔だけ。**測るのは使う顔だけ**
-    （全顔は約6万件で、1件 約17ms）。
+    （全顔は約6万件で、1件 約17ms）。``unassigned`` なら未分類の顔も入れる
+    （#135。GUI でボケた未分類の顔を絞って顔認証外にするため）。
     """
-    if not assign_sources:
+    conditions = []
+    params: List[Any] = list(assign_sources)
+    if assign_sources:
+        placeholders = ",".join("?" for _ in assign_sources)
+        conditions.append(f"assign_source IN ({placeholders})")
+    if unassigned:
+        conditions.append("assign_source IS NULL")
+    if not conditions:
         return []
-    placeholders = ",".join("?" for _ in assign_sources)
     rows = connection.execute(
         "SELECT id FROM Face WHERE sharpness IS NULL AND thumbnail IS NOT NULL"
-        f" AND assign_source IN ({placeholders}) ORDER BY id",
-        tuple(assign_sources),
+        f" AND ({' OR '.join(conditions)}) ORDER BY id",
+        tuple(params),
     ).fetchall()
     return [int(row[0]) for row in rows]
+
+
+def count_unassigned_without_sharpness(connection: sqlite3.Connection) -> int:
+    """鮮明さが未計測で、サムネイルのある**未分類**の顔の件数（#135）。
+
+    GUI の「鮮明さを測る」に添える。未計測の顔は鮮明さの絞り込みに出ない。
+    """
+    row = connection.execute(
+        "SELECT COUNT(*) FROM Face WHERE sharpness IS NULL AND thumbnail IS NOT NULL"
+        " AND assign_source IS NULL"
+    ).fetchone()
+    return int(row[0])
 
 
 def faces_without_expression(
