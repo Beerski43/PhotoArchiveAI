@@ -560,6 +560,14 @@ DONE_PREVIEW_OPACITY = 0.35
 #: **一瞬だけ出て消える窓は、出さないより煩わしい。** `QProgressDialog` が
 #: この時間を超えたときだけ自分で開く。
 PROGRESS_POPUP_DELAY_MS = 400
+#: 画面の接続が、ほかの接続（裏の `scan`・端末の CLI）の書き込みを待つ秒数（#129）
+BUSY_TIMEOUT_MS = 30_000
+MATCH_BLOCKED_BY_JOB = "裏で処理（取り込みタブ）を流しているあいだは実行できません。終わるか、止めてから実行してください。"
+WRITE_LOCKED = (
+    "データベースがほかの処理（裏のスキャンや、端末で流している photoarchive など）で使われていて、"
+    "30 秒待っても書き込めませんでした。この操作では何も変えていません。\n"
+    "少し待ってから、もう一度やり直してください。"
+)
 
 
 @contextmanager
@@ -1901,6 +1909,9 @@ class MainWindow(QWidget):
         super().__init__()
         self.db_path = database_path
         self.connection = db.ensure_database(database_path)
+        # **裏の `scan` などと同時に書くときは待つ**（#129）。既定の 5 秒だと、相手が
+        # 書き込みロックを握っているあいだに割り当ての操作が落ちる。
+        self.connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         #: プレビューのフォルダ表示を相対パスにするためだけに使う（root 1つか並び）。
         #: **渡されなければ DB に記録された root を使う**（#24。設定を失っても読める表示に
         #: なる）。それも無ければ絶対パスで出すので、渡さなくても動く。
@@ -2574,13 +2585,20 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
+        # **人物と区分・重みを1つのトランザクションで書く**（PR #133 のレビュー指摘1）。
+        # 別々に commit すると、2つ目が書き込みロックで落ちたときに人物だけが残り、
+        # 「何も変えていません」の知らせ（`report_unhandled_error`）が事実と違っていた。
         try:
-            person_id = db.add_person(self.connection, name, relation, memo, birth_date=birth_date)
+            person_id = db.add_person(
+                self.connection, name, relation, memo, birth_date=birth_date, commit=False
+            )
+            db.set_person_scoring(self.connection, person_id, *dialog.scoring_values(), commit=False)
         except db.DuplicatePersonName as error:
             # 名前は重複不可（#90）。同名の2人目を作ると、どちらに割り当てたのか見分けられない
+            self.connection.rollback()
             QMessageBox.warning(self, "入力エラー", str(error))
             return
-        db.set_person_scoring(self.connection, person_id, *dialog.scoring_values())
+        self.connection.commit()
         self._reload_person_list(select_person_id=person_id)
 
     def _edit_person(self):
@@ -2602,14 +2620,17 @@ class MainWindow(QWidget):
         if values is None:
             return
         name, relation, memo, birth_date = values
+        # 追加と同じく、1つのトランザクションで書く（PR #133 のレビュー指摘1）
         try:
             db.update_person(
-                self.connection, person["id"], name, relation, memo, birth_date=birth_date
+                self.connection, person["id"], name, relation, memo, birth_date=birth_date, commit=False
             )
+            db.set_person_scoring(self.connection, person["id"], *dialog.scoring_values(), commit=False)
         except db.DuplicatePersonName as error:
+            self.connection.rollback()
             QMessageBox.warning(self, "入力エラー", str(error))
             return
-        db.set_person_scoring(self.connection, person["id"], *dialog.scoring_values())
+        self.connection.commit()
         # 編集した人物を選び直す。**誕生日を入れたら、年齢の行がその場で出る。**
         self._reload_person_list(select_person_id=person["id"])
 
@@ -2627,6 +2648,19 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 自動割り当て（match）
     # ------------------------------------------------------------------
+
+    def set_job_running(self, running: bool) -> None:
+        """裏で `scan` などを流しているあいだは `match` を押せなくする（#129）。
+
+        `scan` が顔を足し消ししている途中の手本で照合しないため。`match` は長く書き込み
+        ロックを握るので、裏の処理も待たせる。顔の割り当てなどの操作は続けられる。
+        """
+        self.match_button.setEnabled(not running)
+        self.match_button.setToolTip(
+            MATCH_BLOCKED_BY_JOB
+            if running
+            else "手本をもとに、未分類と自動割当の顔を付け直します（photoarchive match と同じ）。"
+        )
 
     def _run_match(self) -> None:
         """`match` を流す。**進み具合を出し、終わったら結果と件数を出し直す。**
@@ -3841,10 +3875,12 @@ class MainWindow(QWidget):
 
 
 class AppWindow(QTabWidget):
-    """起動したときの窓（#104）。**1枚目は今までの顔の割り当て、2枚目は写真の選定。**
+    """起動したときの窓（#104）。**1枚目は今までの顔の割り当て、2枚目は写真の選定、
+    3枚目は取り込み**（#129・`scan` を裏で流す）。
 
     1枚目（`MainWindow`）の中身と操作は変えない。2枚目（`gui_select.SelectionPanel`）は
     同じ DB の接続を使う（`select` の重みを動かして、結果をサムネイルで見る）。
+    裏の処理の進み具合と「止める」は、どのタブからも見えるようタブの右上に置く。
     """
 
     def __init__(
@@ -3855,6 +3891,7 @@ class AppWindow(QTabWidget):
         output_root: Optional[str] = None,
     ):
         super().__init__()
+        from .gui_scan import JobController, JobStatusBar, ScanPanel
         from .gui_select import SelectionPanel
 
         self.assignment = MainWindow(database_path, source_roots=source_roots)
@@ -3864,10 +3901,76 @@ class AppWindow(QTabWidget):
         self.selection = SelectionPanel(
             self.assignment.connection, rule_path, output_root, roots or []
         )
+        self.jobs = JobController(self)
+        settings_roots = [source_roots] if isinstance(source_roots, str) else list(source_roots or [])
+        self.scan_panel = ScanPanel(self.jobs, database_path, self.assignment.connection, settings_roots)
+        self.job_status = JobStatusBar(self.jobs)
+        self.setCornerWidget(self.job_status, Qt.TopRightCorner)
+        self.jobs.started.connect(lambda _name: self.assignment.set_job_running(True))
+        self.jobs.finished.connect(self._job_finished)
         self.addTab(self.assignment, "顔の割り当て")
         self.addTab(self.selection, "写真の選定")
+        self.addTab(self.scan_panel, "取り込み")
         self.setWindowTitle("PhotoArchiveAI")
         self.resize(1240, 820)
+
+    def _job_finished(self, _name: str, _event: dict) -> None:
+        """裏の処理が終わったら、顔の一覧を読み直す（`scan` が顔を足し消しした）。"""
+        self.assignment.set_job_running(False)
+        self.assignment._reload_person_list()
+
+    def closeEvent(self, event) -> None:
+        """**裏の処理を流したまま閉じない。** 止めるなら、書きかけを保存して終わるのを待つ。"""
+        from .gui_scan import wait_for_stop
+
+        if self.jobs.is_running():
+            answer = QMessageBox.question(
+                self,
+                "処理を流しています",
+                "裏で処理を流しています。止めて閉じますか？\n"
+                "済んだぶんは保存され、次に始めると続きからになります。",
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+            wait_for_stop(self.jobs, self)
+        super().closeEvent(event)
+
+
+def report_unhandled_error(connection, parent, error: BaseException) -> str:
+    """画面の操作が例外で落ちたとき（#129）。**書きかけを捨て、何が起きたかを出す。**
+
+    書き込みの途中で落ちると、書きかけが接続に残り、次の操作の commit に混ざる。
+    いちばん起きやすいのは、裏の `scan` や端末の CLI が書き込みロックを握っていて
+    待ちきれなかったとき（``database is locked``）。**黙って失わない**（利用者の決定）。
+    出した文を返す（テスト用）。
+    """
+    try:
+        connection.rollback()
+    except sqlite3.Error:
+        pass
+    if isinstance(error, sqlite3.OperationalError) and (
+        "locked" in str(error) or "busy" in str(error)
+    ):
+        message = WRITE_LOCKED
+    else:
+        message = f"操作が失敗しました。この操作の書きかけは捨てました。\n{type(error).__name__}: {error}"
+    QMessageBox.warning(parent, "書き込めませんでした", message)
+    return message
+
+
+def install_error_handler(window: "AppWindow") -> None:
+    """``sys.excepthook`` を差し替える。もとの出力（端末のトレースバック）も残す。"""
+    import sys
+
+    previous = sys.excepthook
+
+    def hook(kind, error, trace):
+        previous(kind, error, trace)
+        if isinstance(error, Exception):
+            report_unhandled_error(window.assignment.connection, window, error)
+
+    sys.excepthook = hook
 
 
 def main() -> None:
@@ -3927,5 +4030,6 @@ def main() -> None:
         # **黙って落とさない。** GUI は端末を見ずに起動されることがある。
         QMessageBox.critical(None, "データベースを開けません", str(error))
         raise SystemExit(str(error)) from error
+    install_error_handler(window)
     window.show()
     sys.exit(app.exec())

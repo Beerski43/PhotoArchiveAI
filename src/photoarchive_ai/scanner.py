@@ -57,6 +57,20 @@ class ScanAborted(RuntimeError):
     """安全のためにスキャンを中断したときに送出する。"""
 
 
+class ScanStopped(RuntimeError):
+    """利用者が止めたときに送出する（#129）。**済んだぶんは commit してある。**
+
+    ``summary`` は止めた時点までの集計（``scan_directory`` が返すものと同じ形。
+    ``scan_directories`` から投げるときは root ごとの内訳 ``roots`` も入る）。
+    ``ScanRoot`` の記録と消えた行の削除は走っていない（途中の一覧で消さない）。
+    次の ``scan`` は差分判定で済んだぶんを飛ばすので、そのまま続きからになる。
+    """
+
+    def __init__(self, summary: Dict[str, Any]):
+        super().__init__("スキャンを止めました。")
+        self.summary = summary
+
+
 def is_media_file(path: Path) -> bool:
     suffix = path.suffix.lower().lstrip(".")
     return suffix in IMAGE_EXTENSIONS or suffix in VIDEO_EXTENSIONS
@@ -101,20 +115,28 @@ LISTING_REPORT_INTERVAL = 200
 
 
 def iter_media_files(
-    root: Path, progress_callback: Optional[Callable[[int, Optional[int], str], None]] = None
+    root: Path,
+    progress_callback: Optional[Callable[[int, Optional[int], str], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> List[Path]:
     """走査するメディア。**HEIC/HEIF はファイル名も見ない**（#26。利用者の決定）。
 
     ``progress_callback`` には ``(見つけた件数, None, いま見ているフォルダ)`` を知らせる。
     NFS 上の数万件を数えるのに数分かかり、その間なにも出ないと止まって見える（#78）。
     総数はまだ分からないので ``total`` は None。
+
+    ``should_stop`` が真を返したら、そこまでの一覧で打ち切る（#129。呼び出し側が
+    もう一度 ``should_stop`` を見て止める。途中の一覧で消えた行を消さないこと）。
     """
     found: List[Path] = []
     for path in root.rglob("*"):
         if is_media_file(path) and path.is_file():
             found.append(path)
-            if progress_callback is not None and len(found) % LISTING_REPORT_INTERVAL == 0:
-                progress_callback(len(found), None, str(path.parent))
+            if len(found) % LISTING_REPORT_INTERVAL == 0:
+                if progress_callback is not None:
+                    progress_callback(len(found), None, str(path.parent))
+                if should_stop is not None and should_stop():
+                    break
     return sorted(found)
 
 
@@ -383,6 +405,19 @@ def prune_missing_media(
 # ---------------------------------------------------------------------------
 
 
+def _empty_summary(total_files: int, skipped: int) -> Dict[str, Any]:
+    return {
+        "total_files": total_files,
+        "processed": 0,
+        "skipped": skipped,
+        "faces": 0,
+        "errors": 0,
+        "pruned": 0,
+        "excluded": 0,
+        "media_ids": [],
+    }
+
+
 def scan_directory(
     source_dir: str,
     db_connection,
@@ -397,6 +432,8 @@ def scan_directory(
     log_file: Optional[str] = None,
     log_level: str = "WARNING",
     worker_initializer: Optional[Callable[[], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+    commit_interval: int = COMMIT_INTERVAL,
 ) -> Dict[str, Any]:
     """ディレクトリを走査し、メディアの登録と顔検出を行う。
 
@@ -415,12 +452,23 @@ def scan_directory(
     ``listing_callback`` はファイルの一覧づくりと、前回から変わったかを見る段の
     進み具合（``(件数, 総数または None, 詳細)``）。``error_callback`` はファイルごとの
     エラー（``"ファイル名: 理由"``）。どちらも進捗表示のため（#78）。
+
+    ``should_stop`` は止める合図（#129・GUI が裏で流すとき）。一覧づくりの段と、1件書く
+    ごとに見る。真なら書いたぶんを commit して ``ScanStopped`` を投げる。**並列のときは
+    残りの仕事を捨ててから抜ける**（``with ProcessPoolExecutor`` のまま抜けると、残りを
+    全件処理し終えるまで待ってしまう）。
+
+    ``commit_interval`` は何件ごとに commit するか。commit の間は書き込みロックを握るので、
+    GUI と同時に流すときは 1 にする（GUI の書き込みを待たせない）。
     """
+    stop_requested = should_stop or (lambda: False)
     root = Path(source_dir).resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Source directory does not exist: {source_dir}")
 
-    media_files = iter_media_files(root, listing_callback)
+    media_files = iter_media_files(root, listing_callback, should_stop=stop_requested)
+    if stop_requested():
+        raise ScanStopped(_empty_summary(len(media_files), 0))
     if not media_files:
         raise ScanAborted(
             f"対象ディレクトリにメディアファイルが1件もありません: {root}"
@@ -435,10 +483,11 @@ def scan_directory(
     skipped = 0
     for checked, path in enumerate(media_files, start=1):
         # 前回から変わったかを stat で見る段。NFS では数万件で数分かかる（#78）
-        if listing_callback is not None and (
-            checked % LISTING_REPORT_INTERVAL == 0 or checked == len(media_files)
-        ):
-            listing_callback(checked, len(media_files), path.name)
+        if checked % LISTING_REPORT_INTERVAL == 0 or checked == len(media_files):
+            if listing_callback is not None:
+                listing_callback(checked, len(media_files), path.name)
+            if stop_requested():
+                raise ScanStopped(_empty_summary(len(media_files), skipped))
         key = str(path)
         record = index.get(key)
         records[key] = record
@@ -473,16 +522,9 @@ def scan_directory(
         )
 
     total = len(tasks)
-    summary: Dict[str, Any] = {
-        "total_files": len(media_files),
-        "processed": 0,
-        "skipped": skipped,
-        "faces": 0,
-        "errors": 0,
-        "pruned": 0,
-        "excluded": 0,
-        "media_ids": [],
-    }
+    summary = _empty_summary(len(media_files), skipped)
+    interval = max(1, int(commit_interval))
+
     def handle(result: Dict[str, Any], position: int) -> None:
         record = records.get(result["path"])
         media_id = _store_result(db_connection, result, record)
@@ -493,23 +535,33 @@ def scan_directory(
             summary["errors"] += 1
             if error_callback is not None:
                 error_callback(f"{Path(result['path']).name}: {result['error']}")
-        if position % COMMIT_INTERVAL == 0:
+        if position % interval == 0:
             db_connection.commit()
         if progress_callback is not None:
             progress_callback(position, total, Path(result["path"]).name)
+        if stop_requested():
+            db_connection.commit()
+            raise ScanStopped(summary)
 
     if total:
         if workers > 1:
-            with ProcessPoolExecutor(
+            executor = ProcessPoolExecutor(
                 max_workers=workers,
                 mp_context=multiprocessing.get_context(WORKER_START_METHOD),
                 initializer=_start_worker,
                 initargs=(log_file, log_level, worker_initializer),
-            ) as executor:
+            )
+            try:
                 for position, result in enumerate(
                     executor.map(_analyze_file_task, tasks, chunksize=4), start=1
                 ):
                     handle(result, position)
+            except BaseException:
+                # **残りを捨てる。** 捨てずに抜けると、残りの全件を処理し終えるまで待つ。
+                # 処理中の数件は終わるのを待つ（ワーカーを途中で殺さない）。
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
+            executor.shutdown(wait=True)
         else:
             for position, task in enumerate(tasks, start=1):
                 handle(_analyze_file_task(task), position)
@@ -608,10 +660,18 @@ def scan_directories(
         "media_ids": [],
         "roots": [],
     }
-    for root in roots:
-        summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
+    def add(root: Path, summary: Dict[str, Any]) -> None:
         for key in ("total_files", "processed", "skipped", "faces", "errors", "pruned", "excluded"):
             total[key] += summary[key]
         total["media_ids"].extend(summary["media_ids"])
         total["roots"].append({"root": str(root), **{k: v for k, v in summary.items() if k != "media_ids"}})
+
+    for root in roots:
+        try:
+            summary = scan_directory(str(root), db_connection, progress_callback=progress_callback, **options)
+        except ScanStopped as stopped:
+            # **止めたら残りの root は走査しない。** 済んだ root のぶんも足して返す。
+            add(root, stopped.summary)
+            raise ScanStopped(total) from None
+        add(root, summary)
     return total

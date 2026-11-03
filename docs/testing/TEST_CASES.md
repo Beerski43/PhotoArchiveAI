@@ -572,7 +572,7 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚。1枚目は今の顔の割り当て |
+| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが3枚。1枚目は今の顔の割り当て、2枚目は写真の選定、3枚目は取り込み（#129） |
 | `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
 | `test_loading_lists_every_year_with_its_candidates` | **タブを開いた時点で**年ごとの候補の枚数が表に並び、枚数を入れられる（整数の `count_per_year` は全部の行に入る・「候補を読み込む」ボタンは無い・#113） |
 | `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
@@ -636,7 +636,7 @@
 | `test_a_cluster_that_cannot_be_split_says_so` | 割れなかったことを黙らない |
 | `test_a_single_face_cluster_cannot_be_split` | 1件の束は割れない |
 
-### `test_gui_person.py` — 人物編集とプレビュー（64件）
+### `test_gui_person.py` — 人物編集とプレビュー（66件）
 
 | テスト | 内容 |
 |---|---|
@@ -647,6 +647,7 @@
 | `test_an_empty_name_is_rejected` | 名前は必須。空で上書きしない |
 | `test_adding_a_person_with_an_existing_name_is_refused` | 同名の人物を追加しようとすると警告を出し、作らない（#90） |
 | `test_renaming_a_person_to_another_persons_name_is_refused` | 他人の名前への改名は警告を出し、変えない |
+| `test_adding_a_person_under_a_write_lock_leaves_no_half_written_person` / `test_editing_a_person_under_a_write_lock_changes_nothing` | **区分と重みを書くところで書き込みロックで落ちても、人物の追加・編集は何も残さない**（人物と区分・重みを1つのトランザクションに。以前は人物だけ commit され「何も変えていません」が事実と違った・PR #133 のレビュー指摘1） |
 | `test_keeping_the_same_name_while_editing_other_fields_is_allowed` | 自分の名前のまま他の欄を直すのは重複ではない |
 | `test_editing_without_a_selection_does_not_open_a_dialog` | 人物未選択ならダイアログを開かない |
 | `test_selecting_a_face_previews_it_from_the_original_photo` | サムネイルではなく元写真から取り直して表示する |
@@ -1034,6 +1035,40 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_select_copies_same_named_photos_from_different_roots` | 別の root の同じ名前も、両方コピーされる（#83） |
 | `test_select_resolves_a_relative_path_from_the_first_root` | 相対パスのメディアは先頭の root から解く |
 | `test_select_copies_a_photo_outside_every_root` | **root の外のメディアで `select` が落ちていた**（`str` に `as_posix()`。本筋の外で直した） |
+
+### `test_scan_stop.py` — scan を途中で止めて、次は続きから（6件。#129）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_stopped_scan_keeps_what_it_did_and_the_next_scan_continues` | **止めても済んだぶんは commit してあり、消えたファイルの行は消さない。** 次の `scan` は済んだぶんを飛ばして続きから |
+| `test_a_parallel_scan_stops_without_finishing_every_file` | **並列（`spawn`）でも残りを処理しきらずに止まる**（`with ProcessPoolExecutor` のまま抜けると残りの全件を待つ） |
+| `test_a_stop_while_listing_writes_nothing` | 一覧づくりの段で止めたら何も書かない |
+| `test_a_stop_skips_the_remaining_roots` | 止めたら残りの root は走査しない。記録するのは終えた root だけ |
+| `test_the_commit_interval_bounds_how_long_the_write_lock_is_held` / `test_the_default_commit_interval_holds_the_lock_between_files` | 1件ごとに commit すれば、間にほかの接続（GUI）が書ける。既定（CLI）は今までどおりまとめて commit（対照） |
+
+### `test_jobs.py` — 長い処理を裏の別プロセスで流す（7件。#129）
+
+| テスト | 内容 |
+|---|---|
+| `test_a_scan_job_runs_in_another_process_and_reports_the_summary` | 子プロセスで `scan` を流し、集計が届く（`media_ids` は送らない） |
+| `test_progress_reaches_the_parent` | 進み具合が親に届く |
+| `test_a_stop_request_ends_the_job_as_stopped` | 止める合図で `stopped` で終わる。root は記録しない |
+| `test_a_safety_abort_is_reported_with_its_reason` / `test_an_unexpected_failure_is_reported` | 安全弁の中断と思わぬ失敗を、理由つきで届ける |
+| `test_a_child_that_dies_silently_is_reported_as_failed` | **子が知らせを送らずに落ちたら（強制終了）、親が `failed` を作る**（待ち続けない） |
+| `test_the_summary_line_names_every_count` | 結果の1行 |
+
+### `test_gui_scan.py` — GUI の「取り込み」タブ（10件。#129）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_third_tab_runs_a_scan_in_the_background` | 3枚目のタブから `scan` を裏で流す。**実行中は `match` と「始める」が押せない**。終われば戻り、件数が出る |
+| `test_the_stop_button_stops_and_the_next_scan_continues` | 「止める」で止まり、次は続きから |
+| `test_a_scan_that_cannot_start_is_reported` | 中断（メディアが無い）を知らせる |
+| `test_closing_while_scanning_waits_for_the_stop` / `test_closing_can_be_cancelled_while_scanning` | **流したまま閉じない。** 止めて閉じるなら止まるのを待つ・閉じないこともできる |
+| `test_roots_fall_back_to_the_recorded_ones` | root は設定 → DB に記録された root（CLI と同じ） |
+| `test_the_window_waits_for_other_writers` | 画面の接続はほかの書き込みを待つ（`busy_timeout`） |
+| `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
+| `test_status_lines_read_naturally` | 進み具合の文 |
 
 ### `test_heic_excluded.py` — scan 以降から HEIC を外す（6件。#26）
 

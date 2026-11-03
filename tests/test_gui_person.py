@@ -1374,3 +1374,66 @@ def test_the_real_dialog_returns_the_category_and_weight(window):
     assert dialog.scoring_values() == (True, 2.5)
     dialog.category_input.setCurrentIndex(0)
     assert dialog.scoring_values() == (False, 2.5)
+
+
+# ---------------------------------------------------------------------------
+# 書き込みロックで落ちたとき（PR #133 のレビュー指摘1）
+# ---------------------------------------------------------------------------
+
+
+def _lock_before_scoring(window, monkeypatch, tmp_path):
+    """区分と重みを書くところで ``database is locked`` で落ちるようにする。
+
+    裏の `scan` や端末の `match` がロックを握っていて待ちきれなかったときの代わり。**別の接続で
+    本当にロックを取る形にはできない**: 1つのトランザクションにしたので、人物を書いた時点で
+    こちらがロックを握っており、別の接続は割り込めない（直したあとはこの経路では落ちない）。
+    """
+    import sqlite3
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "set_person_scoring", locked)
+
+
+def _run_like_a_slot(window, action):
+    """画面の操作として流す。落ちたら `sys.excepthook` と同じ後始末をする。"""
+    import sqlite3
+
+    with pytest.raises(sqlite3.OperationalError) as raised:
+        action()
+    return photoarchive_gui.report_unhandled_error(window.connection, window, raised.value)
+
+
+def test_adding_a_person_under_a_write_lock_leaves_no_half_written_person(window, monkeypatch, tmp_path):
+    """**「何も変えていません」が事実であること。** 以前は人物だけ commit され、区分と重みの無い人物が残った
+    （言われたとおりやり直すと「同じ名前の人物がすでにいます」で断られた）。"""
+    shown = _capture_warnings(monkeypatch)
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("母", "", "", (0, 0, 0)), scoring=(True, 2.0)),
+    )
+    _lock_before_scoring(window, monkeypatch, tmp_path)
+
+    message = _run_like_a_slot(window, window._add_person)
+
+    assert message == photoarchive_gui.WRITE_LOCKED and shown == [message]
+    assert [person["name"] for person in db.list_persons(window.connection)] == ["父"]
+
+
+def test_editing_a_person_under_a_write_lock_changes_nothing(window, monkeypatch, tmp_path):
+    """以前は名前とメモだけ変わり、区分と重みは古いまま残った。"""
+    _capture_warnings(monkeypatch)
+    monkeypatch.setattr(
+        photoarchive_gui,
+        "PersonDialog",
+        _make_dialog_class(accepted=True, values=("新しい名前", "", "", (0, 0, 0)), scoring=(True, 2.0)),
+    )
+    _select_person(window)
+    _lock_before_scoring(window, monkeypatch, tmp_path)
+
+    _run_like_a_slot(window, window._edit_person)
+
+    person = db.list_persons(window.connection)[0]
+    assert (person["name"], person["memo"], person["category"], person["weight"]) == ("父", "元のメモ", None, None)
