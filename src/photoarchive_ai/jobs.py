@@ -174,7 +174,7 @@ def run_convert_heic(
       マウントか空き容量の不足で、続けても書けない（CLI の既定の答え N と同じ）。
       書きかけの JPEG は `converter` が消す
     """
-    from .converter import ConvertStopped, convert_heic_files
+    from .converter import ConvertStopped, ConvertWriteFailed, convert_heic_files
     from .scanner import ScanAborted
 
     summary: Dict[str, Any] = {"converted": 0, "skipped": 0, "unreadable": [], "roots": len(roots)}
@@ -184,12 +184,6 @@ def run_convert_heic(
         report({"kind": "error", "message": f"読めない HEIC を飛ばしました（壊れている可能性）: {path}: {error}"})
         return True
 
-    def on_write_error(path: Path, error: Exception) -> bool:
-        raise ScanAborted(
-            f"JPEG を書けませんでした: {path}: {error}。"
-            f"ここまでに {summary['converted']:,} 件を変換してあります（書き込み先の空き容量と書き込み権限を確かめてください）。"
-        )
-
     for root in roots:
         try:
             converted, skipped = convert_heic_files(
@@ -197,10 +191,18 @@ def run_convert_heic(
                 progress_callback=lambda current, total, detail: report(
                     {"kind": "progress", "current": current, "total": total, "detail": detail}
                 ),
-                confirm_write_error=on_write_error,
+                # 書けなければ聞かずに止める（`ConvertWriteFailed`）
+                confirm_write_error=None,
                 confirm_read_error=on_read_error,
                 should_stop=should_stop,
             )
+        except ConvertWriteFailed as failed:
+            # **そこまでの件数は例外に載っている**（root の途中では summary にまだ足されていない・PR #137 指摘1）
+            done = summary["converted"] + failed.converted
+            raise ScanAborted(
+                f"JPEG を書けませんでした: {failed.source}: {failed}。"
+                f"ここまでに {done:,} 件を変換してあります（書き込み先の空き容量と書き込み権限を確かめてください）。"
+            ) from None
         except ConvertStopped as stopped:
             summary["converted"] += stopped.converted
             summary["skipped"] += stopped.skipped

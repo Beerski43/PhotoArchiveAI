@@ -303,3 +303,30 @@ def test_a_stop_request_ends_the_run_and_the_next_run_continues(tmp_path: Path):
     assert (stopped.value.converted, stopped.value.skipped) == (2, 0)
     assert sorted(path.name for path in tmp_path.glob("*.jpg")) == ["0.jpg", "1.jpg"]
     assert convert_heic_files(str(tmp_path)) == (1, 2)
+
+
+def test_a_write_failure_carries_the_counts_and_is_still_an_os_error(tmp_path: Path):
+    """PR #137 指摘1: 書けずに止まったとき、そこまでの件数を持ち出せる。
+
+    `OSError` の子で、文は元の失敗と同じ（CLI は `OSError` を受けて文を出すので変わらない）。
+    """
+    import os
+
+    from photoarchive_ai.converter import ConvertWriteFailed
+
+    write_heic(tmp_path / "a" / "1.heic")
+    write_heic(tmp_path / "b" / "2.heic", color=(30, 160, 90))
+    os.chmod(tmp_path / "b", 0o555)
+    try:
+        if os.access(tmp_path / "b", os.W_OK):  # root で流しているとき
+            pytest.skip("書き込み権限を外せない")
+        with pytest.raises(OSError) as raised:
+            convert_heic_files(str(tmp_path))
+    finally:
+        os.chmod(tmp_path / "b", 0o755)
+
+    failed = raised.value
+    assert isinstance(failed, ConvertWriteFailed)
+    assert (failed.converted, failed.skipped) == (1, 0)
+    assert failed.source == tmp_path / "b" / "2.heic"
+    assert str(failed) == str(failed.error) and "2.jpg" in str(failed)

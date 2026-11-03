@@ -187,6 +187,29 @@ def test_a_convert_job_stops_when_a_jpeg_cannot_be_written(tmp_path):
     assert "JPEG を書けませんでした" in final["message"]
 
 
+def test_a_convert_job_reports_how_many_were_converted_before_a_write_failure(tmp_path):
+    """PR #137 指摘1: root の途中で書けなくなっても、そこまでに変換した件数を出す（0 件と出さない）。"""
+    from tests.helpers import write_heic
+
+    source = tmp_path / "media"
+    write_heic(source / "a" / "1.heic")
+    write_heic(source / "a" / "2.heic", color=(30, 160, 90))
+    write_heic(source / "b" / "3.heic", color=(90, 30, 160))
+    os.chmod(source / "b", 0o555)
+    try:
+        if os.access(source / "b", os.W_OK):  # root で流しているとき
+            return
+        job = jobs.Job("convert_heic", jobs.run_convert_heic, roots=[str(source)])
+        job.start()
+        final = _drain(job)
+    finally:
+        os.chmod(source / "b", 0o755)
+
+    assert final["kind"] == "aborted", final
+    assert "ここまでに 2 件を変換してあります" in final["message"], final["message"]
+    assert sorted(path.name for path in (source / "a").glob("*.jpg")) == ["1.jpg", "2.jpg"]
+
+
 def _assess_job(tmp_path, count=3):
     from tests.fakes import fake_quality_models
     from tests.helpers import add_family_photo

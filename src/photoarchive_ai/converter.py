@@ -132,6 +132,24 @@ class ConvertStopped(Exception):
         self.skipped = skipped
 
 
+class ConvertWriteFailed(OSError):
+    """JPEG を書けずに止まった。``converted`` / ``skipped`` はそこまでの件数（PR #137 指摘1）。
+
+    `OSError` の子なので、`OSError` を受ける呼び出し側（CLI）はそのまま動く。
+    文は元の失敗と同じ（ファイル名を含む）。
+    """
+
+    def __init__(self, source: Path, error: OSError, converted: int, skipped: int):
+        super().__init__(*error.args)
+        self.source = source
+        self.error = error
+        self.converted = converted
+        self.skipped = skipped
+
+    def __str__(self) -> str:
+        return str(self.error)
+
+
 def _remove_partial(output: Path) -> None:
     """書き込みに失敗した JPEG の書きかけを消す。消せなければそのまま（元の失敗を優先する）。"""
     try:
@@ -193,7 +211,7 @@ def convert_heic_files(
                 except OSError as error:
                     _remove_partial(output)
                     if confirm_write_error is None or not confirm_write_error(source, error):
-                        raise
+                        raise ConvertWriteFailed(source, error, converted, skipped) from error
         if progress_callback is not None:
             progress_callback(index, len(sources), source.name)
     return converted, skipped

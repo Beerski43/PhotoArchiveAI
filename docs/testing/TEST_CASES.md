@@ -891,7 +891,7 @@
 | `test_a_negative_or_infinite_weight_is_refused` | 負・無限大・NaN の重みは受け付けない |
 | `test_a_version_11_database_gains_the_columns_and_keeps_everything` | **v11 → v12 で人物・手本・顔認証外が減らない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0 |
 
-### `test_converter.py` — HEIC → JPEG（18件。#130 で2件）
+### `test_converter.py` — HEIC → JPEG（19件。#130 で3件）
 
 | テスト | 内容 |
 |---|---|
@@ -913,6 +913,7 @@
 | `test_a_damaged_heic_stops_the_run_without_a_read_confirmation` | 読めないときの確認が無ければ止まる |
 | `test_a_failed_write_leaves_no_partial_jpeg` | **書き込みが途中で落ちても書きかけの JPEG を残さない**（残すと `scan` が壊れた JPEG を拾い、次の変換は `_1.jpg` を作る・#130） |
 | `test_a_stop_request_ends_the_run_and_the_next_run_continues` | 止める合図で次のファイルに進まない。次は変換済みを飛ばして残りから（#130） |
+| `test_a_write_failure_carries_the_counts_and_is_still_an_os_error` | 書けずに止まったら件数を例外（`ConvertWriteFailed`）に載せる。`OSError` の子で文も同じなので CLI は変わらない（PR #137 指摘1） |
 
 ### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（11件）
 
@@ -1015,7 +1016,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_stop_skips_the_remaining_roots` | 止めたら残りの root は走査しない。記録するのは終えた root だけ |
 | `test_the_commit_interval_bounds_how_long_the_write_lock_is_held` / `test_the_default_commit_interval_holds_the_lock_between_files` | 1件ごとに commit すれば、間にほかの接続（GUI）が書ける。既定（CLI）は今までどおりまとめて commit（対照） |
 
-### `test_jobs.py` — 長い処理を裏の別プロセスで流す（14件。#129・#130）
+### `test_jobs.py` — 長い処理を裏の別プロセスで流す（15件。#129・#130）
 
 | テスト | 内容 |
 |---|---|
@@ -1028,6 +1029,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_convert_job_converts_in_another_process` | 子プロセスで `convert-heic` を流し、集計が届く（#130） |
 | `test_a_convert_job_skips_an_unreadable_heic_and_lists_it` | **読めない HEIC は飛ばして知らせ、集計に残す**（裏では聞き返せない） |
 | `test_a_convert_job_stops_when_a_jpeg_cannot_be_written` | **JPEG が書けなければ `aborted` で止める**（続けても書けない） |
+| `test_a_convert_job_reports_how_many_were_converted_before_a_write_failure` | **root の途中で書けなくなっても、そこまでに変換した件数を出す**（0 件と出していた・PR #137 指摘1） |
 | `test_an_assess_job_measures_family_photos_in_another_process` | 子プロセスで `assess` を流す（フェイクのモデル `tests.fakes.fake_quality_models`） |
 | `test_an_assess_job_stopped_at_once_measures_at_most_one_photo` | 止める合図で `stopped` |
 | `test_an_assess_job_without_models_fails_with_how_to_make_them` | モデルが無ければ置き方つきで落ちる |
