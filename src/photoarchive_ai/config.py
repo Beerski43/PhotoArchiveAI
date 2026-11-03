@@ -21,6 +21,7 @@ WARNING を出す。黙って空の設定を返すと、``scan`` が「source ro
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -202,3 +203,78 @@ def get_rule_path(settings: Dict[str, Any]) -> Optional[str]:
 def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
     """dlib の学習済みモデルを置いたディレクトリ(任意)。"""
     return settings.get("dlib_model_dir")
+
+
+# ----------------------------------------------------------------------
+# 書き戻す（GUI の設定の窓・#131）
+# ----------------------------------------------------------------------
+
+#: GUI の設定の窓が直すキー。**ほかのキー（``dlib_model_dir`` など）は書き戻すときもそのまま残す。**
+EDITABLE_KEYS = ("database_path", "source_roots", "output_root", "rule_path")
+
+
+class SettingsWriteError(ValueError):
+    """設定ファイルに書けない（読めないファイルを上書きしない・古い JSON を指している）。"""
+
+
+def settings_write_path() -> Path:
+    """GUI が設定を書く先。**次に起動したときに読まれる場所**にする。
+
+    いま読んでいるファイルがあればそれ。無ければ ``PHOTOARCHIVE_CONFIG`` が指す先、
+    それも無ければカレントディレクトリの ``config/app_settings.yml``（探す順の 1 と 2）。
+    リポジトリ直下（探す順の 3）には自分からは作らない: 相対パスはカレントから解くので、
+    カレントに置くほうが書いた値と解き方が食い違わない。
+    """
+    found = find_settings_path()
+    if found is not None:
+        return found
+    override = os.environ.get(CONFIG_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    return Path.cwd() / CONFIG_RELATIVE_PATH
+
+
+def read_settings_for_write(path: Path) -> Dict[str, Any]:
+    """書き戻す前に、いまのファイルの中身を読む。**読めなければ止める。**
+
+    ``load_settings`` は読めないファイルを空の設定として扱う（設定が無くても動かすため）。
+    書き戻す側でそれをすると、壊れたファイルの中身を空の設定で上書きしてしまう。
+    """
+    if path.suffix.lower() == ".json":
+        raise SettingsWriteError(
+            f"{path} は古い JSON の設定です。YAML の設定（{path.with_suffix('.yml')}）を指してください。"
+        )
+    if not path.exists():
+        return {}
+    try:
+        settings = _read_yaml(path)
+    except (OSError, yaml.YAMLError) as error:
+        raise SettingsWriteError(f"設定ファイルを読めないので書きません（{path}）: {error}") from error
+    if settings is None:
+        return {}
+    if not isinstance(settings, dict):
+        raise SettingsWriteError(f"設定ファイルの中身が辞書ではないので書きません（{path}）")
+    return settings
+
+
+def write_settings(path: Path, values: Dict[str, Any]) -> Dict[str, Any]:
+    """``values`` のキー（``EDITABLE_KEYS`` のうち）を設定ファイルに書く。書いた中身を返す。
+
+    - **書く前に ``<名前>.bak`` に控える**（ルールの保存と同じ・コメントは消える）
+    - 値が空（``None``・空文字・空の配列）のキーは消す（キーが無い＝設定しない）
+    - ``values`` に無いキーと、``EDITABLE_KEYS`` 以外のキーは、もとのまま残す
+    """
+    settings = read_settings_for_write(path)
+    for key, value in values.items():
+        if key not in EDITABLE_KEYS:
+            raise KeyError(f"設定の窓からは書かないキーです: {key}")
+        if value is None or value == "" or value == []:
+            settings.pop(key, None)
+        else:
+            settings[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, path.with_name(path.name + ".bak"))
+    text = yaml.safe_dump(settings, allow_unicode=True, sort_keys=False)
+    path.write_text(text, encoding="utf-8")
+    return settings

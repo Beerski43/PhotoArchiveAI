@@ -344,8 +344,8 @@ class ScanPanel(QWidget):
         self.roots_list.addItems(self.roots)
         if not self.roots:
             self.roots_note.setText(
-                "root がありません。config/app_settings.yml の source_roots に書いてください"
-                "（docs/operation/CONFIG.md）。"
+                "root がありません。左上の「設定…」で写真の置き場所を足してください"
+                "（config/app_settings.yml の source_roots・docs/operation/CONFIG.md）。"
             )
         elif self.settings_roots:
             self.roots_note.setText("設定（source_roots）の root です。")

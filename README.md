@@ -150,7 +150,7 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 cp config/app_settings.sample.yml config/app_settings.yml
 ```
 
-必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。**各キーの意味・既定・誤ったときの振る舞いは [docs/operation/CONFIG.md](docs/operation/CONFIG.md) にまとめてあります**（ルール・公開しない語の一覧も）。
+必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。**各キーの意味・既定・誤ったときの振る舞いは [docs/operation/CONFIG.md](docs/operation/CONFIG.md) にまとめてあります**（ルール・公開しない語の一覧も）。GUI を起動したあとなら、タブの左上の `設定…` でも直せます（#131）。
 
 **写真の置き場所（root）が複数あれば、`source_roots` に並べます**（#24）。
 
@@ -543,7 +543,7 @@ PhotoArchiveAI/
     photoarchive_ai/
       __init__.py
       __main__.py
-      config.py                設定ファイルの探索と読み込み
+      config.py                設定ファイルの探索と読み込み・GUI からの書き戻し
       undo.py                  GUI の顔の操作を元に戻す・やり直す
       db.py                    スキーマと永続化
       migration.py             旧スキーマからの移行
@@ -561,10 +561,17 @@ PhotoArchiveAI/
       evaluation.py            自動紐づけの精度の実測
       converter.py             HEIC/HEIF → JPEG 変換
       selection.py             ルールに基づく抽出とコピー
+      expression.py            顔の表情(目閉じ・笑顔)
+      strangers.py             他人(減点)の顔の重み
+      progress.py              端末の進み具合の表示
       similar.py               連写・似た写真・写しを束ねる(撮影日時・フォルダ・家族・見た目)
       logging_setup.py         ログの設定
       cli.py                   サブコマンド定義
       gui.py                   人物登録と顔の割り当て画面
+      gui_select.py            写真の選定タブ(select の調整と出力)
+      gui_scan.py              取り込みタブ(convert-heic・scan・assess を裏で流す)
+      gui_settings.py          設定の窓(DB・root・出力先・ルールのパス)
+      jobs.py                  長い処理を裏の別プロセスで流す
   tests/                       テスト(リポジトリ内には書き込まない)
   data/                        DB・ログ・バックアップ(git管理外)
   mediaFiles/                  実データへのsymlink置き場(git管理外)
@@ -587,7 +594,7 @@ PhotoArchiveAI/
 
 - 元の写真・動画を変更しません。
 - 出力先フォルダの中の年ごとのフォルダ（ルールの `output_layout: flat` なら直下）へファイルをコピーします。実行のたびに、出力先の直下と年のフォルダの直下にあるファイルを消します。
-- GUI は人物登録と顔の割り当て・自動割り当て（`match`）・写真の選定（`select`）と、HEIC の変換（`convert-heic`）・顔検出（`scan`）・写真の良し悪しの測定（`assess`）を担当します（後の3つは裏で流す・#129・#130）。設定ファイルの編集・`evaluate`・`unassign-auto`・`reembed` は CLI で実行します。
+- GUI は人物登録と顔の割り当て・自動割り当て（`match`）・写真の選定（`select`）と、HEIC の変換（`convert-heic`）・顔検出（`scan`）・写真の良し悪しの測定（`assess`）を担当します（後の3つは裏で流す・#129・#130）。設定ファイルのうち DB の場所・root・出力先・ルールのパスは、GUI のタブの左上の `設定…` でも直せます（#131）。`evaluate`・`unassign-auto`・`reembed` は CLI で実行します。
 - `photoarchive analyze` は廃止しました。顔検出は `photoarchive scan` に、人物への紐づけは GUI と `photoarchive match` に分かれています。
 - `photoarchive convert-heic` はデータベースを使わないので、`--db` は要りません。設定ファイルは、`--source` を付けないときの root を読むためだけに使います。
 - 顔の切り出し方（`face.EMBED_PADDING` など）を変えた場合は、`embedding.ACTIVE.version` を必ず上げて `photoarchive reembed` で作り直してください。古い特徴量と新しい特徴量が混ざると照合が成立しません。**`scan --force-rescan` は使わないでください**（顔の行を作り直すので、GUI で積み上げた手動割り当てと顔認証外が消えます）。

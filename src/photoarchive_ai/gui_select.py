@@ -536,6 +536,37 @@ class SelectionPanel(QWidget):
     # ルールと画面の行き来
     # ------------------------------------------------------------------
 
+    def set_paths(
+        self,
+        rule_path: Optional[str],
+        output_root: Optional[str],
+        source_roots: Optional[Sequence[str]],
+    ) -> bool:
+        """設定の窓で保存した値に差し替える（#131）。ルールを読み直したら True。
+
+        - **ルールのパスが変わったら、新しいファイルを読み直して画面に出す**（重みと年の表。
+          年の表は入っている値を引き継がず、新しいファイルの枚数から作り直す）。同じパスなら
+          画面で動かした重みはそのまま
+        - root が変わったら、用意した候補と結果を捨てる（候補は root から元写真を引く）
+        """
+        roots = list(source_roots or [])
+        if roots != self.source_roots:
+            self.source_roots = roots
+            self.candidates = None
+            self.selected = []
+            self.chosen_rule = {}
+            self._group_by_year()
+        self.output_root = output_root
+        if rule_path == self.rule_path:
+            return False
+        self.rule_path = rule_path
+        self.rule = self._read_rule()
+        self._show_rule(self.rule)
+        self.year_table.setRowCount(0)
+        if self._years_filled:
+            self.refresh_years()
+        return True
+
     def _read_rule(self) -> Dict[str, Any]:
         if not self.rule_path or not Path(self.rule_path).exists():
             return {}
