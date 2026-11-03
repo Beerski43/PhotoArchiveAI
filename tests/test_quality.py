@@ -305,15 +305,17 @@ def test_a_face_touching_the_edge_is_cut_off():
     assert scoring.is_cut_off(_row(500, 50, 1000, 150), 1000, 800)
     assert not scoring.is_cut_off(_row(100, 100, 200, 200), 1000, 800)
     assert not scoring.is_cut_off(_row(0, 0, 10, 10), None, None)  # 大きさが分からなければ切れていない
-    faces = [_row(0, 50, 100, 150), _row(100, 100, 200, 200)]
-    assert scoring.cutoff_level(faces, {"width": 1000, "height": 800}) == 0.5
+    # 見切れは顔ごとの項目（#139）。切れていなければ 1
+    size = {"width": 1000, "height": 800}
+    assert scoring.face_levels(_row(0, 50, 100, 150), quality=size)["cutoff"] == 0.0
+    assert scoring.face_levels(_row(100, 100, 200, 200), quality=size)["cutoff"] == 1.0
 
 
 def test_unmeasured_photos_are_neither_good_nor_bad():
-    """未計測は、画質・美しさは真ん中（`UNKNOWN`）、欠点は引かない（分からない欠点で引かない）。"""
-    weights = scoring.Weights.default()._replace(technical=1, aesthetic=1, highlights=1, shadows=1, cutoff=1)
-    parts = scoring.photo_parts([_row(0, 0, 10, 10)], None, weights)
-    assert parts == {"technical": 50.0, "aesthetic": 50.0, "highlights": 0.0, "shadows": 0.0, "cutoff": 0.0}
+    """未計測は、画質・美しさは真ん中（`UNKNOWN`）、白飛び・黒つぶれは「していない」（分からない欠点で引かない）。"""
+    assert scoring.photo_levels(None) == {
+        "technical": 0.5, "aesthetic": 0.5, "highlights": 1.0, "shadows": 1.0,
+    }
 
 
 def test_zero_photo_weights_give_the_score_from_before():
@@ -328,10 +330,11 @@ def test_zero_photo_weights_give_the_score_from_before():
 
 
 def test_the_default_weights_are_the_ones_the_user_chose():
-    """既定は画質 0.3・美しさ 0.1、白飛び・黒つぶれ・見切れは 0（2026-10-16・利用者の決定）。"""
+    """写真全体は画質 0.3・美しさ 0.1、白飛び・黒つぶれは 0（2026-10-16・利用者の決定）。比重は 70（#139）。"""
     weights = scoring.Weights.default()
     assert (weights.technical, weights.aesthetic) == (0.3, 0.1)
-    assert (weights.highlights, weights.shadows, weights.cutoff) == (0.0, 0.0, 0.0)
+    assert (weights.highlights, weights.shadows) == (0.0, 0.0)
+    assert weights.face_ratio == 70.0
 
 
 def test_the_breakdown_adds_up_to_the_score_with_photo_weights():
@@ -340,11 +343,28 @@ def test_the_breakdown_adds_up_to_the_score_with_photo_weights():
     measured = {"technical": 60.0, "aesthetic": 5.0, "highlight_clip": 0.1, "shadow_clip": 0.05,
                 "width": 100, "height": 100}
     weights = scoring.Weights.default()._replace(technical=0.3, aesthetic=0.2, highlights=0.4, shadows=0.4, cutoff=0.1)
-    parts = scoring.photo_breakdown(rows, 0.0, weights, measured)
+    parts = scoring.photo_breakdown(rows, (), weights, measured)
     score = scoring.family_photo_scores(rows, weights=weights, quality={1: measured})[1]
     assert parts["total"] == pytest.approx(score)
-    assert parts["highlights"] == pytest.approx(-100 * 0.4 * 0.1 / scoring.CLIP_FULL)
-    assert parts["cutoff"] == pytest.approx(-10.0)  # 顔が角に接している
+    photo_share = 1.0 - weights.ratio()
+    assert parts["highlights"] == pytest.approx(
+        photo_share * 100 * 0.4 * (1 - 0.1 / scoring.CLIP_FULL) / (0.3 + 0.2 + 0.4 + 0.4)
+    )
+    assert parts["cutoff"] == 0.0  # 顔が角に接している
+
+
+def test_the_ratio_moves_the_score_between_the_faces_and_the_whole_photo():
+    """比重 100 なら顔の点だけ、0 なら写真全体の点だけ（#139・利用者の式）。"""
+    rows = [dict(_row(10, 10, 60, 60), media_id=1, person_id=1, aligned=1, yaw=0.0, sharpness=200.0,
+                 eye_blink=0.0, mouth_smile=0.3)]
+    measured = {"technical": 75.0, "aesthetic": 4.0, "highlight_clip": 0.0, "shadow_clip": 0.0,
+                "width": 100, "height": 100}
+    faces_only = scoring.photo_breakdown(rows, (), scoring.Weights.default()._replace(face_ratio=100), measured)
+    photo_only = scoring.photo_breakdown(rows, (), scoring.Weights.default()._replace(face_ratio=0), measured)
+    assert faces_only["total"] == pytest.approx(100.0)  # くっきり正面・目を開けて笑った顔1つ
+    assert photo_only["total"] == pytest.approx(100.0 * 0.3 / (0.3 + 0.1))  # 画質は満点・美しさは 0
+    half = scoring.photo_breakdown(rows, (), scoring.Weights.default()._replace(face_ratio=50), measured)
+    assert half["total"] == pytest.approx((faces_only["total"] + photo_only["total"]) / 2)
 
 
 @pytest.mark.models

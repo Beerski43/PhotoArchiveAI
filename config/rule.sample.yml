@@ -19,18 +19,21 @@ include_auto_assigned: true
 # similar_far_distance: 14
 # copy_distance: 9
 # 並びの重み（書いていない項目は既定値）。
+# 点 = (Σ 家族の顔の点 × 人物の重み − Σ 他人(減点)の顔の点 × strangers) × face_ratio / 100
+#      + 写真全体の点 × (100 − face_ratio) / 100。顔の6項目・写真全体の4項目は、それぞれの中での比（#139）
 # weights:
-#   sharpness: 0.35
-#   frontal: 0.25
-#   eyes: 0.20
-#   smile: 0.20
-#   member_bonus: 20
-#   stranger_penalty: 30  # 他人(減点)の顔（GUI で顔認証外にした顔のうち印を付けた顔）1つぶんの減点
-#   technical: 0.3     # 写真の画質（ぶれ・ピンぼけ・暗さ。MUSIQ の値。photoarchive assess で測る）
-#   aesthetic: 0.1     # 写真の美しさ（構図。NIMA の値）。画質とは別の重みで両方が点に入る。どちらに寄せるかは2つの比
-#   highlights: 0      # 白飛びの減点
-#   shadows: 0         # 黒つぶれの減点
-#   cutoff: 0          # 家族の顔が写真の縁で切れているときの減点
+#   face_ratio: 70     # 比重（0〜100）。顔の側の割合。残りが写真全体
+#   sharpness: 0.3     # 顔: ボケていない
+#   frontal: 0.2       # 顔: 正面を向いている
+#   eyes: 0.15         # 顔: 目を開けている
+#   smile: 0.15        # 顔: 笑っている
+#   size: 0.15         # 顔: 大きく写っている（その写真でいちばん大きい顔と比べる）
+#   cutoff: 0.05       # 顔: 写真の縁で切れていない
+#   strangers: 1.0     # 他人(減点)の顔（GUI で顔認証外にした顔のうち印を付けた顔）の点にかける重み
+#   technical: 0.3     # 写真全体: 画質（ぶれ・ピンぼけ・暗さ。MUSIQ の値。photoarchive assess で測る）
+#   aesthetic: 0.1     # 写真全体: 美しさ（構図。NIMA の値）。画質とは別の重みで両方が点に入る。どちらに寄せるかは2つの比
+#   highlights: 0      # 写真全体: 白飛びしていない
+#   shadows: 0         # 写真全体: 黒つぶれしていない
 # 出力の形。year は出力先の中に年ごとのフォルダ（既定）、flat は出力先の直下に平らに。
 # output_layout: year
 # 年ごとの枚数は年ごとにも書ける（書いていない年からは選ばない）。

@@ -337,7 +337,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `expression.py` | **顔の表情**（目閉じ・笑顔）を保存済みサムネイルから測る（MediaPipe Face Landmarker・#95）。モデル `face_landmarker.task` は `scripts/fetch_models.py` で置く |
 | `quality.py` | **写真全体の良し悪し**（#106）。画質（MUSIQ）・美しさ（NIMA）を ONNX で、白飛び・黒つぶれを明るさで測る（`photoarchive assess`）。**前処理は pyiqa の PyTorch の処理を numpy に写したもの**。ONNX は `scripts/export_iqa_onnx.py` が別の仮想環境で書き出す（アプリに PyTorch を入れない・利用者の決定） |
 | `matcher.py` | 自動紐づけと `family_score` の再計算 |
-| `strangers.py` | **他人(減点)の顔の重み**（#100・#110）。GUI で顔認証外にした顔のうち利用者が印（`Face.penalize`）を付けた顔だけを、目立ち具合（家族の顔と比べた大きさ）で `select` と `match` の点から引く。**未分類の顔と印の無い顔認証外の顔は点に入れない**（#100 の「家族らしくなさ」はやめた） |
+| `strangers.py` | **他人(減点)の顔を集める**（#100・#110・#139）。GUI で顔認証外にした顔のうち利用者が印（`Face.penalize`）を付けた顔だけを、`select` と `match` が**家族と同じ項目の顔の点 × 重み**で引く（`scoring.photo_breakdown`）。**未分類の顔と印の無い顔認証外の顔は点に入れない**（#100 の「家族らしくなさ」はやめた） |
 | `recommend.py` | 顔を「この人物に似た順」に並べる（GUI の顔候補の推薦・#69）。**閾値では切らない** |
 | `evaluation.py` | 手本を1件ずつ抜いて、自動紐づけの取りこぼし率と誤一致率を実測 |
 | `gui.py` | 人物登録と顔の割り当て画面。起動すると3枚のタブ（`AppWindow`）の1枚目 |

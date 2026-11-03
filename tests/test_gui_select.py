@@ -356,8 +356,8 @@ def test_the_later_row_covers_years_after_this_one(tmp_path):
 
 
 def test_every_weight_has_a_field_on_the_screen(window):
-    """重みを足したら画面にも出す（#106 の5つ）。順は `scoring.Weights` と同じ。"""
-    assert [key for key, _, _ in gui_select.WEIGHT_FIELDS] == list(scoring.Weights._fields)
+    """重みを足したら画面にも出す（#106 の5つ・#139 の大きさ・他人・比重）。"""
+    assert sorted(key for key, _, _ in gui_select.WEIGHT_FIELDS) == sorted(scoring.Weights._fields)
     assert set(window.selection.weight_spins) == set(scoring.Weights._fields)
     assert [key for key, _ in gui_select.BREAKDOWN_LABELS] == list(scoring.BREAKDOWN_KEYS)
 
@@ -427,8 +427,10 @@ def test_each_weight_has_a_gauge_that_moves_its_value_by_the_step(window):
     technical.slider.setValue(14)
     assert panel.weight_spins["technical"].value() == pytest.approx(0.70)
     assert panel.current_rule()["weights"]["technical"] == pytest.approx(0.70)
-    panel.weight_rows["member_bonus"].slider.setValue(35)
-    assert panel.current_rule()["weights"]["member_bonus"] == pytest.approx(35.0)
+    panel.weight_rows["face_ratio"].slider.setValue(35)
+    assert panel.current_rule()["weights"]["face_ratio"] == pytest.approx(35.0)
+    panel.weight_rows["strangers"].slider.setValue(15)
+    assert panel.current_rule()["weights"]["strangers"] == pytest.approx(1.5)
     panel.number_rows["copy_distance"].slider.setValue(12)
     assert panel.current_rule()["copy_distance"] == 12
 

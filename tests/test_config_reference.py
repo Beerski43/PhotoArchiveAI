@@ -104,10 +104,10 @@ def test_the_check_would_catch_a_missing_key_and_a_stale_default():
     """この番人自身が働くことを確かめる。"""
     text = REFERENCE.read_text(encoding="utf-8")
     dropped = "\n".join(line for line in text.splitlines() if not line.startswith("| `copy_distance`"))
-    stale = text.replace("| `member_bonus` | `20` |", "| `member_bonus` | `10` |")
+    stale = text.replace("| `face_ratio` | `70` |", "| `face_ratio` | `50` |")
 
     assert any(problem.startswith("copy_distance") for problem in missing_from_reference(dropped))
-    assert "member_bonus: 既定が '10'（実装は 20.0）" in missing_from_reference(stale)
+    assert "face_ratio: 既定が '50'（実装は 70.0）" in missing_from_reference(stale)
 
 
 def test_the_samples_mention_every_key():

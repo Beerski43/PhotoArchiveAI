@@ -1,8 +1,8 @@
-"""家族の写真に写った**他人(減点)の顔**の点を下げる（#100・#110）。
+"""家族の写真に写った**他人(減点)の顔**の点を下げる（#100・#110・#139）。
 
 **減点するのは、利用者が選んだ顔だけ**（#110・2026-10-17 の利用者の決定）。顔認証外にした顔のうち「減点する」の印を
-付けた顔だけを、家族と比べた大きさ（目立ち具合）× 30 で引く。未分類の顔と、印の無い顔認証外の顔は引かない。
-以前（#100）は未分類・顔認証外の顔すべてを、家族の顔までの距離（家族らしくなさ）を掛けて引いていた。
+付けた顔だけを引く。未分類の顔と、印の無い顔認証外の顔は引かない。
+**引く点は、家族と同じ項目で出した顔の点 × 重み**（#139・利用者の決定）。以前（#100・#110）は大きさだけで引いていた。
 """
 
 import pytest
@@ -43,52 +43,96 @@ def father(connection):
     return db.add_person(connection, "父")
 
 
-def _weights(connection):
-    return strangers.weights(connection, db.family_faces(connection))
+def _strangers(connection):
+    return strangers.faces(connection, db.family_faces(connection))
 
 
-def test_the_prominence_is_a_straight_line_between_its_bounds():
-    assert strangers.prominence(strangers.SMALL) == 0.0
-    assert strangers.prominence(0.65) == pytest.approx(0.5)
-    assert strangers.prominence(1.4) == 1.0
+def _scores(connection, weights=None):
+    rows = db.family_faces(connection)
+    return scoring.family_photo_scores(
+        rows, strangers.faces(connection, rows), weights, largest=db.largest_face_sizes(connection)
+    )
 
 
 def test_only_the_faces_marked_to_penalize_count(connection, father):
     """**選んだ顔だけ。** 未分類と、印の無い顔認証外の顔は引かない（#110）。"""
     photo = _media(connection, 1)
     _face(connection, photo, person_id=father, source=db.ASSIGN_MANUAL)
-    _face(connection, photo, source=db.ASSIGN_REJECTED, penalize=True)
+    marked = _face(connection, photo, source=db.ASSIGN_REJECTED, penalize=True)
     _face(connection, photo, source=db.ASSIGN_REJECTED)  # 顔認証外にしただけ
     _face(connection, photo)  # 未分類
-    assert _weights(connection) == {photo: pytest.approx(1.0)}
-
-
-def test_a_small_marked_face_weighs_little(connection, father):
-    """大きさを掛ける（利用者の決定）。背景に小さく写っただけなら引かない。"""
-    photo = _media(connection, 1)
-    _face(connection, photo, person_id=father, source=db.ASSIGN_MANUAL)
-    _face(connection, photo, size=65, source=db.ASSIGN_REJECTED, penalize=True)
-    _face(connection, photo, size=20, source=db.ASSIGN_REJECTED, penalize=True)
-    assert _weights(connection) == {photo: pytest.approx(strangers.prominence(0.65))}
+    found = _strangers(connection)
+    assert list(found) == [photo]
+    assert [face["id"] for face in found[photo]] == [marked]
 
 
 def test_photos_without_family_are_not_looked_at(connection, father):
     photo = _media(connection, 1)
     _face(connection, photo, source=db.ASSIGN_REJECTED, penalize=True)
-    assert _weights(connection) == {}
+    assert _strangers(connection) == {}
 
 
-def test_a_close_persons_face_is_not_the_yardstick(connection, father):
-    """大きさは**家族の顔**と比べる。親しい人が大きく写っていても物差しにしない。"""
-    friend = db.add_person(connection, "友")
-    db.set_person_scoring(connection, friend, close=True, weight=1.0)
+def test_a_crisp_stranger_takes_more_than_a_blurred_one(connection, father):
+    """**他人の顔も家族と同じ項目で点を出す**（#139・利用者の決定）。ボケて横を向いた他人はあまり引かない。"""
+    crisp = _media(connection, 1)
+    _face(connection, crisp, person_id=father, source=db.ASSIGN_MANUAL)
+    _face(connection, crisp, source=db.ASSIGN_REJECTED, penalize=True)
+    blurred = _media(connection, 2)
+    _face(connection, blurred, person_id=father, source=db.ASSIGN_MANUAL)
+    face = _face(connection, blurred, source=db.ASSIGN_REJECTED, penalize=True)
+    db.save_appearance(connection, [(face, Appearance(False, None, 20.0))])
+    scores = _scores(connection)
+    assert scores[crisp] < scores[blurred]
+
+
+def test_a_small_stranger_takes_less_than_a_large_one(connection, father):
+    """大きさも顔の項目。背景に小さく写った他人は、家族と同じ大きさの他人より引かない。"""
+    large = _media(connection, 1)
+    _face(connection, large, person_id=father, source=db.ASSIGN_MANUAL)
+    _face(connection, large, source=db.ASSIGN_REJECTED, penalize=True)
+    small = _media(connection, 2)
+    _face(connection, small, person_id=father, source=db.ASSIGN_MANUAL)
+    _face(connection, small, size=20, source=db.ASSIGN_REJECTED, penalize=True)
+    scores = _scores(connection)
+    assert scores[large] < scores[small]
+
+
+def test_the_penalty_is_the_stranger_face_score_times_the_weight_and_the_ratio(connection, father):
+    """引く点 = 他人の顔の点 × `strangers` × 比重（#139）。重み 0 なら引かない。"""
+    alone = _media(connection, 1)
+    _face(connection, alone, person_id=father, source=db.ASSIGN_MANUAL)
+    crowded = _media(connection, 2)
+    _face(connection, crowded, person_id=father, source=db.ASSIGN_MANUAL)
+    _face(connection, crowded, source=db.ASSIGN_REJECTED, penalize=True)
+    weights = scoring.Weights.default()
+    stranger = _strangers(connection)[crowded][0]
+    expected = weights.ratio() * weights.strangers * scoring.face_score(stranger, weights, 100.0)
+    assert expected > 0
+    scores = _scores(connection, weights)
+    assert scores[alone] - scores[crowded] == pytest.approx(expected)
+    heavy = _scores(connection, weights._replace(strangers=2.0))
+    assert scores[alone] - heavy[crowded] == pytest.approx(2 * expected)
+    off = _scores(connection, weights._replace(strangers=0.0))
+    assert off[alone] == pytest.approx(off[crowded])
+
+
+def test_the_marked_faces_are_measured_before_they_are_scored(connection, father):
+    """他人(減点)の顔の見え方・表情も測る（#139）。印の無い顔認証外の顔は測らない。"""
     photo = _media(connection, 1)
-    _face(connection, photo, size=50, person_id=father, source=db.ASSIGN_MANUAL)
-    _face(connection, photo, size=200, person_id=friend, source=db.ASSIGN_MANUAL)
-    _face(connection, photo, size=50, source=db.ASSIGN_REJECTED, penalize=True)
-    assert _weights(connection) == {photo: pytest.approx(1.0)}
-
-
+    marked = db.add_face(
+        connection, media_id=photo, bbox=(0, 100, 100, 0), embedding=None,
+        embed_version=db.embedding_model.ACTIVE.version, person_id=None,
+        assign_source=db.ASSIGN_REJECTED, thumbnail=b"x",
+    )
+    db.set_face_penalty(connection, [marked], True)
+    db.add_face(
+        connection, media_id=photo, bbox=(0, 100, 100, 0), embedding=None,
+        embed_version=db.embedding_model.ACTIVE.version, person_id=None,
+        assign_source=db.ASSIGN_REJECTED, thumbnail=b"x",
+    )
+    assert db.faces_without_appearance(connection, (db.ASSIGN_MANUAL,)) == []
+    assert db.faces_without_appearance(connection, (db.ASSIGN_MANUAL,), penalized=True) == [marked]
+    assert db.faces_without_expression(connection, (db.ASSIGN_MANUAL,), penalized=True) == [marked]
 def test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves(connection, father):
     photo = _media(connection, 1)
     unassigned = _face(connection, photo)
@@ -100,19 +144,6 @@ def test_the_mark_is_only_for_rejected_faces_and_is_cleared_when_the_face_moves(
     assert connection.execute("SELECT penalize FROM Face WHERE id = ?", (rejected,)).fetchone()[0] is None
     db.reject_faces(connection, [rejected])
     assert connection.execute("SELECT penalize FROM Face WHERE id = ?", (rejected,)).fetchone()[0] is None
-
-
-def test_the_penalty_is_subtracted_from_the_photo_score(connection, father):
-    """重み 1 あたり `STRANGER_PENALTY`（30・利用者の決定）を引く。"""
-    assert scoring.STRANGER_PENALTY == 30.0
-    alone = _media(connection, 1)
-    _face(connection, alone, person_id=father, source=db.ASSIGN_MANUAL)
-    crowded = _media(connection, 2)
-    _face(connection, crowded, person_id=father, source=db.ASSIGN_MANUAL)
-    _face(connection, crowded, source=db.ASSIGN_REJECTED, penalize=True)
-    rows = db.family_faces(connection)
-    scores = scoring.family_photo_scores(rows, strangers.weights(connection, rows))
-    assert scores[alone] - scores[crowded] == pytest.approx(30.0)
 
 
 def test_select_and_match_use_the_same_penalty(connection, father):
@@ -147,7 +178,7 @@ def test_a_family_photo_with_a_penalized_face_still_ranks_above_a_photo_without_
 
     rows = db.family_faces(connection)
     off = scoring.Weights.default()._replace(technical=0, aesthetic=0)
-    assert scoring.family_photo_scores(rows, strangers.weights(connection, rows), off)[crowded] < 0
+    assert scoring.family_photo_scores(rows, strangers.faces(connection, rows), off)[crowded] < 0
     order = [m["id"] for m in select_media(
         connection, {"family_only": False, "remove_similar": False}
     ) if m["id"] in (clear, crowded, nobody)]

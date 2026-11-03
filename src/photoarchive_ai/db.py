@@ -169,7 +169,7 @@ SCHEMA = [
     "display_order INTEGER,"
     # 区分（v12・#110）。NULL=家族 / 'close'=親しい人。親しい人だけの写真は家族の写真に数えない。
     "category TEXT,"
-    # `select` の点の重み（v12・#110）。NULL=1.0。顔の良さと人数の加点にかける。
+    # `select` の点の重み（v12・#110）。NULL=1.0。その人物の顔の点にかけて足す（#139）。
     "weight REAL"
     ")",
     "CREATE TABLE IF NOT EXISTS Face ("
@@ -213,7 +213,7 @@ SCHEMA = [
     # mouth_smile: 笑顔（左右の平均・0〜1）。`smile_score`（scan が書く古い笑顔）とは別物。
     "mouth_smile REAL,"
     # 他人(減点)の顔（v12・#110）。1=減点する。**顔認証外（rejected）の顔にだけ付ける。** 割り当てを
-    # 変えたら消す（`select` の点から、家族と比べた大きさ × 減点を引く・`strangers.weights`）。
+    # 変えたら消す（`select` の点から、その顔の点 × 重みを引く・`strangers.faces`・#139）。
     "penalize INTEGER,"
     "FOREIGN KEY(media_id) REFERENCES Media(id) ON DELETE CASCADE,"
     "FOREIGN KEY(person_id) REFERENCES Person(id) ON DELETE SET NULL"
@@ -2460,14 +2460,22 @@ def _teacher_age(row) -> float:
     return float("nan") if age is None or age < 0 else float(age)
 
 
+#: 他人(減点)の顔（顔認証外で印のある顔・#110）を選ぶ SQL の条件。`faces_without_*` の ``penalized`` で使う。
+_PENALIZED_CONDITION = f"(assign_source = '{ASSIGN_REJECTED}' AND penalize = 1)"
+
+
 def faces_without_appearance(
-    connection: sqlite3.Connection, assign_sources: Sequence[str], unassigned: bool = False
+    connection: sqlite3.Connection,
+    assign_sources: Sequence[str],
+    unassigned: bool = False,
+    penalized: bool = False,
 ) -> List[int]:
     """見え方（`Face.sharpness` ほか）が未計測で、サムネイルのある顔の id。
 
     ``assign_sources`` の割り当ての顔だけ。**測るのは使う顔だけ**
     （全顔は約6万件で、1件 約17ms）。``unassigned`` なら未分類の顔も入れる
-    （#135。GUI でボケた未分類の顔を絞って顔認証外にするため）。
+    （#135。GUI でボケた未分類の顔を絞って顔認証外にするため）。``penalized`` なら他人(減点)の顔も入れる
+    （#139。`select` の他人の減点は顔の点で引くため）。
     """
     conditions = []
     params: List[Any] = list(assign_sources)
@@ -2476,6 +2484,8 @@ def faces_without_appearance(
         conditions.append(f"assign_source IN ({placeholders})")
     if unassigned:
         conditions.append("assign_source IS NULL")
+    if penalized:
+        conditions.append(_PENALIZED_CONDITION)
     if not conditions:
         return []
     rows = connection.execute(
@@ -2499,18 +2509,24 @@ def count_unassigned_without_sharpness(connection: sqlite3.Connection) -> int:
 
 
 def faces_without_expression(
-    connection: sqlite3.Connection, assign_sources: Sequence[str]
+    connection: sqlite3.Connection, assign_sources: Sequence[str], penalized: bool = False
 ) -> List[int]:
     """表情（`Face.expression_found`）が未計測で、サムネイルのある顔の id。
 
-    ``assign_sources`` の割り当ての顔だけ（`faces_without_appearance` と同じ考え）。
+    ``assign_sources`` の割り当ての顔だけ（`faces_without_appearance` と同じ考え）。``penalized`` なら
+    他人(減点)の顔も入れる（#139）。
     """
-    if not assign_sources:
+    conditions = []
+    if assign_sources:
+        placeholders = ",".join("?" for _ in assign_sources)
+        conditions.append(f"assign_source IN ({placeholders})")
+    if penalized:
+        conditions.append(_PENALIZED_CONDITION)
+    if not conditions:
         return []
-    placeholders = ",".join("?" for _ in assign_sources)
     rows = connection.execute(
         "SELECT id FROM Face WHERE expression_found IS NULL AND thumbnail IS NOT NULL"
-        f" AND assign_source IN ({placeholders}) ORDER BY id",
+        f" AND ({' OR '.join(conditions)}) ORDER BY id",
         tuple(assign_sources),
     ).fetchall()
     return [int(row[0]) for row in rows]
@@ -2811,7 +2827,10 @@ def set_face_penalty(
 def penalized_faces(
     connection: sqlite3.Connection, media_ids: Iterable[int]
 ) -> List[Dict[str, Any]]:
-    """``media_ids`` の写真の、**他人(減点)の顔**（顔認証外にして印を付けた顔）の矩形（#110）。"""
+    """``media_ids`` の写真の、**他人(減点)の顔**（顔認証外にして印を付けた顔）の矩形と見え方・表情（#110・#139）。
+
+    列は `family_faces` と同じ名前（`scoring.face_score` に同じ形で渡すため）。
+    """
     found: List[Dict[str, Any]] = []
     ids = list(media_ids)
     for start in range(0, len(ids), 500):
@@ -2820,7 +2839,8 @@ def penalized_faces(
         found.extend(
             dict(row)
             for row in connection.execute(
-                "SELECT id, media_id, bbox_top, bbox_right, bbox_bottom, bbox_left FROM Face"
+                "SELECT id, media_id, bbox_top, bbox_right, bbox_bottom, bbox_left,"
+                " aligned, yaw, sharpness, eye_blink, mouth_smile FROM Face"
                 " WHERE assign_source = ? AND penalize = 1"
                 f" AND media_id IN ({placeholders})",
                 [ASSIGN_REJECTED] + chunk,
@@ -2829,13 +2849,38 @@ def penalized_faces(
     return found
 
 
+
+def largest_face_sizes(
+    connection: sqlite3.Connection, media_ids: Optional[Iterable[int]] = None
+) -> Dict[int, float]:
+    """写真ごとの、**検出したすべての顔**のうちいちばん大きい顔の一辺（面積の平方根・#139）。
+
+    顔の大きさの物差し（`scoring.size_level`）。割り当ての無い顔も入れる（その写真で目立っている顔と比べるため）。
+    ``media_ids`` を渡すとその写真だけ。**サムネイルは読まない。**
+    """
+    query = (
+        "SELECT media_id, MAX(MAX(0, bbox_bottom - bbox_top) * MAX(0, bbox_right - bbox_left))"
+        " FROM Face"
+    )
+    if media_ids is None:
+        rows = connection.execute(f"{query} GROUP BY media_id").fetchall()
+    else:
+        rows = []
+        ids = list(media_ids)
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(connection.execute(
+                f"{query} WHERE media_id IN ({placeholders}) GROUP BY media_id", chunk
+            ).fetchall())
+    return {int(row[0]): float(np.sqrt(row[1] or 0)) for row in rows}
+
 def recompute_family_scores(connection: sqlite3.Connection) -> None:
     """``family_score`` を、家族の顔だけから計算し直す。
 
     **式は `scoring.family_photo_score` に1つだけある**（`select` もそれを使う）。
     以前は「家族の顔の確信度の最大（手本は100）」で、**ボケた家族の顔でも満点**に
-    なっていた。いまは鮮明さ・正面・笑顔と、はっきり写った家族の人数で決まる
-    （利用者の要望。2026-10-09）。
+    なっていた。いまは顔ごとの点の和と写真全体の点を比重で合わせたもの（#139）。
     """
     from . import scoring
 
@@ -2846,7 +2891,10 @@ def recompute_family_scores(connection: sqlite3.Connection) -> None:
 
     # 写真全体の良し悪し（`PhotoQuality`・#106）も `select` と同じく読む（既定の重みで同じ点になるように）
     scores = scoring.family_photo_scores(
-        rows, strangers.weights(connection, rows), quality=photo_quality(connection, MODEL_VERSION)
+        rows,
+        strangers.faces(connection, rows),
+        quality=photo_quality(connection, MODEL_VERSION),
+        largest=largest_face_sizes(connection),
     )
     cursor = connection.cursor()
     cursor.execute("UPDATE AnalysisResult SET family_score = 0.0")

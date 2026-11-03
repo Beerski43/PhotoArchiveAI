@@ -401,11 +401,13 @@ def match_faces(
         # 式は家族の顔の見え方と表情を使うので、付けたばかりの顔を先に測る。
         from . import appearance, expression
 
+        # 他人(減点)の顔も測る（#139。引く点は家族と同じ項目の顔の点）。
         appearance.fill_missing(
-            connection, assign_sources=(db.ASSIGN_AUTO,), progress_callback=progress_callback
+            connection, assign_sources=(db.ASSIGN_AUTO,), progress_callback=progress_callback,
+            penalized=True,
         )
         # 表情は手本も測る（手本の見え方は照合の前に測ってあるが、表情はまだ）。
-        expression.fill_missing(connection, progress_callback=progress_callback)
+        expression.fill_missing(connection, progress_callback=progress_callback, penalized=True)
         db.recompute_family_scores(connection)
         # 見え方を測った進み具合で終わらせない。**最後は照合した件数を出す。**
         if progress_callback is not None:
