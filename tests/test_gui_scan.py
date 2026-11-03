@@ -197,3 +197,115 @@ def test_status_lines_read_naturally():
     ) == "スキャン: 3 / 10 件（a.jpg）"
     assert "ありません" in gui_scan.describe_event("scan", {"kind": "progress", "current": 0, "total": 0})
     assert "何も消していません" in gui_scan.describe_final("scan", {"kind": "aborted", "message": "x"})
+
+
+# ---------------------------------------------------------------------------
+# HEIC の変換と写真の良し悪し（#130）
+# ---------------------------------------------------------------------------
+
+
+def test_the_intake_tab_converts_heic_in_the_background(window, source):
+    from tests.helpers import write_heic
+
+    write_heic(source / "phone.heic")
+    panel = window.scan_panel
+
+    panel.convert_button.click()
+
+    assert window.jobs.is_running()
+    # 実行中は、ほかの裏の処理も match も押せない
+    assert not panel.start_button.isEnabled()
+    assert not panel.convert_button.isEnabled()
+    assert not panel.assess_button.isEnabled()
+    assert not window.assignment.match_button.isEnabled()
+    _wait_until_finished(window)
+
+    assert panel.last_name == "convert_heic"
+    assert panel.last_final["kind"] == "done"
+    assert (source / "phone.jpg").exists()
+    log = panel.log.toPlainText()
+    assert "HEIC の変換が終わりました" in log and "続けてスキャン" in log
+    assert panel.convert_button.isEnabled() and panel.start_button.isEnabled()
+
+
+def test_a_jpeg_that_cannot_be_written_stops_the_conversion_and_is_reported(window, source, monkeypatch):
+    from tests.helpers import write_heic
+
+    write_heic(source / "phone.heic")
+    os.chmod(source, 0o555)
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warned.append(args[2]) or QMessageBox.Ok)
+    try:
+        if os.access(source, os.W_OK):  # root で流しているとき
+            pytest.skip("書き込み権限を外せない")
+        window.scan_panel.start_convert()
+        _wait_until_finished(window)
+    finally:
+        os.chmod(source, 0o755)
+
+    assert window.scan_panel.last_final["kind"] == "aborted"
+    assert warned and "JPEG を書けませんでした" in warned[0]
+
+
+@pytest.fixture()
+def family_photos(window, tmp_path, source):
+    from tests.helpers import add_family_photo
+
+    connection = window.assignment.connection
+    ids = [add_family_photo(connection, source / f"family{i}.jpg", width=40 + i) for i in range(2)]
+    window.scan_panel.refresh_assess_count()
+    window.scan_panel._set_running(False)
+    return ids
+
+
+def test_the_intake_tab_assesses_family_photos_in_the_background(window, family_photos):
+    from photoarchive_ai import quality
+    from tests.fakes import fake_quality_models
+
+    panel = window.scan_panel
+    panel.models_factory = fake_quality_models
+    assert panel.assess_count.text() == "まだ測っていない家族の写真: 2 枚"
+    assert panel.assess_button.isEnabled()
+
+    panel.assess_button.click()
+    assert window.jobs.is_running()
+    _wait_until_finished(window)
+
+    assert panel.last_name == "assess"
+    assert panel.last_final["kind"] == "done"
+    assert "測った写真 2 枚" in panel.log.toPlainText()
+    connection = window.assignment.connection
+    assert sorted(db.photo_quality(connection, quality.MODEL_VERSION)) == family_photos
+    # 測り終えたら、数え直してボタンを押せなくする
+    assert panel.assess_count.text() == "家族の写った写真はすべて測ってあります。"
+    assert not panel.assess_button.isEnabled()
+
+
+def test_assess_does_not_start_without_the_models(window, family_photos, monkeypatch):
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warned.append(args[2]) or QMessageBox.Ok)
+    monkeypatch.setattr("photoarchive_ai.face.find_model_file", lambda name: None)
+
+    window.scan_panel.start_assess()
+
+    assert not window.jobs.is_running()
+    assert warned and "export_iqa_onnx.py" in warned[0]
+
+
+def test_nothing_to_assess_disables_the_button(window):
+    panel = window.scan_panel
+    assert panel.assess_count.text() == "家族の写った写真はすべて測ってあります。"
+    assert not panel.assess_button.isEnabled()
+
+
+def test_status_lines_name_each_job():
+    assert gui_scan.describe_event(
+        "convert_heic", {"kind": "progress", "current": 0, "total": 0}
+    ) == "HEIC の変換: HEIC/HEIF のファイルはありません"
+    assert gui_scan.describe_event(
+        "assess", {"kind": "progress", "current": 5, "total": 20, "detail": "写真"}
+    ) == "写真の良し悪しの計測: 5 / 20 件（写真）"
+    stopped = gui_scan.describe_final(
+        "assess", {"kind": "stopped", "summary": {"total": 20, "measured": 5, "unreadable": 0, "missing": 0}}
+    )
+    assert "止めました" in stopped and "測った写真 5 枚" in stopped and "続きから" in stopped

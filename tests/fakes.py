@@ -219,3 +219,18 @@ def install_fake_backends() -> None:
     face.EMBED_MIN_FACE_PX = 4
     face.reset_model_cache()
     scoring.reset_model_cache()
+
+
+class FakeQualityModels:
+    """写真の良し悪しのフェイク（#130）。画質は写真の幅、美しさは 5。"""
+
+    def technical(self, rgb):
+        return float(rgb.shape[1])
+
+    def aesthetic(self, rgb):
+        return 5.0
+
+
+def fake_quality_models() -> FakeQualityModels:
+    """`jobs.run_assess` の ``models_factory``。子プロセスへ渡すので、モジュール直下に置く。"""
+    return FakeQualityModels()

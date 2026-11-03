@@ -180,7 +180,7 @@ def test_the_measure_job_runs_in_another_process(seeded):
     assert final is not None and final["kind"] == "done", final
     assert final["summary"] == {"measured": 1, "remaining": 0}
     assert db.get_face(connection, faces["未計測"])["sharpness"] > 0
-    assert "測った顔 1 件" in jobs.describe_summary(final["summary"])
+    assert "測った顔 1 件" in jobs.describe_summary(final["summary"], "measure_faces")
 
 
 # ---------------------------------------------------------------------------

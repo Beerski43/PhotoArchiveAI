@@ -831,7 +831,7 @@
 | `test_a_dry_run_of_match_writes_no_expression` | `--dry-run` は書かない |
 | `test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly` | **人数の加点 20**。10 では1人だけの笑顔の写真が家族のそろった写真を押しのけた（実データの出力で 97 → 240 枚）。境目は**ちょうど同点**（PR #97 のレビュー指摘2） |
 
-### `test_quality.py` — 写真全体の良し悪し（23件＋`models` 1件。#106）
+### `test_quality.py` — 写真全体の良し悪し（25件＋`models` 1件。#106・#130）
 
 **前処理は pyiqa（PyTorch）の処理を numpy に写したもの。** 正解値は PyTorch で作って埋め込んだ。写真の点まで一致することは `scripts/export_iqa_onnx.py` が実物のモデルで確かめる。
 
@@ -846,6 +846,8 @@
 | `test_the_models_are_required_with_how_to_make_them` | モデルが無ければ書き出し方を示して落ちる |
 | `test_assess_measures_only_family_photos_and_only_once` | 家族の写った写真だけ・**測った写真は二度と読まない** |
 | `test_assess_continues_where_it_stopped` | **途中で止めても続きから測る**（塊ごとに書く） |
+| `test_a_stop_request_writes_the_unfinished_chunk_and_the_next_run_continues` | **止める合図で、塊の途中まで測ったぶんも書いてから抜ける**。次は残りから（GUI の「止める」・#130） |
+| `test_the_missing_models_are_named_before_loading` | GUI が始める前に、置かれていないモデルを名指しで確かめる（#130） |
 | `test_an_unreadable_photo_is_recorded_and_not_read_again` | **中身が壊れた**写真は `readable=0` で残し、読み直さない |
 | `test_a_missing_photo_is_not_recorded_and_is_measured_after_remount` | **ファイルに届かない写真は記録しない。** マウントし直せば次で測る（未マウントで全部が二度と測られなくなっていた。PR #111 の指摘1） |
 | `test_assess_stops_before_starting_when_a_root_is_missing` | 写真の置き場が無ければ始める前に止める（`scan` と同じ） |
@@ -889,7 +891,7 @@
 | `test_a_negative_or_infinite_weight_is_refused` | 負・無限大・NaN の重みは受け付けない |
 | `test_a_version_11_database_gains_the_columns_and_keeps_everything` | **v11 → v12 で人物・手本・顔認証外が減らない**（CLAUDE.md §4）。既存の人物は家族・重み 1.0 |
 
-### `test_converter.py` — HEIC → JPEG（16件）
+### `test_converter.py` — HEIC → JPEG（18件。#130 で2件）
 
 | テスト | 内容 |
 |---|---|
@@ -909,6 +911,8 @@
 | `test_next_output_path_walks_past_occupied_numbers` | 空いている連番を探す |
 | `test_a_damaged_heic_is_asked_about_as_a_read_failure` | **壊れた HEIC は「読めない」として聞き、「書けない」と言わない**（PR #81 で利用者の依頼） |
 | `test_a_damaged_heic_stops_the_run_without_a_read_confirmation` | 読めないときの確認が無ければ止まる |
+| `test_a_failed_write_leaves_no_partial_jpeg` | **書き込みが途中で落ちても書きかけの JPEG を残さない**（残すと `scan` が壊れた JPEG を拾い、次の変換は `_1.jpg` を作る・#130） |
+| `test_a_stop_request_ends_the_run_and_the_next_run_continues` | 止める合図で次のファイルに進まない。次は変換済みを飛ばして残りから（#130） |
 
 ### `test_restore_heic_exif.py` — 変換した JPEG の撮影日時（11件）
 
@@ -1011,7 +1015,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_stop_skips_the_remaining_roots` | 止めたら残りの root は走査しない。記録するのは終えた root だけ |
 | `test_the_commit_interval_bounds_how_long_the_write_lock_is_held` / `test_the_default_commit_interval_holds_the_lock_between_files` | 1件ごとに commit すれば、間にほかの接続（GUI）が書ける。既定（CLI）は今までどおりまとめて commit（対照） |
 
-### `test_jobs.py` — 長い処理を裏の別プロセスで流す（7件。#129）
+### `test_jobs.py` — 長い処理を裏の別プロセスで流す（14件。#129・#130）
 
 | テスト | 内容 |
 |---|---|
@@ -1021,8 +1025,15 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_safety_abort_is_reported_with_its_reason` / `test_an_unexpected_failure_is_reported` | 安全弁の中断と思わぬ失敗を、理由つきで届ける |
 | `test_a_child_that_dies_silently_is_reported_as_failed` | **子が知らせを送らずに落ちたら（強制終了）、親が `failed` を作る**（待ち続けない） |
 | `test_the_summary_line_names_every_count` | 結果の1行 |
+| `test_a_convert_job_converts_in_another_process` | 子プロセスで `convert-heic` を流し、集計が届く（#130） |
+| `test_a_convert_job_skips_an_unreadable_heic_and_lists_it` | **読めない HEIC は飛ばして知らせ、集計に残す**（裏では聞き返せない） |
+| `test_a_convert_job_stops_when_a_jpeg_cannot_be_written` | **JPEG が書けなければ `aborted` で止める**（続けても書けない） |
+| `test_an_assess_job_measures_family_photos_in_another_process` | 子プロセスで `assess` を流す（フェイクのモデル `tests.fakes.fake_quality_models`） |
+| `test_an_assess_job_stopped_at_once_measures_at_most_one_photo` | 止める合図で `stopped` |
+| `test_an_assess_job_without_models_fails_with_how_to_make_them` | モデルが無ければ置き方つきで落ちる |
+| `test_nothing_to_assess_reads_naturally` | 測る写真が無いときの1行 |
 
-### `test_gui_scan.py` — GUI の「取り込み」タブ（10件。#129）
+### `test_gui_scan.py` — GUI の「取り込み」タブ（16件。#129・#130）
 
 | テスト | 内容 |
 |---|---|
@@ -1034,6 +1045,12 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_window_waits_for_other_writers` | 画面の接続はほかの書き込みを待つ（`busy_timeout`） |
 | `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
 | `test_status_lines_read_naturally` | 進み具合の文 |
+| `test_the_intake_tab_converts_heic_in_the_background` | `HEIC を JPEG に変換する` を裏で流す。**実行中はほかの2つと `match` を押せない**。終われば「続けてスキャン」と出す（#130） |
+| `test_a_jpeg_that_cannot_be_written_stops_the_conversion_and_is_reported` | JPEG が書けなければ止めて窓で知らせる |
+| `test_the_intake_tab_assesses_family_photos_in_the_background` | `写真の良し悪しを測る` を裏で流す。測っていない枚数を出し、測り終えたら押せなくなる |
+| `test_assess_does_not_start_without_the_models` | **モデルが無ければ始めずに置き方を出す** |
+| `test_nothing_to_assess_disables_the_button` | 測る写真が無ければ押せない |
+| `test_status_lines_name_each_job` | 仕事ごとの進み具合・止めたときの文 |
 
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 

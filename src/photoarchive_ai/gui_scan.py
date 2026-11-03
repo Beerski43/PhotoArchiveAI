@@ -1,10 +1,11 @@
-"""GUI から長い処理を裏で流す（#129・Phase 9）。いまは `scan`。
+"""GUI から長い処理を裏で流す（#129・Phase 9）。`convert-heic`・`scan`・`assess`（#130）。
 
 - `JobController`: 裏で流している仕事（`jobs.Job`）を1つ持ち、タイマーで知らせを受け取る。
   **同時に流すのは1つだけ。**
 - `JobStatusBar`: 進み具合と「止める」。**どのタブからも見える位置**（タブの右上）に置く。
   顔の割り当てを続けながら、裏の進み具合を見られるようにする（利用者の決定・2026-11-03）
-- `ScanPanel`: 3枚目のタブ「取り込み」。root を出し、`scan` を始める
+- `ScanPanel`: 3枚目のタブ「取り込み」。root を出し、上から **HEIC を JPEG に変換 → スキャン →
+  写真の良し悪しを測る**（一連の流れの順・#130）。3つとも同じ root の一覧を使う
 
 **止めても、次の `scan` は続きから**（済んだぶんは commit してあり、差分判定で飛ばす）。
 消えたファイルの行の削除と root の記録は、最後まで走査したときだけ。
@@ -12,6 +13,10 @@
 GUI に出さない `scan` の引数: ``--force-rescan``（顔の行を作り直し、**手動割り当てと
 顔認証外が消える**・CLAUDE.md §8）・``--force-prune``（2割の安全弁を外す）・
 ``--allow-missing-embeddings``。どれも CLI で、何が起きるかを分かったうえで使う。
+`assess` の ``--limit`` も出さない（動作確認用）。
+
+`convert-heic` は裏では問い返せないので、**読めない HEIC は飛ばして一覧に残し、JPEG が
+書けなければそこで止める**（`jobs.run_convert_heic`）。
 """
 
 from __future__ import annotations
@@ -45,7 +50,19 @@ LOG_MAX_LINES = 2000
 #: ワーカー数の既定（CLI の `scan --workers` と同じ）
 DEFAULT_WORKERS = min(4, max(1, (os.cpu_count() or 2) - 1))
 
-JOB_NAMES = {"scan": "スキャン", "measure_faces": "鮮明さの計測"}
+JOB_NAMES = {
+    "scan": "スキャン",
+    "measure_faces": "鮮明さの計測",
+    "convert_heic": "HEIC の変換",
+    "assess": "写真の良し悪しの計測",
+}
+#: 対象が無いときの文（``progress`` の ``total`` が 0）
+NOTHING_TO_DO = {
+    "scan": "新しく読むファイルはありません",
+    "measure_faces": "未計測の顔はありません",
+    "convert_heic": "HEIC/HEIF のファイルはありません",
+    "assess": "測る写真はありません",
+}
 
 
 def describe_event(name: str, event: Dict[str, Any]) -> Optional[str]:
@@ -58,9 +75,7 @@ def describe_event(name: str, event: Dict[str, Any]) -> Optional[str]:
         return f"{label}: ファイルを数えています（{current:,} 件）"
     if event["kind"] == "progress":
         if not total:
-            if name == "measure_faces":
-                return f"{label}: 未計測の顔はありません"
-            return f"{label}: 新しく読むファイルはありません"
+            return f"{label}: {NOTHING_TO_DO.get(name, '対象はありません')}"
         return f"{label}: {current:,} / {total:,} 件（{detail}）"
     return None
 
@@ -70,18 +85,23 @@ def describe_final(name: str, event: Dict[str, Any]) -> str:
     label = JOB_NAMES.get(name, name)
     kind = event["kind"]
     if kind == "done":
-        return f"{label}が終わりました。{jobs.describe_summary(event['summary'])}"
+        message = f"{label}が終わりました。{jobs.describe_summary(event['summary'], name)}"
+        if name == "convert_heic" and event["summary"].get("converted"):
+            message += "\n変換した JPEG は、続けてスキャンすると取り込まれます。"
+        return message
     if kind == "stopped" and name != "scan":
         return (
-            f"{label}を止めました。{jobs.describe_summary(event['summary'])}\n"
+            f"{label}を止めました。{jobs.describe_summary(event['summary'], name)}\n"
             "済んだぶんは保存してあります。次に始めると続きからになります。"
         )
     if kind == "stopped":
         return (
-            f"{label}を止めました。{jobs.describe_summary(event['summary'])}\n"
+            f"{label}を止めました。{jobs.describe_summary(event['summary'], name)}\n"
             "済んだぶんは保存してあります。次に始めると続きからになります"
             "（消えたファイルの行の削除は、最後まで走査したときだけ行います）。"
         )
+    if kind == "aborted" and name == "convert_heic":
+        return f"{label}を止めました: {event['message']}"
     if kind == "aborted":
         return f"{label}を中断しました（何も消していません）: {event['message']}"
     return f"{label}が失敗しました: {event['message']}"
@@ -200,8 +220,24 @@ def resolve_scan_roots(settings_roots: Sequence[str], connection) -> List[str]:
     return roots or db.list_scan_roots(connection)
 
 
+def _section_title(text: str) -> QLabel:
+    label = QLabel(f"<b>{text}</b>")
+    label.setTextFormat(Qt.RichText)
+    return label
+
+
+def _note(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setTextFormat(Qt.RichText)
+    return label
+
+
 class ScanPanel(QWidget):
-    """3枚目のタブ「取り込み」。`scan` を裏で流す。"""
+    """3枚目のタブ「取り込み」。`convert-heic`・`scan`・`assess` を裏で流す（#129・#130）。
+
+    上から一連の流れの順に並べる。**3つとも同じ root の一覧**（設定 → DB に記録された root）を使う。
+    """
 
     def __init__(
         self,
@@ -220,16 +256,17 @@ class ScanPanel(QWidget):
         self.initializer: Optional[Callable[[], None]] = None
         #: 子のログ（`None` なら CLI と同じ `data/logs/scan_*.log`）
         self.log_file: Optional[str] = None
+        #: `assess` のモデルを作るもの（`None` なら `quality.Models.load`。テストがフェイクを入れる）
+        self.models_factory: Optional[Callable[[], Any]] = None
+        #: このタブから流した仕事の、最後の終わりの知らせ
         self.last_final: Optional[Dict[str, Any]] = None
+        self.last_name: Optional[str] = None
 
-        intro = QLabel(
-            "写真を走査して、新しい写真・変わった写真の顔を検出します（photoarchive scan と同じ）。"
-            "NFS を読むので何時間もかかることがあります。<b>裏で流すので、そのあいだも顔の割り当てを続けられます</b>"
-            "（自動割り当て（match）だけは終わるまで押せません）。<br>"
+        intro = _note(
+            "写真の取り込みと、写真の良し悪しの計測を、<b>裏で流します</b>。そのあいだも顔の割り当てを続けられます"
+            "（自動割り当て（match）と、ほかの裏の処理は、終わるまで押せません）。"
             "途中で止めても、済んだぶんは保存され、次に始めると続きからになります。"
         )
-        intro.setWordWrap(True)
-        intro.setTextFormat(Qt.RichText)
 
         self.roots_list = QListWidget()
         self.roots_list.setMaximumHeight(110)
@@ -245,6 +282,12 @@ class ScanPanel(QWidget):
         self.start_button = QPushButton("スキャンを始める")
         self.start_button.clicked.connect(self.start_scan)
 
+        self.convert_button = QPushButton("HEIC を JPEG に変換する")
+        self.convert_button.clicked.connect(self.start_convert)
+        self.assess_button = QPushButton("写真の良し悪しを測る")
+        self.assess_button.clicked.connect(self.start_assess)
+        self.assess_count = QLabel("")
+
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(LOG_MAX_LINES)
@@ -257,13 +300,37 @@ class ScanPanel(QWidget):
         options.addWidget(self.prune_check)
         options.addStretch(1)
 
+        assess_row = QHBoxLayout()
+        assess_row.addWidget(self.assess_button)
+        assess_row.addWidget(self.assess_count, 1)
+
         layout = QVBoxLayout(self)
         layout.addWidget(intro)
-        layout.addWidget(QLabel("走査する root"))
+        layout.addWidget(QLabel("root（写真の置き場）"))
         layout.addWidget(self.roots_list)
         layout.addWidget(self.roots_note)
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("1. HEIC を JPEG に変換（photoarchive convert-heic と同じ）"))
+        layout.addWidget(_note(
+            "iPhone の HEIC/HEIF を、同じフォルダに JPEG で書きます。元のファイルは残します。"
+            "変換済みの写真は飛ばします。読めない HEIC は飛ばして下に出し、JPEG が書けなければそこで止めます。"
+        ))
+        layout.addWidget(self.convert_button, 0, Qt.AlignLeft)
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("2. スキャン（photoarchive scan と同じ）"))
+        layout.addWidget(_note(
+            "新しい写真・変わった写真の顔を検出します。NFS を読むので何時間もかかることがあります。"
+        ))
         layout.addLayout(options)
         layout.addWidget(self.start_button, 0, Qt.AlignLeft)
+        layout.addSpacing(6)
+        layout.addWidget(_section_title("3. 写真の良し悪しを測る（photoarchive assess と同じ）"))
+        layout.addWidget(_note(
+            "家族の写った写真の画質（MUSIQ）・美しさ（NIMA）・白飛び・黒つぶれを測り、写真の選定の点に使います。"
+            "まだ測っていない写真だけを測ります。元写真を NFS から読むので、初回は一晩かかることがあります。"
+            "顔を割り当てたあと（match のあと）に流します。"
+        ))
+        layout.addLayout(assess_row)
         layout.addWidget(self.log, 1)
 
         controller.started.connect(lambda _name: self._set_running(True))
@@ -284,31 +351,48 @@ class ScanPanel(QWidget):
             self.roots_note.setText("設定（source_roots）の root です。")
         else:
             self.roots_note.setText("設定に root が無いため、DB に記録された root（前に走査したもの）を使います。")
-        self.start_button.setEnabled(bool(self.roots) and not self.controller.is_running())
+        self.refresh_assess_count()
+        self._set_running(self.controller.is_running())
+
+    def refresh_assess_count(self) -> None:
+        """まだ測っていない家族の写真の枚数（`assess` の対象）。"""
+        from . import quality
+
+        self.unassessed = len(db.photos_to_assess(self.connection, quality.MODEL_VERSION))
+        if self.unassessed:
+            self.assess_count.setText(f"まだ測っていない家族の写真: {self.unassessed:,} 枚")
+        else:
+            self.assess_count.setText("家族の写った写真はすべて測ってあります。")
+
+    def showEvent(self, event) -> None:
+        # 顔の割り当てタブで割り当てると、測る写真が増える
+        self.refresh_assess_count()
+        self._set_running(self.controller.is_running())
+        super().showEvent(event)
 
     def _set_running(self, running: bool) -> None:
-        self.start_button.setEnabled(bool(self.roots) and not running)
+        idle = bool(self.roots) and not running
+        self.start_button.setEnabled(idle)
+        self.convert_button.setEnabled(idle)
+        self.assess_button.setEnabled(idle and bool(getattr(self, "unassessed", 0)))
         self.workers_spin.setEnabled(not running)
         self.prune_check.setEnabled(not running)
 
     def _finished(self, name: str, event: Dict[str, Any]) -> None:
-        self._set_running(False)
-        if name != "scan":
+        if name not in ("scan", "convert_heic", "assess"):
+            # 鮮明さの計測（#135）は顔の割り当て画面が知らせる
+            self._set_running(False)
             return
         self.last_final = event
+        self.last_name = name
         message = describe_final(name, event)
         self.log.appendPlainText(message)
         self.reload_roots()
         if event["kind"] in ("aborted", "failed"):
-            QMessageBox.warning(self, "スキャン", message)
+            QMessageBox.warning(self, JOB_NAMES[name], message)
 
     def start_scan(self) -> None:
-        if self.controller.is_running() or not self.roots:
-            return
-        try:
-            normalize_source_roots(self.roots)
-        except ValueError as error:
-            QMessageBox.warning(self, "スキャン", str(error))
+        if not self._roots_ready("スキャン"):
             return
         answer = QMessageBox.question(
             self,
@@ -333,6 +417,80 @@ class ScanPanel(QWidget):
             worker_initializer=self.initializer,
         )
         self.log.appendPlainText(f"スキャンを始めました（ログ: {log_file}）")
+        self.controller.start(job)
+
+    def _roots_ready(self, title: str) -> bool:
+        if self.controller.is_running() or not self.roots:
+            return False
+        try:
+            normalize_source_roots(self.roots)
+        except ValueError as error:
+            QMessageBox.warning(self, title, str(error))
+            return False
+        return True
+
+    def start_convert(self) -> None:
+        """`convert-heic` を裏で流す（#130）。"""
+        title = JOB_NAMES["convert_heic"]
+        if not self._roots_ready(title):
+            return
+        answer = QMessageBox.question(
+            self,
+            "HEIC を JPEG に変換する",
+            "次の root の中の HEIC/HEIF を、同じフォルダに JPEG で書きます（元のファイルは残します）。\n\n"
+            + "\n".join(self.roots)
+            + "\n\n読めない HEIC は飛ばし、JPEG が書けなければそこで止めます。始めますか？",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        log_file = self.log_file or jobs.log_file_for("convert_heic")
+        job = jobs.Job(
+            "convert_heic",
+            jobs.run_convert_heic,
+            initializer=self.initializer,
+            log_file=log_file,
+            roots=list(self.roots),
+        )
+        self.log.appendPlainText(f"HEIC の変換を始めました（ログ: {log_file}）")
+        self.controller.start(job)
+
+    def start_assess(self) -> None:
+        """`assess`（写真の良し悪し）を裏で流す（#130）。**モデルが無ければ始めない。**"""
+        from . import quality
+
+        title = JOB_NAMES["assess"]
+        if not self._roots_ready(title):
+            return
+        if self.models_factory is None:
+            missing = quality.missing_model_files()
+            if missing:
+                QMessageBox.warning(self, title, quality.missing_models_message(missing))
+                return
+        self.refresh_assess_count()
+        if not self.unassessed:
+            QMessageBox.information(self, title, "家族の写った写真はすべて測ってあります。")
+            self._set_running(False)
+            return
+        answer = QMessageBox.question(
+            self,
+            "写真の良し悪しを測る",
+            f"まだ測っていない家族の写真 {self.unassessed:,} 枚を測ります。\n"
+            "元写真を NFS から読むので、何時間もかかることがあります。"
+            "途中で止めても、次は続きからになります。始めますか？",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        log_file = self.log_file or jobs.log_file_for("assess")
+        job = jobs.Job(
+            "assess",
+            jobs.run_assess,
+            initializer=self.initializer,
+            log_file=log_file,
+            database_path=self.database_path,
+            roots=list(self.roots),
+            models_factory=self.models_factory,
+        )
+        self.log.appendPlainText(f"写真の良し悪しの計測を始めました（ログ: {log_file}）")
         self.controller.start(job)
 
 

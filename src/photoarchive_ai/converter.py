@@ -123,11 +123,29 @@ def _next_output_path(source: Path) -> Optional[Path]:
         number += 1
 
 
+class ConvertStopped(Exception):
+    """止める合図で止まった。``converted`` / ``skipped`` はそこまでの件数。"""
+
+    def __init__(self, converted: int, skipped: int):
+        super().__init__("stopped")
+        self.converted = converted
+        self.skipped = skipped
+
+
+def _remove_partial(output: Path) -> None:
+    """書き込みに失敗した JPEG の書きかけを消す。消せなければそのまま（元の失敗を優先する）。"""
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def convert_heic_files(
     source_dir: str,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     confirm_write_error: Optional[Callable[[Path, Exception], bool]] = None,
     confirm_read_error: Optional[Callable[[Path, Exception], bool]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> tuple[int, int]:
     """HEIC/HEIF を同じフォルダの JPEG にする。``(変換した件数, スキップした件数)`` を返す。
 
@@ -135,6 +153,12 @@ def convert_heic_files(
     ``confirm_write_error``。真を返せば次のファイルへ進む）。以前は両方を「Write failed」と
     聞いており、壊れた HEIC を書き込み先の問題と読ませていた（PR #81 で利用者の依頼）。
     どちらも渡さなければ例外をそのまま投げる。
+
+    ``should_stop`` が真を返したら、次のファイルに進まずに `ConvertStopped` を投げる
+    （GUI の「止める」・#130）。変換済みの JPEG は残るので、次は続きから（同じ写真は飛ばす）。
+
+    **書きかけの JPEG は残さない**（#130）。書き込みが途中で落ちると壊れた JPEG が残り、
+    次の `scan` がそれを写真として拾う。次の変換も別の写真とみなして ``_1.jpg`` を作る。
     """
     root = Path(source_dir)
     if not root.is_dir():
@@ -143,6 +167,8 @@ def convert_heic_files(
     converted = 0
     skipped = 0
     for index, source in enumerate(sources, start=1):
+        if should_stop is not None and should_stop():
+            raise ConvertStopped(converted, skipped)
         output = _next_output_path(source)
         if output is None:
             skipped += 1
@@ -165,6 +191,7 @@ def convert_heic_files(
                     rgb.save(output, "JPEG", quality=95, **extra)
                     converted += 1
                 except OSError as error:
+                    _remove_partial(output)
                     if confirm_write_error is None or not confirm_write_error(source, error):
                         raise
         if progress_callback is not None:

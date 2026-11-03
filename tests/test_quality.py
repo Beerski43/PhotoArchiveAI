@@ -176,6 +176,30 @@ def test_assess_continues_where_it_stopped(connection, tmp_path, monkeypatch):
     assert sorted(db.photo_quality(connection, quality.MODEL_VERSION)) == ids
 
 
+def test_a_stop_request_writes_the_unfinished_chunk_and_the_next_run_continues(connection, tmp_path, monkeypatch):
+    """#130: 止める合図で抜けるとき、塊の途中まで測ったぶんも書いてから抜ける（GUI の「止める」）。"""
+    monkeypatch.setattr(quality, "CHUNK_SIZE", 10)
+    ids = [_photo(connection, tmp_path, f"s{i}.jpg", width=40 + i) for i in range(5)]
+    models = FakeModels()
+
+    summary = quality.assess(connection, models, should_stop=lambda: models.calls >= 3)
+
+    assert summary == {"total": 5, "measured": 3, "unreadable": 0, "missing": 0, "stopped": True}
+    # 塊（10 枚）に満たなくても、測った 3 枚は書いてある
+    assert sorted(db.photo_quality(connection, quality.MODEL_VERSION)) == ids[:3]
+    assert quality.assess(connection, FakeModels()) == {
+        "total": 2, "measured": 2, "unreadable": 0, "missing": 0,
+    }
+
+
+def test_the_missing_models_are_named_before_loading(monkeypatch):
+    """#130: GUI は始める前に、置かれていないモデルを確かめる（`Models.load` と同じ文）。"""
+    monkeypatch.setattr("photoarchive_ai.face.find_model_file", lambda name: None)
+    missing = quality.missing_model_files()
+    assert missing == [quality.MUSIQ_FILE, quality.NIMA_FILE]
+    assert "export_iqa_onnx.py" in quality.missing_models_message(missing)
+
+
 def test_an_unreadable_photo_is_recorded_and_not_read_again(connection, tmp_path):
     """**中身が壊れた写真**は `readable=0` で残し、次からは読まない（差し替えればハッシュが変わって消える）。"""
     _photo(connection, tmp_path, "broken.jpg", write=False)

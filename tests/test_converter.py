@@ -256,3 +256,50 @@ def test_a_damaged_heic_stops_the_run_without_a_read_confirmation(tmp_path: Path
 
     with pytest.raises(OSError):
         convert_heic_files(str(tmp_path), confirm_write_error=lambda path, error: True)
+
+
+def test_a_failed_write_leaves_no_partial_jpeg(tmp_path: Path):
+    """#130: 書き込みが途中で落ちても、書きかけの JPEG を残さない。
+
+    残すと次の `scan` が壊れた JPEG を写真として拾い、次の変換は別の写真とみなして
+    ``_1.jpg`` を作る。
+    """
+    write_heic(tmp_path / "photo.heic")
+
+    def write_half_then_fail(self, fp, *args, **kwargs):
+        Path(fp).write_bytes(b"\xff\xd8 half written")
+        raise OSError("no space left on device")
+
+    original = Image.Image.save
+    Image.Image.save = write_half_then_fail
+    try:
+        converted, _ = convert_heic_files(str(tmp_path), confirm_write_error=lambda path, error: True)
+    finally:
+        Image.Image.save = original
+
+    assert converted == 0
+    assert not (tmp_path / "photo.jpg").exists()
+    # 次に流せば、ふつうに photo.jpg を作る（_1.jpg にならない）
+    assert convert_heic_files(str(tmp_path)) == (1, 0)
+    assert (tmp_path / "photo.jpg").exists()
+    assert not (tmp_path / "photo_1.jpg").exists()
+
+
+def test_a_stop_request_ends_the_run_and_the_next_run_continues(tmp_path: Path):
+    """#130: 止める合図で次のファイルに進まない。次に流せば、変換済みを飛ばして残りから。"""
+    from photoarchive_ai.converter import ConvertStopped
+
+    for index in range(3):
+        write_heic(tmp_path / f"{index}.heic", color=(30 + index * 60, 90, 160))
+    progress = []
+
+    with pytest.raises(ConvertStopped) as stopped:
+        convert_heic_files(
+            str(tmp_path),
+            progress_callback=lambda current, total, detail: progress.append(current),
+            should_stop=lambda: len(progress) >= 2,
+        )
+
+    assert (stopped.value.converted, stopped.value.skipped) == (2, 0)
+    assert sorted(path.name for path in tmp_path.glob("*.jpg")) == ["0.jpg", "1.jpg"]
+    assert convert_heic_files(str(tmp_path)) == (1, 2)
