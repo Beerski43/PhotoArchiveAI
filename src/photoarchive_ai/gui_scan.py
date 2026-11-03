@@ -45,7 +45,7 @@ LOG_MAX_LINES = 2000
 #: ワーカー数の既定（CLI の `scan --workers` と同じ）
 DEFAULT_WORKERS = min(4, max(1, (os.cpu_count() or 2) - 1))
 
-JOB_NAMES = {"scan": "スキャン"}
+JOB_NAMES = {"scan": "スキャン", "measure_faces": "鮮明さの計測"}
 
 
 def describe_event(name: str, event: Dict[str, Any]) -> Optional[str]:
@@ -58,6 +58,8 @@ def describe_event(name: str, event: Dict[str, Any]) -> Optional[str]:
         return f"{label}: ファイルを数えています（{current:,} 件）"
     if event["kind"] == "progress":
         if not total:
+            if name == "measure_faces":
+                return f"{label}: 未計測の顔はありません"
             return f"{label}: 新しく読むファイルはありません"
         return f"{label}: {current:,} / {total:,} 件（{detail}）"
     return None
@@ -69,6 +71,11 @@ def describe_final(name: str, event: Dict[str, Any]) -> str:
     kind = event["kind"]
     if kind == "done":
         return f"{label}が終わりました。{jobs.describe_summary(event['summary'])}"
+    if kind == "stopped" and name != "scan":
+        return (
+            f"{label}を止めました。{jobs.describe_summary(event['summary'])}\n"
+            "済んだぶんは保存してあります。次に始めると続きからになります。"
+        )
     if kind == "stopped":
         return (
             f"{label}を止めました。{jobs.describe_summary(event['summary'])}\n"

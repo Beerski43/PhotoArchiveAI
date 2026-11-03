@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import clustering, db, embedding, face, matcher, migration, recommend, undo
+from . import clustering, db, embedding, face, matcher, migration, recommend, scoring, undo
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -143,6 +143,8 @@ ORDER_CHOICES = (
     ("自動の確信度が高い順", db.ORDER_SCORE_DESC),
     ("画質の高い順", db.ORDER_QUALITY),
     ("画質の低い順", db.ORDER_QUALITY_ASC),
+    ("ボケている順", db.ORDER_SHARPNESS_ASC),
+    ("くっきりした順", db.ORDER_SHARPNESS_DESC),
     ("この人物に似た順", recommend.ORDER_SIMILAR),
     ("この人物に似ていない順", recommend.ORDER_DISSIMILAR),
 )
@@ -562,6 +564,22 @@ DONE_PREVIEW_OPACITY = 0.35
 PROGRESS_POPUP_DELAY_MS = 400
 #: 画面の接続が、ほかの接続（裏の `scan`・端末の CLI）の書き込みを待つ秒数（#129）
 BUSY_TIMEOUT_MS = 30_000
+#: 鮮明さの絞り込みの既定（#135）。`select` が「はっきりボケている」とみなす値と同じ。
+BLURRY_DEFAULT = int(scoring.SHARPNESS_BLURRY)
+#: 鮮明さの絞り込みの上限。くっきりした顔は数百〜千を超えるが、ボケた顔を探すのに要るのはこのあたりまで。
+BLURRY_MAX = 300
+#: 鮮明さの絞り込みの説明（#135）
+BLURRY_TOOLTIP = (
+    "鮮明さ（顔のサムネイルを 112px にそろえて測ったラプラシアン分散）がこの値以下の顔だけを出します。\n"
+    "小さいほどボケ・ぶれています。select は 30 以下を「はっきりボケている」、150 以上を「くっきり」とみます。\n"
+    "**未計測の顔は出ません**（「鮮明さを測る」で測ります）。\n"
+    "未分類を見ているときは、行事を選ばなくても下のボタンでまとめて顔認証外にできます。"
+)
+#: 測るボタンの説明（#135）
+MEASURE_TOOLTIP = (
+    "未計測の顔（未分類・手動・自動）の鮮明さ・向きを、保存済みのサムネイルから測ります（元写真は読みません）。\n"
+    "裏で流すので、測っているあいだも割り当てを続けられます。止めても、次は続きからになります。"
+)
 MATCH_BLOCKED_BY_JOB = "裏で処理（取り込みタブ）を流しているあいだは実行できません。終わるか、止めてから実行してください。"
 WRITE_LOCKED = (
     "データベースがほかの処理（裏のスキャンや、端末で流している photoarchive など）で使われていて、"
@@ -1284,10 +1302,16 @@ def make_face_list(selection_mode) -> QListWidget:
     return widget
 
 
+def format_sharpness(value: Optional[float]) -> str:
+    """一覧とツールチップに出す鮮明さ（#135）。未計測は「未計測」。"""
+    return "鮮明さ 未計測" if value is None else f"鮮明さ {value:.0f}"
+
+
 def _fill_face_list(
     widget: QListWidget,
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
+    show_sharpness: bool = False,
 ) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
@@ -1301,7 +1325,7 @@ def _fill_face_list(
     """
     blocked = widget.blockSignals(True)
     try:
-        _repopulate_face_list(widget, records, age_labels)
+        _repopulate_face_list(widget, records, age_labels, show_sharpness)
     finally:
         widget.blockSignals(blocked)
 
@@ -1310,6 +1334,7 @@ def _repopulate_face_list(
     widget: QListWidget,
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
+    show_sharpness: bool = False,
 ) -> None:
     widget.clear()
     for record in records:
@@ -1333,6 +1358,12 @@ def _repopulate_face_list(
             age_text = None
         if age_text:
             label = f"{label} {age_text}"
+        # **鮮明さで絞る・並べるときだけ顔の下に出す**（#135。枠が狭いので常には出さない）。
+        # 閾値を決める手がかりなので、境目の顔の値が読めるようにする。
+        if show_sharpness:
+            label = f"{label} {format_sharpness(record.get('sharpness'))}"
+        if "sharpness" in record:
+            item.setToolTip(format_sharpness(record.get("sharpness")))
         item.setText(label)
         item.setData(Qt.UserRole, record)
         # **1件ずつにも同じ大きさを持たせる。** `setUniformItemSizes` は
@@ -1903,6 +1934,9 @@ class MainWindow(QWidget):
     すべて「1件あたりの手数を減らす」ためにある。
     """
 
+    #: 「鮮明さを測る」を押した（#135）。裏の処理は `AppWindow` が持つので、そちらへ頼む。
+    measure_requested = Signal()
+
     def __init__(
         self, database_path: str, source_roots: SourceRoots = None
     ):
@@ -1952,6 +1986,7 @@ class MainWindow(QWidget):
 
         # 一覧を作ると「未分類」が選ばれ、そのまま顔の一覧まで作られる。
         self._reload_person_list()
+        self.refresh_measure_count()
 
     # ------------------------------------------------------------------
     # 画面の組み立て
@@ -2066,6 +2101,34 @@ class MainWindow(QWidget):
         common_filters.addWidget(self.prev_button)
         common_filters.addWidget(self.page_label)
         common_filters.addWidget(self.next_button)
+
+        # --- 鮮明さで絞る（#135） ----------------------------------------
+        # **ボケ・ぶれた顔を閾値で絞り、まとめて顔認証外にする。** 閾値は一覧を
+        # 「ボケている順」で見ながら決める（利用者「ぶれ方の閾値を調整して選定したい」）。
+        self.blur_check = QCheckBox("鮮明さが")
+        self.blur_check.setToolTip(BLURRY_TOOLTIP)
+        self.blur_spin = QSpinBox()
+        self.blur_spin.setRange(0, BLURRY_MAX)
+        self.blur_spin.setValue(BLURRY_DEFAULT)
+        self.blur_spin.setSuffix(" 以下")
+        self.blur_spin.setToolTip(BLURRY_TOOLTIP)
+        self.blur_spin.setKeyboardTracking(False)
+        self.blur_check.stateChanged.connect(self._blur_changed)
+        self.blur_spin.valueChanged.connect(self._blur_changed)
+        self.measure_button = QPushButton("鮮明さを測る")
+        self.measure_button.setToolTip(MEASURE_TOOLTIP)
+        self.measure_button.clicked.connect(self.measure_requested.emit)
+        self.measure_label = QLabel("")
+        self.measure_label.setStyleSheet("color: #555;")
+
+        blur_filters = QHBoxLayout()
+        blur_filters.addWidget(self.blur_check)
+        blur_filters.addWidget(self.blur_spin)
+        blur_filters.addWidget(QLabel("（ボケ・ぶれた顔）"))
+        blur_filters.addSpacing(12)
+        blur_filters.addWidget(self.measure_button)
+        blur_filters.addWidget(self.measure_label)
+        blur_filters.addStretch(1)
 
         # --- 人物を選んでいるときだけの絞り込み ------------------------
         # **確定済みと自動を見分けて絞れるようにする。** 自動割り当てを
@@ -2199,6 +2262,7 @@ class MainWindow(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.addLayout(common_filters)
+        layout.addLayout(blur_filters)
         layout.addWidget(self.person_filter_row)
         layout.addWidget(face_area, 1)
         layout.addWidget(self.hint_label)
@@ -2655,6 +2719,7 @@ class MainWindow(QWidget):
         `scan` が顔を足し消ししている途中の手本で照合しないため。`match` は長く書き込み
         ロックを握るので、裏の処理も待たせる。顔の割り当てなどの操作は続けられる。
         """
+        self.measure_button.setEnabled(not running)
         self.match_button.setEnabled(not running)
         self.match_button.setToolTip(
             MATCH_BLOCKED_BY_JOB
@@ -3128,6 +3193,30 @@ class MainWindow(QWidget):
             return SCOPE_PERSON_UNASSIGNED
         return self._current_scope()
 
+    def _blur_filtering(self) -> bool:
+        """鮮明さで絞っているか（#135）。"""
+        return self.blur_check.isChecked()
+
+    def _bulk_without_event(self) -> bool:
+        """**行事を選ばずに**まとめて処理してよいか（#135）。
+
+        未分類をボケた顔に絞っているときだけ（利用者の決定・2026-11-03）。行事の制限は
+        「一度の押し間違いで未分類が全部飛ぶ」のを防ぐためで、鮮明さで絞れば対象は
+        ボケた顔だけになる。確認の窓で件数を出し、Ctrl+Z で戻せる。
+        """
+        return self._current_scope() == SCOPE_UNASSIGNED and self._blur_filtering()
+
+    def _blur_changed(self, *_args) -> None:
+        self._reset_page()
+
+    def refresh_measure_count(self) -> None:
+        """「鮮明さを測る」の横に、未計測の未分類の件数を出す（#135）。"""
+        remaining = db.count_unassigned_without_sharpness(self.connection)
+        self.measure_label.setText(
+            "未分類はすべて測ってあります" if remaining == 0
+            else f"未分類の未計測 {remaining:,} 件（絞り込みに出ません）"
+        )
+
     def _source_changed(self) -> None:
         """種別を変えたとき。**メニューの中身も、並びの既定も変わる**
         （否定の一覧は別物。「未分類」は似た順で見る）。"""
@@ -3190,6 +3279,8 @@ class MainWindow(QWidget):
             # **変換は `event_filters` に1つだけ。** `None` を渡すと
             # 「日で絞らない」になり、フォルダ全体が対象になってしまう。
             filters.update(event_filters(*self.event))
+        if self._blur_filtering():
+            filters["max_sharpness"] = self.blur_spin.value()
         start, end, undated_only = self._month_range()
         if undated_only:
             filters["undated_only"] = True
@@ -3242,8 +3333,9 @@ class MainWindow(QWidget):
         )
 
         label, tooltip = self._bulk_action_labels()
+        usable = self.event is not None or self._bulk_without_event()
         self.bulk_event_button.setText(label)
-        self.bulk_event_button.setEnabled(self.event is not None and label != "")
+        self.bulk_event_button.setEnabled(usable and label != "")
         if label == "":
             self.bulk_event_button.setText("まとめて処理（この表示では無し）")
             self.bulk_event_button.setToolTip(
@@ -3253,8 +3345,9 @@ class MainWindow(QWidget):
         else:
             self.bulk_event_button.setToolTip(
                 tooltip
-                if self.event is not None
-                else "先に「行事を選ぶ」で行事を指定してください。"
+                if usable
+                else "先に「行事を選ぶ」で行事を指定してください"
+                "（未分類なら、鮮明さで絞ると行事を選ばずにまとめて顔認証外にできます）。"
             )
 
     def _bulk_action_labels(self) -> tuple:
@@ -3284,6 +3377,13 @@ class MainWindow(QWidget):
             return (
                 f"この行事の{name}の割り当てをすべて解除",
                 "いま表示している条件に当たる顔を、ページをまたいで未分類へ戻します。",
+            )
+        if self._blur_filtering():
+            where = "この行事の" if self.event is not None else ""
+            return (
+                f"{where}ボケた未分類（鮮明さ {self.blur_spin.value()} 以下）をすべて顔認証外にする",
+                "鮮明さで絞った未分類の顔を、ページをまたいでまとめて顔認証外にします"
+                "（割り当て済みの顔と、鮮明さが未計測の顔は触りません）。",
             )
         return (
             "この行事の未分類をすべて顔認証外にする",
@@ -3323,12 +3423,16 @@ class MainWindow(QWidget):
 
     def _bulk_event_action(self) -> None:
         """行事単位のまとめ処理。**表示中のページではなく行事全体に効く。**"""
-        if self.event is None or self._bulk_action_labels()[0] == "":
+        if self._bulk_action_labels()[0] == "":
+            return
+        if self.event is None and not self._bulk_without_event():
             return
         filters = self._filter_arguments()
         with busy_cursor():
             face_ids = db.face_ids(self.connection, **filters)
         name = self._event_name()
+        if self._blur_filtering():
+            name = f"{name}・鮮明さ {self.blur_spin.value()} 以下"
         if not face_ids:
             QMessageBox.information(
                 self, "対象なし", f"{name} に、まとめて処理できる顔はありません。"
@@ -3425,7 +3529,13 @@ class MainWindow(QWidget):
                 order=order,
                 **filters,
             )
-        _fill_face_list(self.face_list, records, self._age_labels(records))
+        _fill_face_list(
+            self.face_list,
+            records,
+            self._age_labels(records),
+            show_sharpness=self._blur_filtering()
+            or order in (db.ORDER_SHARPNESS_ASC, db.ORDER_SHARPNESS_DESC),
+        )
         # **桁を区切る。** 実データは万単位（未分類 31,275 件）で、
         # 区切らないと桁が読み取れない。
         text = f"{self.page + 1} / {pages:,} ページ（全 {total:,} 件）"
@@ -3908,16 +4018,48 @@ class AppWindow(QTabWidget):
         self.setCornerWidget(self.job_status, Qt.TopRightCorner)
         self.jobs.started.connect(lambda _name: self.assignment.set_job_running(True))
         self.jobs.finished.connect(self._job_finished)
+        self.assignment.measure_requested.connect(self.start_measure)
+        #: 子プロセスの入口で呼ぶもの（テストがフェイクを入れる）
+        self.measure_initializer = None
+        #: 鮮明さの計測の終わりの知らせ（テスト用）
+        self.last_measure: Optional[dict] = None
         self.addTab(self.assignment, "顔の割り当て")
         self.addTab(self.selection, "写真の選定")
         self.addTab(self.scan_panel, "取り込み")
         self.setWindowTitle("PhotoArchiveAI")
         self.resize(1240, 820)
 
-    def _job_finished(self, _name: str, _event: dict) -> None:
+    def start_measure(self) -> None:
+        """未計測の顔の鮮明さを裏で測る（#135・`jobs.run_measure_faces`）。"""
+        from . import jobs
+
+        if self.jobs.is_running():
+            QMessageBox.information(self, "鮮明さを測る", MATCH_BLOCKED_BY_JOB)
+            return
+        job = jobs.Job(
+            "measure_faces",
+            jobs.run_measure_faces,
+            initializer=self.measure_initializer,
+            database_path=self.assignment.db_path,
+        )
+        self.jobs.start(job)
+
+    def _job_finished(self, name: str, event: dict) -> None:
         """裏の処理が終わったら、顔の一覧を読み直す（`scan` が顔を足し消しした）。"""
+        from .gui_scan import describe_final
+
         self.assignment.set_job_running(False)
         self.assignment._reload_person_list()
+        self.assignment.refresh_measure_count()
+        if name == "measure_faces":
+            self.last_measure = event
+            # 取り込みタブのログには出ないので、ここで知らせる
+            if event["kind"] in ("aborted", "failed"):
+                QMessageBox.warning(self, "鮮明さを測る", describe_final(name, event))
+            else:
+                self.assignment.measure_label.setText(
+                    describe_final(name, event).splitlines()[0]
+                )
 
     def closeEvent(self, event) -> None:
         """**裏の処理を流したまま閉じない。** 止めるなら、書きかけを保存して終わるのを待つ。"""

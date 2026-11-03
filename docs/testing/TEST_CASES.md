@@ -1070,6 +1070,23 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
 | `test_status_lines_read_naturally` | 進み具合の文 |
 
+### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（12件。#135）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_sharpness_filter_includes_the_threshold_and_never_the_unmeasured` | 閾値ちょうどの顔は入る。**未計測の顔は出ない**。一覧・件数・id がそろう |
+| `test_blurry_first_order_puts_the_unmeasured_last_both_ways` | ボケている順・くっきりした順。未計測はどちらでも最後。一覧の列に鮮明さがある |
+| `test_unassigned_faces_can_be_picked_for_measuring` | 未分類も測る対象にできる（既定は割り当てのある顔だけのまま）。未計測の件数 |
+| `test_filling_can_include_unassigned_faces_and_stops_between_chunks` | 止める合図で塊の切れ目で止まり、次は残りから |
+| `test_the_measure_job_writes_nothing_when_landmarks_are_unavailable` | **目印の検出器が無い環境では何も書かずに失敗を知らせる**（「測れない」と「整列できなかった」を混ぜない） |
+| `test_the_measure_job_runs_in_another_process` | 子プロセスで測り、集計が届く |
+| `test_without_the_sharpness_filter_bulk_rejecting_still_needs_an_event` | 鮮明さで絞っていなければ、これまでどおり行事を選ばないと押せない |
+| `test_blurry_unassigned_faces_are_rejected_at_once_without_an_event_and_undone` | **行事なしでボケた未分類だけを顔認証外にする。** くっきりした顔・未計測・手本・自動は残る。Ctrl+Z で戻る |
+| `test_a_lower_threshold_narrows_what_is_rejected` | 閾値を下げると対象が減る |
+| `test_the_sharpness_filter_does_not_unlock_bulk_actions_on_a_person` | 人物の表示では、鮮明さで絞っても行事を選ばないと押せない（対象は未分類だけ） |
+| `test_the_window_shows_how_many_unassigned_faces_are_unmeasured` | 未分類の未計測の件数を出す |
+| `test_the_measure_button_measures_in_the_background` | 「鮮明さを測る」で裏で測る。測っている間はボタンが押せず、終わると結果が出る |
+
 ### `test_heic_excluded.py` — scan 以降から HEIC を外す（6件。#26）
 
 | テスト | 内容 |
