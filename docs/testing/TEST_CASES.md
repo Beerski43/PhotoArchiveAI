@@ -1054,6 +1054,28 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_nothing_to_assess_disables_the_button` | 測る写真が無ければ押せない |
 | `test_status_lines_name_each_job` | 仕事ごとの進み具合・止めたときの文 |
 
+### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
+
+**リポジトリには本物の設定がある。** 探す場所（環境変数・カレント・リポジトリ直下）を全部 `tmp_path` に向けてから開く。
+
+| テスト | 内容 |
+|---|---|
+| `test_settings_are_written_where_they_will_be_read_next_time` | 書く先は、いま読んでいるファイル → `PHOTOARCHIVE_CONFIG` → カレントの `config/app_settings.yml` |
+| `test_writing_keeps_other_keys_and_a_backup` | **窓に出さないキーは残る**・空にしたキーは消える・`.bak` に控える・書いたものを `load_settings` が読める |
+| `test_an_unreadable_settings_file_is_not_overwritten` / `test_a_broken_settings_file_cannot_be_saved_over` | **読めない設定ファイルを空の設定で上書きしない**（窓では保存を押せない） |
+| `test_only_the_dialog_keys_can_be_written` | 窓の4つのキー以外は書かない |
+| `test_nested_roots_and_an_output_overlapping_a_root_are_refused` | root の入れ子と、**出力先が root と重なる（同じ・内側・外側）**のは止める。まだ無い出力先は聞くだけ |
+| `test_a_missing_root_asks_instead_of_refusing` | 見つからない root は止めずに聞く（NFS が外れているだけのことがある） |
+| `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みタブの root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く。ボタンはタブの左上 |
+| `test_the_same_rule_path_keeps_the_weights_moved_on_screen` | ルールのパスが同じなら、画面で動かした重みは読み直さない |
+| `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
+| `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |
+| `test_the_dialog_shows_the_current_file_and_keeps_other_keys` | いまの値を出し、root を外して保存できる。ほかのキーは残る |
+| `test_relative_roots_are_checked_from_the_settings_file` | **相対の root は起動時と同じく設定ファイルの置き場所から解いて確かめる**（カレントから解くと root の内側の出力先を止められなかった・PR #138 のレビュー指摘1） |
+| `test_an_empty_database_path_is_not_saved` | **DB の欄が空なら保存させない**（次に `--db` なしで起動できなくなる・指摘2・利用者の決定） |
+| `test_the_restart_notice_only_follows_a_changed_database_path` | 「次に起動したときから」は DB の欄を変えたときだけ（`--db` で起動していても・指摘3） |
+| `test_the_corner_button_opens_saves_and_applies` | `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
+
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 
 | テスト | 内容 |

@@ -374,13 +374,10 @@ def resolve_root(source_roots: Optional[str]) -> Optional[str]:
     `database_path` など他の相対値はここでは扱わない。設定の解釈を全体で
     変えるのは、明示的な指示が要る（CLAUDE.md §4）。
     """
-    if not source_roots or Path(source_roots).is_absolute():
-        return source_roots
-    settings_path = find_settings_path()
-    if settings_path is None:
-        return source_roots
-    # config/app_settings.yml → リポジトリ直下
-    return str(settings_path.parent.parent / source_roots)
+    from .config import resolve_source_root
+
+    # 起点の決め方は設定の窓の検査と1つ（`config.resolve_source_root`・PR #138 のレビュー指摘1）
+    return resolve_source_root(source_roots, find_settings_path())
 
 
 def format_folder(folder: str, source_roots: SourceRoots = None) -> str:
@@ -3454,6 +3451,14 @@ class AppWindow(QTabWidget):
         self.scan_panel = ScanPanel(self.jobs, database_path, self.assignment.connection, settings_roots)
         self.job_status = JobStatusBar(self.jobs)
         self.setCornerWidget(self.job_status, Qt.TopRightCorner)
+        # 設定の窓（#131）。右上は裏の処理の進み具合なので左上に置く。どのタブからも開ける
+        from .gui_settings import OPEN_LABEL
+
+        self.settings_button = QPushButton(OPEN_LABEL)
+        self.settings_button.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
+        self.settings_button.clicked.connect(self.open_settings)
+        self.setCornerWidget(self.settings_button, Qt.TopLeftCorner)
+        self.database_path = database_path
         self.jobs.started.connect(lambda _name: self.assignment.set_job_running(True))
         self.jobs.finished.connect(self._job_finished)
         self.assignment.measure_requested.connect(self.start_measure)
@@ -3466,6 +3471,37 @@ class AppWindow(QTabWidget):
         self.addTab(self.scan_panel, "取り込み")
         self.setWindowTitle("PhotoArchiveAI")
         self.resize(1240, 820)
+
+    def open_settings(self) -> Optional[dict]:
+        """設定の窓を開く（#131）。保存したら、DB の場所以外をすぐ効かせる。保存した中身を返す。"""
+        from .gui_settings import SettingsDialog
+
+        dialog = SettingsDialog(self.database_path, self)
+        if dialog.exec() != QDialog.Accepted or dialog.saved is None:
+            return None
+        self.apply_settings(dialog.saved)
+        if dialog.database_needs_restart:
+            QMessageBox.information(
+                self,
+                "設定",
+                "保存しました。DB の場所は、次に起動したときから使います。",
+            )
+        return dialog.saved
+
+    def apply_settings(self, settings: dict) -> None:
+        """保存した設定を開いている画面に効かせる（#131）。**DB の場所は差し替えない。**
+
+        root の解き方は起動したときと同じ（`main`・相対の root は設定ファイルの置き場所から）。
+        """
+        from .config import get_output_root, get_rule_path, get_source_roots
+
+        roots = [resolve_root(root) for root in get_source_roots(settings)]
+        self.assignment.source_roots = roots or db.list_scan_roots(self.assignment.connection) or None
+        shown = self.assignment.source_roots
+        shown = [shown] if isinstance(shown, str) else list(shown or [])
+        self.selection.set_paths(get_rule_path(settings), get_output_root(settings), shown)
+        self.scan_panel.settings_roots = roots
+        self.scan_panel.reload_roots()
 
     def start_measure(self) -> None:
         """未計測の顔の鮮明さを裏で測る（#135・`jobs.run_measure_faces`）。"""
