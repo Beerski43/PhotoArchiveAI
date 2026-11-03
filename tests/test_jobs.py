@@ -125,3 +125,152 @@ def test_a_child_that_dies_silently_is_reported_as_failed(tmp_path):
 def test_the_summary_line_names_every_count():
     line = jobs.describe_summary({"processed": 1200, "skipped": 3, "faces": 4, "pruned": 5, "errors": 6})
     assert "1,200" in line and "飛ばした 3" in line and "削除 5" in line and "エラー 6" in line
+
+
+# ---------------------------------------------------------------------------
+# convert-heic と assess（#130）
+# ---------------------------------------------------------------------------
+
+
+def test_a_convert_job_converts_in_another_process(tmp_path):
+    from tests.helpers import write_heic
+
+    source = tmp_path / "media"
+    write_heic(source / "a.heic")
+    write_heic(source / "sub" / "b.heic", color=(30, 160, 90))
+    job = jobs.Job("convert_heic", jobs.run_convert_heic, roots=[str(source)])
+    job.start()
+    final = _drain(job)
+
+    assert final["kind"] == "done", final
+    assert final["summary"]["converted"] == 2
+    assert (source / "a.jpg").exists() and (source / "sub" / "b.jpg").exists()
+    assert "変換 2 件" in jobs.describe_summary(final["summary"], "convert_heic")
+
+
+def test_a_convert_job_skips_an_unreadable_heic_and_lists_it(tmp_path):
+    from tests.helpers import write_heic
+
+    source = tmp_path / "media"
+    write_heic(source / "good.heic")
+    (source / "broken.heic").write_bytes(b"not a heic at all")
+    job = jobs.Job("convert_heic", jobs.run_convert_heic, roots=[str(source)])
+    job.start()
+    events = []
+    while job.is_running():
+        events.extend(job.poll())
+        time.sleep(0.05)
+
+    assert job.final["kind"] == "done", job.final
+    assert job.final["summary"]["converted"] == 1
+    assert job.final["summary"]["unreadable"] == [str(source / "broken.heic")]
+    assert any(event["kind"] == "error" and "broken.heic" in event["message"] for event in events)
+
+
+def test_a_convert_job_stops_when_a_jpeg_cannot_be_written(tmp_path):
+    """書けなければ続けても書けない（読み取り専用・空き容量）。止めて理由を出す。"""
+    from tests.helpers import write_heic
+
+    source = tmp_path / "media"
+    write_heic(source / "a.heic")
+    os.chmod(source, 0o555)
+    try:
+        if os.access(source, os.W_OK):  # root で流しているとき
+            return
+        job = jobs.Job("convert_heic", jobs.run_convert_heic, roots=[str(source)])
+        job.start()
+        final = _drain(job)
+    finally:
+        os.chmod(source, 0o755)
+
+    assert final["kind"] == "aborted", final
+    assert "JPEG を書けませんでした" in final["message"]
+
+
+def test_a_convert_job_reports_how_many_were_converted_before_a_write_failure(tmp_path):
+    """PR #137 指摘1: root の途中で書けなくなっても、そこまでに変換した件数を出す（0 件と出さない）。"""
+    from tests.helpers import write_heic
+
+    source = tmp_path / "media"
+    write_heic(source / "a" / "1.heic")
+    write_heic(source / "a" / "2.heic", color=(30, 160, 90))
+    write_heic(source / "b" / "3.heic", color=(90, 30, 160))
+    os.chmod(source / "b", 0o555)
+    try:
+        if os.access(source / "b", os.W_OK):  # root で流しているとき
+            return
+        job = jobs.Job("convert_heic", jobs.run_convert_heic, roots=[str(source)])
+        job.start()
+        final = _drain(job)
+    finally:
+        os.chmod(source / "b", 0o755)
+
+    assert final["kind"] == "aborted", final
+    assert "ここまでに 2 件を変換してあります" in final["message"], final["message"]
+    assert sorted(path.name for path in (source / "a").glob("*.jpg")) == ["1.jpg", "2.jpg"]
+
+
+def _assess_job(tmp_path, count=3):
+    from tests.fakes import fake_quality_models
+    from tests.helpers import add_family_photo
+
+    database = tmp_path / "test.db"
+    connection = db.ensure_database(str(database))
+    ids = [add_family_photo(connection, tmp_path / "media" / f"{i}.jpg", width=40 + i) for i in range(count)]
+    connection.close()
+    job = jobs.Job(
+        "assess",
+        jobs.run_assess,
+        database_path=str(database),
+        roots=[str(tmp_path / "media")],
+        models_factory=fake_quality_models,
+    )
+    return job, database, ids
+
+
+def test_an_assess_job_measures_family_photos_in_another_process(tmp_path):
+    from photoarchive_ai import quality
+
+    job, database, ids = _assess_job(tmp_path)
+    job.start()
+    final = _drain(job)
+
+    assert final["kind"] == "done", final
+    assert final["summary"] == {"total": 3, "measured": 3, "unreadable": 0, "missing": 0}
+    connection = db.ensure_database(str(database))
+    try:
+        assert sorted(db.photo_quality(connection, quality.MODEL_VERSION)) == ids
+    finally:
+        connection.close()
+    assert "測った写真 3 枚" in jobs.describe_summary(final["summary"], "assess")
+
+
+def test_an_assess_job_stopped_at_once_measures_at_most_one_photo(tmp_path):
+    job, _database, _ids = _assess_job(tmp_path)
+    job.request_stop()
+    job.start()
+    final = _drain(job)
+
+    assert final["kind"] == "stopped", final
+    assert final["summary"]["measured"] <= 1
+
+
+def test_an_assess_job_without_models_fails_with_how_to_make_them(tmp_path, monkeypatch):
+    """モデルが無いときは子で落ちても、置き方が届く（GUI は始める前にも確かめる）。"""
+    from photoarchive_ai import quality
+
+    monkeypatch.setattr("photoarchive_ai.face.find_model_file", lambda name: None)
+    report = []
+    try:
+        jobs.run_assess(report.append, lambda: False, str(tmp_path / "x.db"), [])
+    except FileNotFoundError as error:
+        assert "export_iqa_onnx.py" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("モデルが無いのに始まった")
+    assert quality.missing_model_files()
+
+
+def test_nothing_to_assess_reads_naturally():
+    assert jobs.describe_summary({"total": 0, "measured": 0, "unreadable": 0, "missing": 0}, "assess") == (
+        "測る写真はありません（家族の写った写真はすべて測ってあります）"
+    )

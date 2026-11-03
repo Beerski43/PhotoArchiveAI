@@ -1,6 +1,7 @@
 """長い処理を**裏の別プロセス**で流す（#129・Phase 9）。Qt に依存しない。
 
-GUI から `scan` のように何時間もかかる処理を流すための土台。GUI はこのモジュールの
+GUI から `scan` のように何時間もかかる処理を流すための土台。いま載っている仕事は
+`run_scan`・`run_measure_faces`（#135）・`run_convert_heic` と `run_assess`（#130）。GUI はこのモジュールの
 `Job` を作って始め、タイマーで `poll` して進み具合を受け取り、`request_stop` で止める。
 
 **同じプロセスの別スレッドにしない。** GUI の接続と同じプロセスで書き込みが走り、
@@ -158,6 +159,93 @@ def run_measure_faces(
         connection.close()
 
 
+def run_convert_heic(
+    report: Report,
+    should_stop: Callable[[], bool],
+    roots: Sequence[str],
+) -> Dict[str, Any]:
+    """子プロセスの中で `convert-heic` を流す（#130）。**DB は使わない**（CLI と同じ）。
+
+    裏では問い返せないので、CLI が端末で聞くところを次のように決めてある。
+
+    - **読めない HEIC（壊れている）は飛ばして**、``error`` で知らせ、集計の ``unreadable`` に残す
+      （1枚の壊れた写真で、何時間もの変換を止めない）
+    - **JPEG が書けなければそこで止める**（``aborted``）。書けないのはたいてい読み取り専用の
+      マウントか空き容量の不足で、続けても書けない（CLI の既定の答え N と同じ）。
+      書きかけの JPEG は `converter` が消す
+    """
+    from .converter import ConvertStopped, ConvertWriteFailed, convert_heic_files
+    from .scanner import ScanAborted
+
+    summary: Dict[str, Any] = {"converted": 0, "skipped": 0, "unreadable": [], "roots": len(roots)}
+
+    def on_read_error(path: Path, error: Exception) -> bool:
+        summary["unreadable"].append(str(path))
+        report({"kind": "error", "message": f"読めない HEIC を飛ばしました（壊れている可能性）: {path}: {error}"})
+        return True
+
+    for root in roots:
+        try:
+            converted, skipped = convert_heic_files(
+                root,
+                progress_callback=lambda current, total, detail: report(
+                    {"kind": "progress", "current": current, "total": total, "detail": detail}
+                ),
+                # 書けなければ聞かずに止める（`ConvertWriteFailed`）
+                confirm_write_error=None,
+                confirm_read_error=on_read_error,
+                should_stop=should_stop,
+            )
+        except ConvertWriteFailed as failed:
+            # **そこまでの件数は例外に載っている**（root の途中では summary にまだ足されていない・PR #137 指摘1）
+            done = summary["converted"] + failed.converted
+            raise ScanAborted(
+                f"JPEG を書けませんでした: {failed.source}: {failed}。"
+                f"ここまでに {done:,} 件を変換してあります（書き込み先の空き容量と書き込み権限を確かめてください）。"
+            ) from None
+        except ConvertStopped as stopped:
+            summary["converted"] += stopped.converted
+            summary["skipped"] += stopped.skipped
+            raise _Stopped(summary) from None
+        summary["converted"] += converted
+        summary["skipped"] += skipped
+    return summary
+
+
+def run_assess(
+    report: Report,
+    should_stop: Callable[[], bool],
+    database_path: str,
+    roots: Sequence[str],
+    models_factory: Optional[Callable[[], Any]] = None,
+) -> Dict[str, Any]:
+    """子プロセスの中で `assess`（写真の良し悪し）を流す（#130）。CLI と同じ `quality.assess`。
+
+    **元写真を NFS から読む**ので、初回は一晩かかる。20 枚ごとに書き、止めても次は続きから。
+    ``models_factory`` はテストがフェイクのモデルを渡す（pickle できる、モジュール直下の関数）。
+    """
+    from . import quality
+
+    models = (models_factory or quality.Models.load)()
+    connection = db.ensure_database(database_path)
+    connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    try:
+        summary = quality.assess(
+            connection,
+            models,
+            root_paths=list(roots),
+            progress_callback=lambda current, total, _detail: report(
+                {"kind": "progress", "current": current, "total": total, "detail": "写真"}
+            ),
+            should_stop=should_stop,
+        )
+    finally:
+        connection.close()
+    if summary.pop("stopped", False):
+        raise _Stopped(summary)
+    return summary
+
+
 class _Stopped(Exception):
     def __init__(self, summary: Dict[str, Any]):
         super().__init__("stopped")
@@ -312,19 +400,43 @@ class Job:
         return self.final
 
 
+def log_file_for(name: str) -> str:
+    """CLI と同じ名前のログ（``data/logs/<name>_<日時>.log``）。"""
+    return str(LOG_DIR / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+
 def scan_log_file() -> str:
     """CLI の `scan` と同じ名前のログ。"""
-    return str(LOG_DIR / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    return log_file_for("scan")
 
 
-def describe_summary(summary: Dict[str, Any]) -> str:
-    """集計を1行にする。`scan` は CLI の最後の行と同じ中身。"""
-    if "measured" in summary:
+def describe_summary(summary: Dict[str, Any], name: str = "scan") -> str:
+    """集計を1行にする。`scan` と `assess` は CLI の最後の行と同じ中身。"""
+    if name == "measure_faces":
         # `run_measure_faces`（#135）
         return (
             f"測った顔 {summary.get('measured', 0):,} 件・"
             f"未計測のまま {summary.get('remaining', 0):,} 件"
         )
+    if name == "convert_heic":
+        return (
+            f"変換 {summary.get('converted', 0):,} 件・"
+            f"変換済みで飛ばした {summary.get('skipped', 0):,} 件・"
+            f"読めなかった {len(summary.get('unreadable', [])):,} 件"
+        )
+    if name == "assess":
+        if not summary.get("total"):
+            return "測る写真はありません（家族の写った写真はすべて測ってあります）"
+        line = (
+            f"測った写真 {summary.get('measured', 0):,} 枚・"
+            f"読めなかった写真 {summary.get('unreadable', 0):,} 枚（対象 {summary.get('total', 0):,} 枚）"
+        )
+        if summary.get("missing"):
+            line += (
+                f"・見つからなかった写真 {summary['missing']:,} 枚（記録していません。"
+                "マウントを確かめて、もう一度測ってください）"
+            )
+        return line
     return (
         f"走査 {summary.get('processed', 0):,} 件・飛ばした {summary.get('skipped', 0):,} 件・"
         f"顔 {summary.get('faces', 0):,} 件・削除 {summary.get('pruned', 0):,} 件・"

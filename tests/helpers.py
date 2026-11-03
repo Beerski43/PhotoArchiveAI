@@ -193,3 +193,26 @@ def write_photo(path: Path, image: Image.Image, thumbnail: Image.Image = None) -
     else:
         image.save(path, "JPEG", quality=95, exif=exif_with_thumbnail(thumbnail))
     return str(path)
+
+
+def add_family_photo(connection, path: Path, width: int = 40) -> int:
+    """手本の顔が1つ写った写真を DB に足す（`assess` の対象になる・#130）。"""
+    from PIL import Image
+
+    from photoarchive_ai import db
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, 30), (120, 120, 120)).save(path)
+    media_id = db.save_media(connection, {
+        "path": str(path), "filename": path.name, "type": "image", "file_hash": str(path),
+        "file_size": 1, "created_time": "2020-01-01T00:00:00",
+    })
+    person = connection.execute("SELECT id FROM Person").fetchone()
+    person_id = person[0] if person else db.add_person(connection, "${PERSON_1}")
+    db.add_face(
+        connection, media_id=media_id, bbox=(5, 20, 20, 5), embedding=[0.0] * db.EMBEDDING_DIM,
+        embed_version=db.embedding_model.ACTIVE.version,
+        person_id=person_id, assign_source=db.ASSIGN_MANUAL,
+    )
+    connection.commit()
+    return media_id

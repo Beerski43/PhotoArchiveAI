@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-from typing import Callable, NamedTuple, Optional, Tuple
+from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -234,6 +234,21 @@ def nima_input(rgb: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def missing_model_files() -> List[str]:
+    """置かれていないモデルのファイル名（GUI が始める前に確かめる・#130）。"""
+    from . import face  # noqa: PLC0415 — face は重い（mediapipe）ので使うときだけ
+
+    return [name for name in (MUSIQ_FILE, NIMA_FILE) if face.find_model_file(name) is None]
+
+
+def missing_models_message(missing: Sequence[str]) -> str:
+    return (
+        f"写真の良し悪しのモデルが見つかりません: {', '.join(missing)}。"
+        " PyTorch と pyiqa のある別の仮想環境で `scripts/export_iqa_onnx.py` を流して"
+        " models/ に置いてください（手順は README）。"
+    )
+
+
 class Models:
     """MUSIQ と NIMA の ONNX のセッション。`load` で作る。"""
 
@@ -246,13 +261,9 @@ class Models:
         """``models/`` から読む。無ければ置き方を添えて落とす。"""
         from . import face  # noqa: PLC0415 — face は重い（mediapipe）ので使うときだけ
 
-        missing = [name for name in (MUSIQ_FILE, NIMA_FILE) if face.find_model_file(name) is None]
+        missing = missing_model_files()
         if missing:
-            raise FileNotFoundError(
-                f"写真の良し悪しのモデルが見つかりません: {', '.join(missing)}。"
-                " PyTorch と pyiqa のある別の仮想環境で `scripts/export_iqa_onnx.py` を流して"
-                " models/ に置いてください（手順は README）。"
-            )
+            raise FileNotFoundError(missing_models_message(missing))
         import onnxruntime  # noqa: PLC0415
 
         def session(name):
@@ -327,6 +338,7 @@ def assess(
     root_paths=(),
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     limit: Optional[int] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """家族の写った写真のうち、まだ測っていない写真を測って書く（`photoarchive assess`）。
 
@@ -335,6 +347,9 @@ def assess(
     マウントし直せば次で測る・PR #111 の指摘1）。``root_paths`` に**無い root があれば始める前に止める**
     （`FileNotFoundError`。`scan` と同じ）。``limit`` は試しに数枚だけ測るとき。
     返すのは ``{"total": 対象, "measured": 測れた, "unreadable": 読めなかった, "missing": 届かなかった}``。
+
+    ``should_stop`` が真を返したら、**書きかけの塊を書いてから**抜け、``"stopped": True`` を足して返す
+    （GUI の「止める」・#130）。次は続きから測る。
     """
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
@@ -377,9 +392,13 @@ def assess(
             else:
                 pending.append((media_id, measure(models, *loaded)))
                 summary["measured"] += 1
-            if len(pending) >= CHUNK_SIZE or index + 1 == total:
+            stopping = should_stop is not None and index + 1 < total and should_stop()
+            if len(pending) >= CHUNK_SIZE or index + 1 == total or stopping:
                 db.save_photo_quality(connection, pending, MODEL_VERSION)
                 pending = []
             if progress_callback is not None:
                 progress_callback(index + 1, total, "assessing photos")
+            if stopping:
+                summary["stopped"] = True
+                break
     return summary
