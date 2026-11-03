@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (
 
 from . import config
 
+EMPTY_DATABASE = (
+    "DB の場所が空です。空にすると、次に --db なしで起動できなくなります。"
+    "DB を使わない設定にするなら、設定ファイルを直接直してください。"
+)
+
 #: 窓の題名とボタンの名前
 TITLE = "設定"
 OPEN_LABEL = "設定…"
@@ -42,7 +47,9 @@ def _resolved(value: str) -> Path:
 
 
 def check_paths(
-    roots: Sequence[str], output_root: Optional[str]
+    roots: Sequence[str],
+    output_root: Optional[str],
+    settings_path: Optional[Path] = None,
 ) -> Tuple[List[str], List[str]]:
     """保存の前に確かめる。``(止める理由, 確かめること)`` を返す。
 
@@ -50,12 +57,17 @@ def check_paths(
     出力先が root と同じ・root の内側・root を内側に含む（`select` は出力先の直下と年の
     フォルダのファイルを消すので、どの向きでも元写真が消えうる）。
     確かめる: 無いフォルダ（NFS が外れているだけのことがある）。
+
+    **相対の root は ``settings_path``（書く先の設定ファイル）の置き場所から解く**（起動時の
+    ``gui.resolve_root`` と同じ・``config.resolve_source_root``）。カレントから解くと、設定が
+    カレントの外にあるとき実在する root を「見つからない」と言い、root の内側の出力先を
+    止められなかった（PR #138 のレビュー指摘1）。
     """
     errors: List[str] = []
     warnings: List[str] = []
     resolved = []
     for value in roots:
-        path = _resolved(value)
+        path = _resolved(config.resolve_source_root(value, settings_path))
         if not path.is_dir():
             warnings.append(f"写真の置き場所が見つかりません: {value}")
         if path not in resolved:
@@ -136,6 +148,7 @@ class SettingsDialog(QDialog):
         roots_row.addLayout(root_buttons)
         roots_note = QLabel(
             "共通の親（たとえば NAS の直下）を書かないでください。関係の無いフォルダまで取り込みます。"
+            "相対パスは設定ファイルの置き場所（config/ の1つ上）から解きます。"
         )
         roots_note.setWordWrap(True)
 
@@ -245,7 +258,10 @@ class SettingsDialog(QDialog):
     def save(self) -> bool:
         """確かめてから書く。書いたら True。"""
         values = self.values()
-        errors, warnings = check_paths(values["source_roots"], values["output_root"])
+        errors, warnings = check_paths(values["source_roots"], values["output_root"], self.path)
+        if not values["database_path"]:
+            # 無いと次に --db なしで起動できない（PR #138 のレビュー指摘2・利用者の決定「保存させない」）
+            errors.insert(0, EMPTY_DATABASE)
         if errors:
             QMessageBox.warning(self, "保存できません", "\n\n".join(errors))
             return False
@@ -260,6 +276,8 @@ class SettingsDialog(QDialog):
         except (OSError, config.SettingsWriteError) as error:
             QMessageBox.warning(self, "保存できません", str(error))
             return False
-        database = values["database_path"]
-        self.database_needs_restart = bool(database) and _resolved(database) != _resolved(self.open_database)
+        # **値を変えたときだけ**知らせる（PR #138 のレビュー指摘3）。いま開いている DB と比べると、
+        # --db で起動したときに DB に触れなくても出ていた（次も --db なら --db が優先する）
+        before = self.settings.get("database_path")
+        self.database_needs_restart = not before or _resolved(str(before)) != _resolved(values["database_path"])
         return True

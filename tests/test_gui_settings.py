@@ -63,6 +63,14 @@ def _media(tmp_path, name):
     return folder
 
 
+def _dialog(window):
+    """DB の欄を入れた窓（空だと保存させない・PR #138 のレビュー指摘2）。"""
+    dialog = gui_settings.SettingsDialog(window.database_path, window)
+    if not dialog.database_edit.text():
+        dialog.database_edit.setText(window.database_path)
+    return dialog
+
+
 @pytest.fixture()
 def window(tmp_path):
     database = tmp_path / "test.db"
@@ -161,7 +169,7 @@ def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path,
     output = tmp_path / "out"
     output.mkdir()
 
-    dialog = gui_settings.SettingsDialog(window.database_path, window)
+    dialog = _dialog(window)
     assert not isolated_config.exists()
     dialog.add_root(str(media))
     dialog.output_edit.setText(str(output))
@@ -170,11 +178,13 @@ def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path,
     window.apply_settings(dialog.saved)
 
     assert yaml.safe_load(isolated_config.read_text(encoding="utf-8")) == {
+        "database_path": window.database_path,
         "source_roots": [str(media)],
         "output_root": str(output),
         "rule_path": str(rule),
     }
-    assert not dialog.database_needs_restart
+    # 設定ファイルが無かった（DB の場所を新しく書いた）ので、次に起動したときから
+    assert dialog.database_needs_restart
     # 取り込みタブの root・選定タブの出力先とルール（読み直して重みに出る）
     assert window.scan_panel.roots == [str(media)]
     assert window.scan_panel.start_button.isEnabled()
@@ -205,15 +215,16 @@ def test_a_new_database_path_waits_for_the_next_start(window, tmp_path, isolated
     # 開いている接続は差し替えない
     assert window.assignment.db_path == window.database_path
 
+    # 開き直して DB に触れずに保存したら、知らせない
     same = gui_settings.SettingsDialog(window.database_path, window)
-    same.database_edit.setText(window.database_path)
+    assert same.database_edit.text() == str(tmp_path / "other.db")
     assert same.save()
     assert not same.database_needs_restart
 
 
 def test_refused_settings_are_not_written(window, tmp_path, isolated_config, answers):
     media = _media(tmp_path, "media")
-    dialog = gui_settings.SettingsDialog(window.database_path, window)
+    dialog = _dialog(window)
     dialog.add_root(str(media))
     dialog.output_edit.setText(str(media / "out"))
 
@@ -275,3 +286,48 @@ def test_the_corner_button_opens_saves_and_applies(window, tmp_path, isolated_co
     # 閉じただけなら何も変えない
     monkeypatch.setattr(gui_settings.SettingsDialog, "exec", lambda dialog: 0)
     assert window.open_settings() is None
+
+
+# ----------------------------------------------------------------------
+# PR #138 のレビュー対応
+# ----------------------------------------------------------------------
+
+
+def test_relative_roots_are_checked_from_the_settings_file(tmp_path, monkeypatch):
+    """指摘1: 相対の root は、起動時と同じく設定ファイルの置き場所から解いて確かめる。"""
+    home = tmp_path / "home"
+    settings_path = home / "config" / "app_settings.yml"
+    _media(home, "photos")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    errors, warnings = gui_settings.check_paths(["photos"], str(home / "photos" / "out"), settings_path)
+
+    assert any("重なっています" in error for error in errors)
+    assert not any("見つかりません" in warning for warning in warnings)
+    # 起動時（gui.resolve_root）と同じ起点
+    _write(settings_path, {"source_roots": ["photos"]})
+    monkeypatch.setenv(config.CONFIG_ENV_VAR, str(settings_path))
+    assert gui.resolve_root("photos") == str(home / "photos")
+
+
+def test_an_empty_database_path_is_not_saved(window, isolated_config, answers):
+    """指摘2: DB の欄が空なら保存させない（次に --db なしで起動できなくなる・利用者の決定）。"""
+    _write(isolated_config, {"database_path": "data/x.db"})
+    dialog = gui_settings.SettingsDialog(window.database_path, window)
+    dialog.database_edit.setText("  ")
+
+    assert not dialog.save()
+    assert gui_settings.EMPTY_DATABASE in answers["shown"][-1]
+    assert config.load_settings() == {"database_path": "data/x.db"}
+
+
+def test_the_restart_notice_only_follows_a_changed_database_path(window, tmp_path, isolated_config, answers):
+    """指摘3: --db で起動していても、DB の欄を変えなければ「次に起動したときから」と出さない。"""
+    _write(isolated_config, {"database_path": str(tmp_path / "settings.db")})
+    dialog = gui_settings.SettingsDialog(str(tmp_path / "given-by-db-flag.db"), window)
+    dialog.output_edit.setText(str(tmp_path / "out"))
+
+    assert dialog.save()
+    assert not dialog.database_needs_restart

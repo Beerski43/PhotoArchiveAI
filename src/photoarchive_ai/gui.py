@@ -374,13 +374,10 @@ def resolve_root(source_roots: Optional[str]) -> Optional[str]:
     `database_path` など他の相対値はここでは扱わない。設定の解釈を全体で
     変えるのは、明示的な指示が要る（CLAUDE.md §4）。
     """
-    if not source_roots or Path(source_roots).is_absolute():
-        return source_roots
-    settings_path = find_settings_path()
-    if settings_path is None:
-        return source_roots
-    # config/app_settings.yml → リポジトリ直下
-    return str(settings_path.parent.parent / source_roots)
+    from .config import resolve_source_root
+
+    # 起点の決め方は設定の窓の検査と1つ（`config.resolve_source_root`・PR #138 のレビュー指摘1）
+    return resolve_source_root(source_roots, find_settings_path())
 
 
 def format_folder(folder: str, source_roots: SourceRoots = None) -> str:

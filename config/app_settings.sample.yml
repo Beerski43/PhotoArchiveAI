@@ -1,6 +1,6 @@
 # アプリ設定のサンプル。config/app_settings.yml に写して使う。
-# 相対パスはカレントディレクトリから解く（source_roots だけは、GUI の表示では
-# この設定ファイルの置き場所から解く）。
+# 相対パスはカレントディレクトリから解く（source_roots だけは、GUI では
+# この設定ファイルの置き場所の1つ上から解く）。
 database_path: data/photoarchive.db
 # 走査する写真の root。複数並べられる。共通の親を書かない（入れ子は止める）
 source_roots:

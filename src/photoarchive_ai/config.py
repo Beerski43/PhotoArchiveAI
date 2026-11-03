@@ -192,6 +192,20 @@ def get_source_roots(settings: Dict[str, Any]) -> List[str]:
     return [str(item) for item in value if item]
 
 
+def resolve_source_root(value: str, settings_path: Optional[Path]) -> str:
+    """GUI が使う root の解き方。**相対の root は設定ファイルの置き場所（``config/`` の1つ上）から解く。**
+
+    起動時（``gui.resolve_root``）と設定の窓の保存前の検査（``gui_settings.check_paths``）が
+    同じこの関数を呼ぶ。別々に書くと起点が食い違い、窓の検査が実在する root を「見つからない」と
+    言い、root の内側の出力先を止められなかった（PR #138 のレビュー指摘1）。
+    設定ファイルが無ければ、そのまま返す（カレントから解かれる）。
+    """
+    if not value or Path(value).expanduser().is_absolute() or settings_path is None:
+        return value
+    # config/app_settings.yml → その1つ上（リポジトリ直下）
+    return str(settings_path.parent.parent / value)
+
+
 def get_output_root(settings: Dict[str, Any]) -> Optional[str]:
     return settings.get("output_root")
 

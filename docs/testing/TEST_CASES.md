@@ -1054,7 +1054,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_nothing_to_assess_disables_the_button` | 測る写真が無ければ押せない |
 | `test_status_lines_name_each_job` | 仕事ごとの進み具合・止めたときの文 |
 
-### `test_gui_settings.py` — GUI の設定の窓（13件。#131）
+### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
 **リポジトリには本物の設定がある。** 探す場所（環境変数・カレント・リポジトリ直下）を全部 `tmp_path` に向けてから開く。
 
@@ -1071,6 +1071,9 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
 | `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |
 | `test_the_dialog_shows_the_current_file_and_keeps_other_keys` | いまの値を出し、root を外して保存できる。ほかのキーは残る |
+| `test_relative_roots_are_checked_from_the_settings_file` | **相対の root は起動時と同じく設定ファイルの置き場所から解いて確かめる**（カレントから解くと root の内側の出力先を止められなかった・PR #138 のレビュー指摘1） |
+| `test_an_empty_database_path_is_not_saved` | **DB の欄が空なら保存させない**（次に `--db` なしで起動できなくなる・指摘2・利用者の決定） |
+| `test_the_restart_notice_only_follows_a_changed_database_path` | 「次に起動したときから」は DB の欄を変えたときだけ（`--db` で起動していても・指摘3） |
 | `test_the_corner_button_opens_saves_and_applies` | `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
 
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
