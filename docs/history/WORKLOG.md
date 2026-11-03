@@ -11,6 +11,11 @@
 - 追記したら `python scripts/archive_worklog.py` を実行し、その差分も同じ
   コミットに含める。直近20件を超えたぶんは `archive/` へ年ごとに移る
 
+## 2026-11-03 — 引き継ぎを書いた（PR #137 マージ待ち）
+
+申し送りは [details/2026-11-03-handoff-pr137-gui-assess-convert.md](details/2026-11-03-handoff-pr137-gui-assess-convert.md)。**PR #137 マージ待ち**（#130・GUI から `convert-heic` と `assess`）。レビューの指摘1件は対応済み。
+**次**: 「実装を再開して」と言われたら 9.3（#131・設定画面）。その前に PR #137 のマージを確かめる。実データには触っていない。
+
 ## 2026-11-03 — GUI から `convert-heic` と `assess` を裏で流す（Phase 9 の 9.2）
 
 **#130（親 #128）。** PR #136（#135）はマージ済みなので ROADMAP 4.13 を済に。方針は #130 のコメント（2026-11-03）。
@@ -161,15 +166,6 @@ PR #122（#120）はマージ済みなので ROADMAP 4.11 を済に。利用者�
 - 仕様書 1.21（GUI の操作体系の変更）・GUI 利用手順・README・CLAUDE.md（`undo.py` と「列を足したら `FACE_COLUMNS` にも」）・TEST_CASES
 スキーマは変えていない（`migrate` 不要）。実データには触っていない。
 レビュー対応（PR #117・2026-10-21）: 指摘1 戻す・やり直すで DB に書けないと（`database is locked`）、何も変わらないまま操作が履歴から消えていた → 書けなかっただけなら履歴に戻し、GUI で知らせる。指摘2 減点の操作の名前を「〜を他人(減点)にしました」に。指摘3 空白。
-
-## 2026-10-19 — 設定ファイル（YAML）の説明を1か所にまとめた
-
-**#96（ROADMAP 4.10.2）。** PR #114 のマージ後、利用者の指定「#96で良いと思う」で着手した。本文が空なので、題名から「各キーの意味を利用者が1か所で引けるようにする」と解釈した（Issue に書いた）。
-- `docs/operation/CONFIG.md` を作った: `app_settings.yml`（探す順・キー・引数との優先順・相対パス・環境変数）、`rule.yml`（絞り込み・似た写真・年ごとの枚数・重み・誤ったときの振る舞い・GUI の「ルールを保存」）、`private_terms.yml`。設計の理由は仕様書に残し、こちらはリンクする
-- 一覧が古くならないよう `tests/test_config_reference.py`: コードが読むキーと既定（`RULE_FLAGS`・`RULE_NUMBERS`・`Weights.default`）を表とサンプルに照らす
-- README・`docs/README.md`・仕様書 §2.2 / §12.1 からリンク。ROADMAP の 4.10.1 を済に（本筋の外）
-本筋の外で直したもの（README）: 注意事項の「`face.EMBED_VERSION` を上げて再スキャン」→ `embedding.ACTIVE.version` を上げて `reembed`（再スキャンは手動割り当てを消す・CLAUDE.md §8。テストで見張る）。「GUI は人物登録と顔の割り当て、検出と自動紐づけは CLI」→ GUI から `match` と選定も流せる。「`convert-heic` は設定ファイルも要らない」→ `--source` が無いときは root を設定から読む。ディレクトリ構成に `private_terms.sample.yml` と `CONFIG.md` を足した。
-判断待ち: ルールの最上位の**知らないキーは黙って読み飛ばす**（`weights` の中だけ止める）。綴りの誤りが効かないまま気づけないので、止めるかどうかを PR で聞く。
 
 ## 過去の履歴
 

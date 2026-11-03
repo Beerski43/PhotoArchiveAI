@@ -29,6 +29,15 @@
 申し送りは [details/2026-10-19-handoff-pr114-gui-rework.md](details/2026-10-19-handoff-pr114-gui-rework.md)。**PR #114 マージ待ち**（#113）。このセッションで対話で足した GUI の手直し（行き先つきの「この人物ではない」・用語の改名・左の「自動割当」をやめる・選定タブのプレビューと年の表と年の範囲）も同じ PR に入っている。利用者「だいぶ良くなったよ。」
 実データには触っていない。Windows から SSH で開いたときの日本語入力は、手順を示したが未確認（申し送り）。
 
+## 2026-10-19 — 設定ファイル（YAML）の説明を1か所にまとめた
+
+**#96（ROADMAP 4.10.2）。** PR #114 のマージ後、利用者の指定「#96で良いと思う」で着手した。本文が空なので、題名から「各キーの意味を利用者が1か所で引けるようにする」と解釈した（Issue に書いた）。
+- `docs/operation/CONFIG.md` を作った: `app_settings.yml`（探す順・キー・引数との優先順・相対パス・環境変数）、`rule.yml`（絞り込み・似た写真・年ごとの枚数・重み・誤ったときの振る舞い・GUI の「ルールを保存」）、`private_terms.yml`。設計の理由は仕様書に残し、こちらはリンクする
+- 一覧が古くならないよう `tests/test_config_reference.py`: コードが読むキーと既定（`RULE_FLAGS`・`RULE_NUMBERS`・`Weights.default`）を表とサンプルに照らす
+- README・`docs/README.md`・仕様書 §2.2 / §12.1 からリンク。ROADMAP の 4.10.1 を済に（本筋の外）
+本筋の外で直したもの（README）: 注意事項の「`face.EMBED_VERSION` を上げて再スキャン」→ `embedding.ACTIVE.version` を上げて `reembed`（再スキャンは手動割り当てを消す・CLAUDE.md §8。テストで見張る）。「GUI は人物登録と顔の割り当て、検出と自動紐づけは CLI」→ GUI から `match` と選定も流せる。「`convert-heic` は設定ファイルも要らない」→ `--source` が無いときは root を設定から読む。ディレクトリ構成に `private_terms.sample.yml` と `CONFIG.md` を足した。
+判断待ち: ルールの最上位の**知らないキーは黙って読み飛ばす**（`weights` の中だけ止める）。綴りの誤りが効かないまま気づけないので、止めるかどうかを PR で聞く。
+
 ## 2026-10-18 — 引き継ぎを書いた（PR #112 マージ待ち・レビュー対応済み）
 
 申し送りは [details/2026-10-18-handoff-after-pr112-review.md](details/2026-10-18-handoff-after-pr112-review.md)。**PR #112 マージ待ち**（#110・人物ごとの重み・親しい人・減点する顔）。レビュー指摘1で人数の加点を1人目からにした（利用者の決定）。
