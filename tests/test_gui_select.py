@@ -59,10 +59,14 @@ def _names(panel):
 
 
 def test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second(window):
-    assert window.count() == 2
+    from photoarchive_ai import gui_scan
+
+    # 3枚目は取り込み（#129）
+    assert window.count() == 3
     assert window.tabText(0) == "顔の割り当て" and isinstance(window.widget(0), gui.MainWindow)
     assert window.tabText(1) == "写真の選定"
     assert isinstance(window.widget(1), gui_select.SelectionPanel)
+    assert window.tabText(2) == "取り込み" and isinstance(window.widget(2), gui_scan.ScanPanel)
 
 
 def test_the_settings_start_from_the_rule_file(window):
