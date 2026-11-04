@@ -171,10 +171,11 @@ def fill_missing(
     connection,
     assign_sources=None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    penalized: bool = False,
 ) -> int:
     """表情が未計測の顔を測って書く。書いた件数を返す。
 
-    ``assign_sources`` で対象を絞る（既定は手本と自動割り当て）。
+    ``assign_sources`` で対象を絞る（既定は手本と自動割り当て）。``penalized`` なら他人(減点)の顔も測る（#139）。
     **測れない環境では何もしない**（全部を「顔が取れなかった」にすると、モデルを
     置いても二度と測り直されない）。壊れたサムネイルも書かない。
     """
@@ -182,7 +183,7 @@ def fill_missing(
 
     sources = assign_sources or (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
     # **サムネイルを全件まとめて読まない**（CLAUDE.md §8）。id だけ先に取る。
-    face_ids = db.faces_without_expression(connection, sources)
+    face_ids = db.faces_without_expression(connection, sources, penalized=penalized)
     total = len(face_ids)
     if not total or not available():
         return 0

@@ -132,7 +132,15 @@ def _row(person_id, eye_blink=0.0, mouth_smile=0.0, sharpness=200.0):
     return {
         "person_id": person_id, "aligned": 1, "yaw": 0.0, "sharpness": sharpness,
         "eye_blink": eye_blink, "mouth_smile": mouth_smile,
+        "bbox_top": 0, "bbox_right": 50, "bbox_bottom": 50, "bbox_left": 0,
     }
+
+
+def _item_points(key):
+    """顔の項目 ``key`` が 0 から 1 に動いたときに、写真の点がどれだけ動くか（既定の重み・#139）。"""
+    weights = scoring.Weights.default()
+    face_total = sum(getattr(weights, item) for item in scoring.FACE_ITEMS)
+    return weights.ratio() * 100.0 * getattr(weights, key) / face_total
 
 
 def test_closed_eyes_lower_the_face_and_an_open_smile_raises_it():
@@ -140,22 +148,24 @@ def test_closed_eyes_lower_the_face_and_an_open_smile_raises_it():
     open_neutral = scoring.family_photo_score([_row(1)])
     smiling = scoring.family_photo_score([_row(1, mouth_smile=0.4)])
     assert closed < open_neutral < smiling
-    assert smiling - open_neutral == pytest.approx(100.0 * scoring.WEIGHT_SMILE)
-    # 目を閉じた家族は人数に数えないので、1人目からの加点（PR #112 の指摘1）も付かない
-    assert open_neutral - closed == pytest.approx(100.0 * scoring.WEIGHT_EYES + scoring.MEMBER_BONUS)
+    assert smiling - open_neutral == pytest.approx(_item_points("smile"))
+    assert open_neutral - closed == pytest.approx(_item_points("eyes"))
 
 
-def test_a_family_member_with_closed_eyes_is_not_counted_as_clearly_pictured():
-    """**目を閉じた家族は人数に数えない**（利用者の決定・ボケと同じ扱い）。"""
+def test_a_family_member_with_closed_eyes_still_adds_but_less():
+    """#139 から、目を閉じた家族も**人数から外さず、目の点だけ下がる**（家族の加点は顔ごとの点の和）。"""
+    one = scoring.family_photo_score([_row(1)])
     both_open = scoring.family_photo_score([_row(1), _row(2)])
     one_closed = scoring.family_photo_score([_row(1), _row(2, eye_blink=0.5)])
-    assert both_open - one_closed == pytest.approx(scoring.MEMBER_BONUS)
+    assert one < one_closed < both_open
+    # 目を閉じた顔は2人目に回るので、2人目の効き（`extra_person`）をかけたぶんだけ下がる
+    extra = scoring.Weights.default().extra_person
+    assert both_open - one_closed == pytest.approx(extra * _item_points("eyes"))
 
 
 def test_an_unmeasured_expression_neither_helps_nor_excludes():
-    """**分からないものを外さない。** モデルの無い環境で人数の加点が全部消えないように。"""
+    """**分からないものを外さない。** 未計測は 0.5（良いとも悪いとも言わない）。"""
     unknown = [_row(1, eye_blink=None, mouth_smile=None), _row(2, eye_blink=None)]
-    assert scoring.is_clear_face(1, 200.0, None)
     assert scoring.eyes_level(None) == scoring.smile_level(None) == scoring.UNKNOWN
     assert scoring.family_photo_score(unknown) > scoring.family_photo_score(unknown[:1])
 
@@ -208,16 +218,8 @@ def test_a_dry_run_of_match_writes_no_expression(connection):
     assert _expression_of(connection, face_id) == (None, None, None)
 
 
-def test_a_lone_smile_does_not_push_out_two_family_members_pictured_clearly():
-    """**人数の加点は 20**（利用者の決定）。10 のままだと、1人だけ写った笑顔の写真が
-    家族のそろった写真を押しのけた（実データの出力で1人の写真が 97 → 240 枚）。
-
-    **境目はちょうど同点**（1人の満点の笑顔 35+25+20+20 = 2人の無表情 80+20）。
-    それ以上には押しのけない。同点のときの順は `select` の並びの次の手がかり
-    （`quality_score` 以降）で決まる（PR #97 のレビュー指摘2）。
-    """
+def test_two_family_members_rank_above_a_lone_smile():
+    """家族の加点は**顔ごとの点の和**（#139・利用者の決定）。無表情でも2人そろった写真は、1人の満点の笑顔より上。"""
     lone_smile = scoring.family_photo_score([_row(1, mouth_smile=1.0)])
     two_straight_faces = scoring.family_photo_score([_row(1), _row(2)])
-    two_with_a_faint_smile = scoring.family_photo_score([_row(1, mouth_smile=0.03), _row(2)])
-    assert two_straight_faces == pytest.approx(lone_smile)
-    assert two_with_a_faint_smile > lone_smile
+    assert two_straight_faces > lone_smile

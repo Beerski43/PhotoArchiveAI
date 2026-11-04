@@ -70,29 +70,37 @@ RESULT_THUMBNAIL = 180
 PREVIEW_SIZE = 1200
 PREVIEW_PROMPT = "写真を選ぶと、ここに大きく出ます"
 
-#: 重みの項目と、画面に出す名前・刻み。順は `scoring.Weights` と同じ。
+#: 重みの項目と、画面に出す名前・刻み（`scoring.Weights`・#139）。比重を先頭に、顔・他人・写真全体の順。
+#: 顔の項目どうし・写真全体の項目どうしは**比**で効く（和で割る）。
 WEIGHT_FIELDS = (
-    ("sharpness", "鮮明さ（ボケていない）", 0.05),
-    ("frontal", "正面を向いている", 0.05),
-    ("eyes", "目を開けている", 0.05),
-    ("smile", "笑顔", 0.05),
-    ("member_bonus", "家族1人ごとの加点", 1.0),
-    ("stranger_penalty", "他人(減点)の顔の減点（顔認証外にした顔のうち選んだ顔）", 1.0),
+    ("face_ratio", "比重: 顔の側（家族の加点 − 他人の減点）の割合 %。残りが写真全体", 1.0),
+    ("extra_person", "2人目以降の効き（1 で全員を同じだけ足す・0 でいちばん良い1人だけ）", 0.05),
+    ("sharpness", "顔: 鮮明さ（ボケていない）", 0.05),
+    ("frontal", "顔: 正面を向いている", 0.05),
+    ("eyes", "顔: 目を開けている", 0.05),
+    ("smile", "顔: 笑顔", 0.05),
+    ("size", "顔: 大きさ（写真でいちばん大きい顔と比べて）", 0.05),
+    ("cutoff", "顔: 見切れていない（写真の縁で切れていない）", 0.05),
+    ("strangers", "他人(減点)の顔の点にかける重み（顔認証外にした顔のうち選んだ顔）", 0.1),
     # 写真全体（#106・`photoarchive assess` で測る）。**MUSIQ と NIMA は別々の重み**で、どちらに寄せるかは
     # この2つの比で決まる（#120・利用者の要望）
-    ("technical", "画質（ぶれ・ピンぼけ・暗さ・MUSIQ）", 0.05),
-    ("aesthetic", "美しさ（構図・NIMA）", 0.05),
-    ("highlights", "白飛びの減点", 0.05),
-    ("shadows", "黒つぶれの減点", 0.05),
-    ("cutoff", "顔の見切れの減点", 0.05),
+    ("technical", "写真全体: 画質（ぶれ・ピンぼけ・暗さ・MUSIQ）", 0.05),
+    ("aesthetic", "写真全体: 美しさ（構図・NIMA）", 0.05),
+    ("highlights", "写真全体: 白飛びしていない", 0.05),
+    ("shadows", "写真全体: 黒つぶれしていない", 0.05),
 )
 #: 横ゲージの右端（#120）。**ゲージは入力欄の写しで、値の上限ではない**（右端より大きい値も入力欄で入れられ、
-#: ゲージは右端に止まるだけ）。刻みが 0.05 の重みは 1、点（刻み 1）の重みは 100。
-WEIGHT_SLIDER_MAXIMUM = {0.05: 1.0, 1.0: 100.0}
+#: ゲージは右端に止まるだけ）。項目の比（刻み 0.05）は 1、他人の重み（刻み 0.1）は 3、比重（刻み 1）は 100。
+WEIGHT_SLIDER_MAXIMUM = {0.05: 1.0, 0.1: 3.0, 1.0: 100.0}
 #: 重みの入力の桁と上限。**ルールの値を丸めない・頭打ちにしない**（PR #108 のレビュー指摘3。
 #: 画面の値が CLI と黙ってずれ、保存すると丸めた値が残っていた）。`load_rule` は 0 以上なら受け付ける。
 WEIGHT_DECIMALS = 4
 WEIGHT_MAXIMUM = 1_000_000.0
+#: 上限のある重み。
+WEIGHT_LIMITS = {
+    "face_ratio": selection.FACE_RATIO_MAXIMUM,
+    "extra_person": selection.EXTRA_PERSON_MAXIMUM,
+}
 
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
@@ -113,20 +121,20 @@ NUMBER_FIELDS = (
 #: 各行の「既定に戻す」ボタンの文字（#120）。
 DEFAULT_LABEL = "既定"
 
-#: 点の内訳の項目と名前（`scoring.photo_breakdown`）。
+#: 点の内訳の項目と名前（`scoring.photo_breakdown`・#139）。顔の項目は家族と親しい人の顔の和、
+#: 比重をかけたあとの点。
 BREAKDOWN_LABELS = (
-    ("sharpness", "鮮明さ"),
-    ("frontal", "正面"),
-    ("eyes", "目"),
-    ("smile", "笑顔"),
-    ("members", "家族の人数"),
-    ("close", "親しい人"),
+    ("sharpness", "顔: 鮮明さ"),
+    ("frontal", "顔: 正面"),
+    ("eyes", "顔: 目"),
+    ("smile", "顔: 笑顔"),
+    ("size", "顔: 大きさ"),
+    ("cutoff", "顔: 見切れていない"),
     ("strangers", "他人(減点)の顔"),
-    ("technical", "画質"),
-    ("aesthetic", "美しさ"),
-    ("highlights", "白飛び"),
-    ("shadows", "黒つぶれ"),
-    ("cutoff", "顔の見切れ"),
+    ("technical", "写真全体: 画質"),
+    ("aesthetic", "写真全体: 美しさ"),
+    ("highlights", "写真全体: 白飛びしていない"),
+    ("shadows", "写真全体: 黒つぶれしていない"),
 )
 
 YEAR_UNKNOWN = "年不明"
@@ -402,7 +410,8 @@ class SelectionPanel(QWidget):
         defaults = scoring.Weights.default()
         for key, label, step in WEIGHT_FIELDS:
             spin = WheelSafeDoubleSpinBox()
-            spin.setRange(0.0, WEIGHT_MAXIMUM)
+            # 比重と2人目以降の効きには上限がある（`selection.rule_weights` が超える値を止める）
+            spin.setRange(0.0, WEIGHT_LIMITS.get(key, WEIGHT_MAXIMUM))
             spin.setDecimals(WEIGHT_DECIMALS)
             spin.setSingleStep(step)
             self.weight_spins[key] = spin
@@ -470,6 +479,11 @@ class SelectionPanel(QWidget):
         self.status = QLabel("")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        # 使わなくなったキーの知らせ（PR #140 の指摘3）。**`status` とは分ける**（「選ぶ」で消えないように）。
+        self.retired_notice = QLabel("")
+        self.retired_notice.setWordWrap(True)
+        layout.addWidget(self.retired_notice)
+        self._show_retired_keys()
         layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -562,6 +576,7 @@ class SelectionPanel(QWidget):
         self.rule_path = rule_path
         self.rule = self._read_rule()
         self._show_rule(self.rule)
+        self._show_retired_keys()
         self.year_table.setRowCount(0)
         if self._years_filled:
             self.refresh_years()
@@ -575,6 +590,15 @@ class SelectionPanel(QWidget):
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "ルールを読めません", str(error))
             return {}
+
+    def _show_retired_keys(self) -> None:
+        """いま読んでいるルールの、使わなくなったキーを画面に出す（GUI は端末を見ずに起動されることがある）。"""
+        retired = selection.retired_weight_keys(self.rule)
+        self.retired_notice.setText(
+            f"ルールの {'・'.join(retired)} は使わなくなりました。点の出し方が変わり、値は読み飛ばしています"
+            "（「ルールを保存」で消えます。docs/operation/CONFIG.md）。"
+            if retired else ""
+        )
 
     def _show_rule(self, rule: Dict[str, Any]) -> None:
         weights = selection.rule_weights(rule)
@@ -890,6 +914,7 @@ class SelectionPanel(QWidget):
             return
         write_rule(self.rule_path, rule)
         self.rule = rule
+        self._show_retired_keys()
         self.status.setText(f"ルールを保存しました: {self.rule_path}")
 
     def export(self) -> None:

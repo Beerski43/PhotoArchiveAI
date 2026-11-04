@@ -236,7 +236,11 @@ def test_without_automatic_assignments_a_crisp_auto_face_does_not_lift_the_photo
     selected = select_media(connection, rule)
 
     assert _paths(selected) == ["crisp-manual.jpg", "blurred-manual.jpg"]
-    assert selected[1]["family_score"] == 0.0
+    # 点に入るのはボケて目を閉じた手本の顔だけ（大きさと「見切れていない」の点しか残らない・#139）
+    weights = scoring.Weights.default()
+    face_total = sum(getattr(weights, key) for key in scoring.FACE_ITEMS)
+    expected = weights.ratio() * 100.0 * (weights.size + weights.cutoff) / face_total
+    assert selected[1]["family_score"] == pytest.approx(expected)
 
 
 def test_without_automatic_assignments_select_does_not_measure_automatic_faces(connection):
@@ -327,17 +331,13 @@ def test_a_crisp_stranger_does_not_lift_a_blurred_family_photo(connection):
     assert _paths(select_media(connection, {}))[0] == "crisp-family.jpg"
 
 
-def test_more_clear_family_members_rank_higher_but_blurred_ones_do_not_count(connection):
+def test_more_family_members_rank_higher_and_a_blurred_one_adds_less(connection):
+    """家族の加点は**顔ごとの点の和**（#139）。ボケた家族も足すが、くっきり写った家族より少ない。"""
     _add(connection, "one.jpg", faces=[_face("${PERSON_4}")])
     _add(connection, "two.jpg", faces=[_face("${PERSON_4}"), _face("${PERSON_3}")])
     _add(connection, "one-and-a-blur.jpg", faces=[_face("${PERSON_4}"), _face("${PERSON_3}", sharpness=20.0)])
 
-    selected = _paths(select_media(connection, {}))
-    assert selected[0] == "two.jpg"
-    assert set(selected[1:]) == {"one.jpg", "one-and-a-blur.jpg"}
-    assert scoring.family_photo_score(
-        db.family_faces(connection, [selected_id(connection, "one-and-a-blur.jpg")])
-    ) == scoring.family_photo_score(db.family_faces(connection, [selected_id(connection, "one.jpg")]))
+    assert _paths(select_media(connection, {})) == ["two.jpg", "one-and-a-blur.jpg", "one.jpg"]
 
 
 def selected_id(connection, path):
@@ -1150,9 +1150,12 @@ def test_the_explanation_includes_the_photo_parts(connection):
     media_id = _add(connection, "blown.jpg", faces=[_face("${PERSON_4}")])
     _measured(connection, media_id, 75.0, highlight=0.25)
     candidates = prepare(connection)
-    parts = explain(candidates, {"weights": {"technical": 0.3, "highlights": 0.4}}, media_id)
-    assert parts["technical"] == pytest.approx(30.0)
-    assert parts["highlights"] == pytest.approx(-40.0)
+    rule = {"weights": {"technical": 0.3, "aesthetic": 0.1, "highlights": 0.4, "face_ratio": 70}}
+    parts = explain(candidates, rule, media_id)
+    # 写真全体の項目は比（和 0.8 で割る）に、写真全体の割合（100 − 70）をかけたもの（#139）
+    assert parts["technical"] == pytest.approx(0.3 * 100 * 0.3 / 0.8)
+    assert parts["highlights"] == 0.0  # 白飛びがいっぱい（していない度 0）
+    assert parts["total"] == pytest.approx(sum(parts[key] for key in scoring.BREAKDOWN_KEYS))
 
 
 def test_the_photo_weights_can_be_written_in_the_rule(tmp_path: Path):

@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import re
@@ -15,6 +16,8 @@ from . import appearance, db, expression, scoring, similar, strangers
 from .dates import parse_date, taken_at
 from .db import get_media_with_analysis
 from .quality import MODEL_VERSION as QUALITY_VERSION
+
+logger = logging.getLogger("photoarchive.selection")
 
 
 def load_rule(rule_path: str) -> Dict[str, Any]:
@@ -41,6 +44,7 @@ def load_rule(rule_path: str) -> Dict[str, Any]:
     for key in RULE_FLAGS:
         _rule_flag(rule, key)
     rule_weights(rule)
+    _warn_retired_weights(rule, rule_path)
     year_limits(rule)
     output_layout(rule)
     return rule
@@ -57,26 +61,63 @@ RULE_NUMBERS = {
 #: ルールの ``weights:`` に書けるキー（`scoring.Weights` の項目）。
 WEIGHT_KEYS = scoring.Weights._fields
 
+#: #139 で使わなくなった ``weights:`` のキーと、その理由。**書いてあっても止めず、警告して読み飛ばす**
+#: （止めると、それまでのルールで `select` も GUI の選定タブも動かなくなる）。GUI で保存すると消える。
+RETIRED_WEIGHT_KEYS = {
+    "member_bonus": "人数の加点は無くなりました（家族の加点が顔ごとの点の和になったため）",
+    "stranger_penalty": (
+        "strangers に変わりました（引く点ではなく、他人(減点)の顔の点にかける数になったため。"
+        "同じ名前のまま古い値を読むと、何十倍も引くことになります）"
+    ),
+}
+
+#: 比重（``face_ratio``）の上限。
+FACE_RATIO_MAXIMUM = 100.0
+#: 2人目以降の効き（``extra_person``）の上限。1 を超えると、後ろの人ほど重くなってしまう。
+EXTRA_PERSON_MAXIMUM = 1.0
+
+
+def retired_weight_keys(rule: Dict[str, Any]) -> List[str]:
+    """ルールの ``weights:`` に書いてある、使わなくなったキー（GUI の画面にも出す・PR #140 の指摘3）。"""
+    return sorted(set(rule.get("weights") or {}) & set(RETIRED_WEIGHT_KEYS))
+
+
+def _warn_retired_weights(rule: Dict[str, Any], rule_path: str) -> None:
+    for key in retired_weight_keys(rule):
+        logger.warning(
+            "ルール %s の weights.%s は使いません: %s", rule_path, key, RETIRED_WEIGHT_KEYS[key]
+        )
+
 
 def rule_weights(rule: Dict[str, Any]) -> "scoring.Weights":
-    """ルールの ``weights:`` から並びの重みを作る（#103）。書いていない項目は既定値。
+    """ルールの ``weights:`` から並びの重みを作る（#103・#139）。書いていない項目は既定値。
 
-    **知らないキーは止める**（綴りを間違えると、黙って既定値のまま並ぶため）。
+    **知らないキーは止める**（綴りを間違えると、黙って既定値のまま並ぶため）。#139 で使わなくなったキー
+    （`RETIRED_WEIGHT_KEYS`）は読み飛ばす（警告は `load_rule` が一度だけ出す）。
     """
     given = rule.get("weights") or {}
     if not isinstance(given, dict):
         raise ValueError(f"ルールの weights は項目と数の組で書いてください: {given!r}")
-    unknown = sorted(set(given) - set(WEIGHT_KEYS))
+    unknown = sorted(set(given) - set(WEIGHT_KEYS) - set(RETIRED_WEIGHT_KEYS))
     if unknown:
         raise ValueError(
             f"ルールの weights に知らない項目があります: {', '.join(map(str, unknown))}"
             f"（書けるのは {', '.join(WEIGHT_KEYS)}）"
         )
     default = scoring.Weights.default()
-    return scoring.Weights(**{
+    weights = scoring.Weights(**{
         key: float(_rule_number(given, key, getattr(default, key), label=f"weights.{key}"))
         for key in WEIGHT_KEYS
     })
+    if weights.face_ratio > FACE_RATIO_MAXIMUM:
+        raise ValueError(
+            f"ルールの weights.face_ratio は 0〜{FACE_RATIO_MAXIMUM:g} で書いてください: {weights.face_ratio!r}"
+        )
+    if weights.extra_person > EXTRA_PERSON_MAXIMUM:
+        raise ValueError(
+            f"ルールの weights.extra_person は 0〜{EXTRA_PERSON_MAXIMUM:g} で書いてください: {weights.extra_person!r}"
+        )
+    return weights
 
 
 #: 年ごとの対応で「年の分からない写真」の枚数を書くキー（PR #108・利用者の決定）。
@@ -344,16 +385,19 @@ class Candidates:
         root_paths: Sequence[Path],
         progress_callback=None,
         quality: Optional[Dict[int, Dict[str, Any]]] = None,
+        largest: Optional[Dict[int, float]] = None,
     ):
         self.connection = connection
         #: 写真全体の良し悪し（`db.photo_quality`・#106）。測っていない写真は入っていない。
         self.quality = quality or {}
+        #: 写真ごとのいちばん大きい顔の一辺（`db.largest_face_sizes`・#139）。顔の大きさの物差し。
+        self.largest = largest or {}
         self.media = media
         self.rows = rows
         self.assign_sources = tuple(assign_sources)
         self.root_paths = list(root_paths)
         self.progress_callback = progress_callback
-        self._strangers: Dict[Tuple[str, ...], Dict[int, float]] = {}
+        self._strangers: Dict[Tuple[str, ...], Dict[int, List[Dict[str, Any]]]] = {}
         #: 見た目を測れなかった写真の ID。**同じ候補の中では読み直さない**（PR #107 の
         #: レビュー指摘2。GUI で重みを動かすたびに NFS を読み直していた）。DB には書かないので、
         #: 次の `prepare`（CLI の次の実行）からは測り直す。
@@ -371,11 +415,11 @@ class Candidates:
             )
         return [row for row in self.rows if row["assign_source"] in sources]
 
-    def stranger_weights(self, sources: Sequence[str]) -> Dict[int, float]:
-        """写真ごとの他人(減点)の顔の重み（`strangers.weights`）。種別ごとに一度だけ出す。"""
+    def stranger_faces(self, sources: Sequence[str]) -> Dict[int, List[Dict[str, Any]]]:
+        """写真ごとの他人(減点)の顔（`strangers.faces`）。種別ごとに一度だけ読む。"""
         key = tuple(sorted(sources))
         if key not in self._strangers:
-            self._strangers[key] = strangers.weights(self.connection, self.family_rows(sources))
+            self._strangers[key] = strangers.faces(self.connection, self.family_rows(sources))
         return self._strangers[key]
 
 
@@ -407,9 +451,12 @@ def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Di
     """写真1枚の点の内訳（`scoring.photo_breakdown`。#104）。`choose` と同じ重み・同じ顔。"""
     sources = family_sources(rule)
     faces = [row for row in candidates.family_rows(sources) if row["media_id"] == media_id]
-    weight = candidates.stranger_weights(sources).get(media_id, 0.0)
     return scoring.photo_breakdown(
-        faces, weight, rule_weights(rule), candidates.quality.get(media_id)
+        faces,
+        candidates.stranger_faces(sources).get(media_id, ()),
+        rule_weights(rule),
+        candidates.quality.get(media_id),
+        candidates.largest.get(media_id),
     )
 
 
@@ -441,16 +488,20 @@ def prepare(
     if isinstance(source_roots, (str, Path)):
         source_roots = [source_roots]
     root_paths = [Path(root).resolve() for root in source_roots or []]
+    # 他人(減点)の顔も測る（#139。引く点は家族と同じ項目の顔の点）。件数は印の数だけ。
     appearance.fill_missing(
-        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback
+        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback,
+        penalized=True,
     )
     expression.fill_missing(
-        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback
+        connection, assign_sources=tuple(assign_sources), progress_callback=progress_callback,
+        penalized=True,
     )
     rows = db.family_faces(connection, assign_sources=assign_sources)
     return Candidates(
         connection, get_media_with_analysis(connection), rows, assign_sources, root_paths,
         progress_callback, db.photo_quality(connection, QUALITY_VERSION),
+        db.largest_face_sizes(connection),
     )
 
 
@@ -501,7 +552,7 @@ def _scores(
     rows = candidates.family_rows(sources)
     return (
         scoring.family_photo_scores(
-            rows, candidates.stranger_weights(sources), weights, candidates.quality
+            rows, candidates.stranger_faces(sources), weights, candidates.quality, candidates.largest
         ),
         _family_of(rows),
     )

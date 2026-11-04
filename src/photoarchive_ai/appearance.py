@@ -125,11 +125,13 @@ def fill_missing(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     unassigned: bool = False,
     should_stop: Optional[Callable[[], bool]] = None,
+    penalized: bool = False,
 ) -> dict:
     """見え方が未計測の顔を測る。``{face_id: Appearance}`` を返す。
 
     ``assign_sources`` で対象を絞る（既定は手本と自動割り当て）。
     ``unassigned`` なら未分類の顔も測る（#135。GUI でボケた未分類の顔を絞るため）。
+    ``penalized`` なら他人(減点)の顔も測る（#139。`select` の他人の減点は顔の点で引くため）。
     ``write=False`` なら DB に書かない（**`evaluate` は書かない約束**なので）。
     ``should_stop`` が真を返したら、**塊の切れ目で**止める（済んだ塊は書いてある。
     次に呼べば残りから測る）。
@@ -142,7 +144,9 @@ def fill_missing(
     sources = assign_sources or (db.ASSIGN_MANUAL, db.ASSIGN_AUTO)
     # **サムネイルを全件まとめて読まない**（数万件で数百MB。CLAUDE.md §8）。
     # id だけ先に取り、塊ごとに読む。
-    face_ids = db.faces_without_appearance(connection, sources, unassigned=unassigned)
+    face_ids = db.faces_without_appearance(
+        connection, sources, unassigned=unassigned, penalized=penalized
+    )
     measured = {}
     total = len(face_ids)
     if total and progress_callback is not None:
