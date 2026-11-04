@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMainWindow,
     QMenu,
     QMessageBox,
     QProgressDialog,
@@ -566,7 +567,7 @@ MEASURE_TOOLTIP = (
     "未計測の顔（未分類・手動・自動）の鮮明さ・向きを、保存済みのサムネイルから測ります（元写真は読みません）。\n"
     "裏で流すので、測っているあいだも割り当てを続けられます。止めても、次は続きからになります。"
 )
-MATCH_BLOCKED_BY_JOB = "裏で処理（スキャン・鮮明さの計測）を流しているあいだは実行できません。終わるか、止めてから実行してください。"
+MATCH_BLOCKED_BY_JOB = "裏で処理を流しているあいだは実行できません。終わるか、止めてから実行してください。"
 #: まとめ処理を押せない理由（#135）
 BULK_BLOCKED_BY_JOB = (
     "裏で処理（スキャン・鮮明さの計測）を流しているあいだは押せません。"
@@ -825,45 +826,33 @@ def _format_size(byte_count: int) -> str:
     return f"{max(byte_count, 1) / 1024 ** 2:.0f}MB"
 
 
-class MatchDialog(QDialog):
-    """`match`（自動割り当て）を GUI から流す前の確認。
+class _AutoAssignDialog(QDialog):
+    """`match` と `unassign-auto` の確認の窓で共通の形（全員 / 左で選んだ人物・控え・既定は「やめる」）。
 
-    **端末へ追い出さない。** GUI で手本を増やしたら、その場で `match` を流して
-    結果を見たい。毎回端末へ移ると、そこで手が止まる。
-
-    **控えを取るかは毎回選べる。既定は「取る」。** `match` は自動割り当てを
-    いったん外して付け直すので、**控えがあれば流す前の状態へ戻せる**し、
-    結果も後から再現できる（`match` は決定的。2026-10-08 に、利用者が解除した
-    1,778 件を流す前の控えから特定できた）。毎回 DB と同じ大きさのファイルが
-    できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
-
-    **左で人物を選んでいれば、その人物だけを付け直すこともできる**（#123。
-    `photoarchive match --person` と同じ）。既定は全員（いままでどおり）。
-    人物を選んでいないときは、選ぶ欄そのものを出さない。
+    **人物を選んでいないときは、選ぶ欄そのものを出さない。** 中身の文は ``_update_detail`` が書く。
     """
 
     def __init__(
         self,
         parent,
+        title: str,
         counts: dict,
         database_path: str,
-        person: Optional[dict] = None,
-        person_auto: int = 0,
+        person: Optional[dict],
+        person_auto: int,
+        everyone_label: str,
+        person_label: str,
+        note: str = "",
     ):
         super().__init__(parent)
-        self.setWindowTitle("自動割り当て（match）を実行")
+        self.setWindowTitle(title)
         self.counts = counts
         self.person = person
         self.person_auto = int(person_auto)
         layout = QVBoxLayout(self)
 
-        self.everyone_button = QRadioButton("全員を付け直す", self)
-        self.person_button = QRadioButton(
-            f"{person['name']} だけを付け直す（ほかの人物の自動割当には触らない）"
-            if person
-            else "",
-            self,
-        )
+        self.everyone_button = QRadioButton(everyone_label, self)
+        self.person_button = QRadioButton(person_label, self)
         self.everyone_button.setChecked(True)
         if person is not None:
             layout.addWidget(self.everyone_button)
@@ -877,8 +866,6 @@ class MatchDialog(QDialog):
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
         layout.addWidget(self.detail)
-        self._update_detail()
-        self.everyone_button.toggled.connect(self._update_detail)
 
         source = Path(database_path)
         size = source.stat().st_size if source.exists() else 0
@@ -888,9 +875,10 @@ class MatchDialog(QDialog):
         self.backup_box.setChecked(True)
         layout.addWidget(self.backup_box)
 
-        note = QLabel("途中で止めることはできません（半分だけ付け直した状態になるため）。")
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        if note:
+            note_label = QLabel(note)
+            note_label.setWordWrap(True)
+            layout.addWidget(note_label)
 
         buttons = QDialogButtonBox()
         # **既定のボタンを「実行」にしない**（`MigrationDialog` と同じ理由）。
@@ -900,6 +888,8 @@ class MatchDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._prefer_cancel()
+        self._update_detail()
+        self.everyone_button.toggled.connect(self._update_detail)
 
     def _prefer_cancel(self) -> None:
         self.run_button.setAutoDefault(False)
@@ -915,10 +905,50 @@ class MatchDialog(QDialog):
         return self.backup_box.isChecked()
 
     def chosen_person_id(self) -> Optional[int]:
-        """付け直す人物。全員なら ``None``（`matcher.match_faces` の ``person_id``）。"""
+        """対象の人物。全員なら ``None``。"""
         if self.person is not None and self.person_button.isChecked():
             return int(self.person["id"])
         return None
+
+    def _update_detail(self, *_args) -> None:
+        raise NotImplementedError
+
+
+class MatchDialog(_AutoAssignDialog):
+    """`match`（自動割り当て）を GUI から流す前の確認。
+
+    **端末へ追い出さない。** GUI で手本を増やしたら、その場で `match` を流して
+    結果を見たい。毎回端末へ移ると、そこで手が止まる。
+
+    **控えを取るかは毎回選べる。既定は「取る」。** `match` は自動割り当てを
+    いったん外して付け直すので、**控えがあれば流す前の状態へ戻せる**し、
+    結果も後から再現できる（`match` は決定的。2026-10-08 に、利用者が解除した
+    1,778 件を流す前の控えから特定できた）。毎回 DB と同じ大きさのファイルが
+    できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
+
+    **左で人物を選んでいれば、その人物だけを付け直すこともできる**（#123。
+    `photoarchive match --person` と同じ）。既定は全員（いままでどおり）。
+    """
+
+    def __init__(
+        self,
+        parent,
+        counts: dict,
+        database_path: str,
+        person: Optional[dict] = None,
+        person_auto: int = 0,
+    ):
+        super().__init__(
+            parent,
+            "自動割り当て（match）を実行",
+            counts,
+            database_path,
+            person,
+            person_auto,
+            "全員を付け直す",
+            f"{person['name']} だけを付け直す（ほかの人物の自動割当には触らない）" if person else "",
+            note="途中で止めることはできません（半分だけ付け直した状態になるため）。",
+        )
 
     def _update_detail(self, *_args) -> None:
         if self.chosen_person_id() is None:
@@ -942,6 +972,48 @@ class MatchDialog(QDialog):
             f"閾値 {matcher.DEFAULT_THRESHOLD} / マージン {matcher.DEFAULT_MARGIN}"
             "（photoarchive match と同じ既定）"
         )
+
+
+class UnassignAutoDialog(_AutoAssignDialog):
+    """`unassign-auto`（自動割り当ての取り消し）を GUI から流す前の確認（#132）。
+
+    形は `MatchDialog` と同じ（利用者の決定・2026-11-04）。**控えは CLI には無いが、
+    GUI では既定で取る。** 手本があれば `match` で付け直せるが、「割り当てを解除」した顔などは
+    もとどおりにならないことがある。**消す件数が 0 のときは実行できない。**
+    """
+
+    def __init__(
+        self,
+        parent,
+        counts: dict,
+        database_path: str,
+        person: Optional[dict] = None,
+        person_auto: int = 0,
+    ):
+        super().__init__(
+            parent,
+            "自動割り当てを取り消す（unassign-auto）",
+            counts,
+            database_path,
+            person,
+            person_auto,
+            "全員の自動割当を取り消す",
+            f"{person['name']} の自動割当だけを取り消す" if person else "",
+        )
+
+    def _update_detail(self, *_args) -> None:
+        if self.chosen_person_id() is None:
+            count = self.counts["auto"]
+            scope = f"全員の自動割当 {count:,} 件を取り消して、未分類に戻します。"
+        else:
+            count = self.person_auto
+            scope = f"{self.person['name']} の自動割当 {count:,} 件を取り消して、未分類に戻します。"
+        self.detail.setText(
+            scope
+            + "\n\n変わらないもの: 手本（手動の割り当て）・顔認証外・「この人物ではない」・年齢\n"
+            "手本を直してから自動割り当て（match）を流せば、付け直せます。"
+        )
+        self.run_button.setEnabled(count > 0)
 
 
 def format_match_summary(
@@ -1466,13 +1538,6 @@ class MainWindow(QWidget):
         self.details_label = QLabel("")
         self.details_label.setWordWrap(True)
 
-        # **手本を増やしたら、その場で `match` を流せるようにする。**
-        self.match_button = QPushButton("自動割り当て（match）を実行…")
-        self.match_button.setToolTip(
-            "手本をもとに、未分類と自動割当の顔を付け直します（photoarchive match と同じ）。"
-        )
-        self.match_button.clicked.connect(self._run_match)
-
         person_buttons = QHBoxLayout()
         for button in (
             self.add_person_button,
@@ -1490,7 +1555,6 @@ class MainWindow(QWidget):
         layout.addLayout(person_buttons)
         layout.addWidget(self.person_list, 1)
         layout.addWidget(self.details_label)
-        layout.addWidget(self.match_button)
         return panel
 
     def _build_face_panel(self) -> QWidget:
@@ -2167,20 +2231,15 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
 
     def set_job_running(self, running: bool) -> None:
-        """裏で `scan` などを流しているあいだは `match` を押せなくする（#129）。
+        """裏で `scan` などを流しているあいだのこの画面の状態（#129）。
 
-        `scan` が顔を足し消ししている途中の手本で照合しないため。`match` は長く書き込み
-        ロックを握るので、裏の処理も待たせる。顔の割り当てなどの操作は続けられる。
+        `match` と `unassign-auto` はメニューにあり、`AppWindow._sync_menus` が押せなくする
+        （`scan` が顔を足し消ししている途中の手本で照合しないため。`match` は長く書き込み
+        ロックを握るので、裏の処理も待たせる）。顔の割り当てなどの操作は続けられる。
         """
         self._job_running = running
         self._sync_bulk_controls()
         self.measure_button.setEnabled(not running)
-        self.match_button.setEnabled(not running)
-        self.match_button.setToolTip(
-            MATCH_BLOCKED_BY_JOB
-            if running
-            else "手本をもとに、未分類と自動割当の顔を付け直します（photoarchive match と同じ）。"
-        )
 
     def _run_match(self) -> None:
         """`match` を流す。**進み具合を出し、終わったら結果と件数を出し直す。**
@@ -2222,18 +2281,7 @@ class MainWindow(QWidget):
         try:
             with busy_cursor():
                 if dialog.makes_backup():
-                    progress.step("控えを取っています")
-
-                    def copied(status, remaining, total):
-                        progress.step(
-                            f"控えを取っています（{(total - remaining) * 100 // max(total, 1)}%）"
-                        )
-
-                    backup = db.backup_to(
-                        self.connection,
-                        migration.default_backup_path(self.db_path),
-                        progress=copied,
-                    )
+                    backup = self._take_backup(progress)
                 progress.step("自動割当をいったん外し、手本を読み込んでいます")
                 progress.base_label = "顔を照合しています"
                 summary = matcher.match_faces(
@@ -2262,6 +2310,72 @@ class MainWindow(QWidget):
             self,
             "自動割り当てが終わりました",
             format_match_summary(summary, db.list_persons(self.connection), backup),
+        )
+
+    def _take_backup(self, progress: "WorkProgress") -> Path:
+        """流す前の控え（`match` と `unassign-auto`）。"""
+        progress.step("控えを取っています")
+
+        def copied(status, remaining, total):
+            progress.step(f"控えを取っています（{(total - remaining) * 100 // max(total, 1)}%）")
+
+        return db.backup_to(
+            self.connection,
+            migration.default_backup_path(self.db_path),
+            progress=copied,
+        )
+
+    def _run_unassign_auto(self) -> None:
+        """`unassign-auto` を流す（#132）。`match` と同じく画面の接続で、窓を塞いで流す（数秒）。"""
+        counts = db.face_counts(self.connection)
+        if counts["auto"] == 0:
+            QMessageBox.information(self, "自動割当がありません", "取り消す自動割当はありません。")
+            return
+        person = self._current_person()
+        dialog = UnassignAutoDialog(
+            self,
+            counts,
+            self.db_path,
+            person=person,
+            person_auto=(
+                db.count_faces(
+                    self.connection, assign_source=db.ASSIGN_AUTO, person_id=int(person["id"])
+                )
+                if person
+                else 0
+            ),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        person_id = dialog.chosen_person_id()
+
+        backup: Optional[Path] = None
+        progress = WorkProgress(self, "自動割当を取り消す準備をしています", 1, delay_ms=0)
+        try:
+            with busy_cursor():
+                if dialog.makes_backup():
+                    backup = self._take_backup(progress)
+                progress.step("自動割当を取り消し、点を数え直しています")
+                removed = db.unassign_auto(self.connection, person_id=person_id)
+                progress.step("一覧を作り直しています")
+                self._reload_person_list()
+        except Exception as error:  # noqa: BLE001 — 画面に理由を出して止まる
+            progress.finish()
+            QMessageBox.critical(
+                self,
+                "取り消しに失敗しました",
+                f"{error}\n\n何も変えていません。\n"
+                + (f"控え: {backup}" if backup else "控えは取っていません。"),
+            )
+            return
+        progress.finish()
+        QMessageBox.information(
+            self,
+            "自動割当を取り消しました",
+            f"自動割当 {removed:,} 件を未分類に戻しました"
+            f"（{'全員' if person_id is None else person['name']}）。\n"
+            "手本と顔認証外はそのままです。\n\n"
+            + (f"控え: {backup}" if backup else "控え: 取っていません"),
         )
 
     # ------------------------------------------------------------------
@@ -3419,12 +3533,11 @@ class MainWindow(QWidget):
         )
 
 
-class AppWindow(QTabWidget):
-    """起動したときの窓（#104）。**1枚目は今までの顔の割り当て、2枚目は写真の選定、
-    3枚目は取り込み**（#129・`scan` を裏で流す）。
+class AppWindow(QMainWindow):
+    """起動したときの窓（#104）。**タブは顔の割り当てと写真の選定の2枚**（`self.tabs`）。
 
-    1枚目（`MainWindow`）の中身と操作は変えない。2枚目（`gui_select.SelectionPanel`）は
-    同じ DB の接続を使う（`select` の重みを動かして、結果をサムネイルで見る）。
+    ほかの処理は**メニューから別の窓で**動かす（#132・利用者の決定 2026-11-04）。
+    顔の割り当てに関する項目は、顔の割り当てタブのときだけ選べる。
     裏の処理の進み具合と「止める」は、どのタブからも見えるようタブの右上に置く。
     """
 
@@ -3436,7 +3549,8 @@ class AppWindow(QTabWidget):
         output_root: Optional[str] = None,
     ):
         super().__init__()
-        from .gui_scan import JobController, JobStatusBar, ScanPanel
+        from .gui_evaluate import EvaluateWindow
+        from .gui_scan import AssessWindow, ImportWizard, JobController, JobStatusBar
         from .gui_select import SelectionPanel
 
         self.assignment = MainWindow(database_path, source_roots=source_roots)
@@ -3448,29 +3562,81 @@ class AppWindow(QTabWidget):
         )
         self.jobs = JobController(self)
         settings_roots = [source_roots] if isinstance(source_roots, str) else list(source_roots or [])
-        self.scan_panel = ScanPanel(self.jobs, database_path, self.assignment.connection, settings_roots)
+        connection = self.assignment.connection
+        self.import_wizard = ImportWizard(self.jobs, database_path, connection, settings_roots, self)
+        self.assess_window = AssessWindow(self.jobs, database_path, connection, settings_roots, self)
+        self.evaluate_window = EvaluateWindow(self.jobs, database_path, self)
         self.job_status = JobStatusBar(self.jobs)
-        self.setCornerWidget(self.job_status, Qt.TopRightCorner)
-        # 設定の窓（#131）。右上は裏の処理の進み具合なので左上に置く。どのタブからも開ける
-        from .gui_settings import OPEN_LABEL
-
-        self.settings_button = QPushButton(OPEN_LABEL)
-        self.settings_button.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
-        self.settings_button.clicked.connect(self.open_settings)
-        self.setCornerWidget(self.settings_button, Qt.TopLeftCorner)
+        self.tabs = QTabWidget()
+        self.tabs.setCornerWidget(self.job_status, Qt.TopRightCorner)
+        self.tabs.addTab(self.assignment, "顔の割り当て")
+        self.tabs.addTab(self.selection, "写真の選定")
+        self.setCentralWidget(self.tabs)
         self.database_path = database_path
-        self.jobs.started.connect(lambda _name: self.assignment.set_job_running(True))
+        self._build_menus()
+        self.jobs.started.connect(self._job_started)
         self.jobs.finished.connect(self._job_finished)
+        self.tabs.currentChanged.connect(lambda _index: self._sync_menus())
         self.assignment.measure_requested.connect(self.start_measure)
         #: 子プロセスの入口で呼ぶもの（テストがフェイクを入れる）
         self.measure_initializer = None
         #: 鮮明さの計測の終わりの知らせ（テスト用）
         self.last_measure: Optional[dict] = None
-        self.addTab(self.assignment, "顔の割り当て")
-        self.addTab(self.selection, "写真の選定")
-        self.addTab(self.scan_panel, "取り込み")
+        self._sync_menus()
         self.setWindowTitle("PhotoArchiveAI")
         self.resize(1240, 820)
+
+    def _build_menus(self) -> None:
+        bar = self.menuBar()
+        self.import_menu = bar.addMenu("取り込み(&I)")
+        self.import_action = self.import_menu.addAction("取り込みウィザード…")
+        self.import_action.triggered.connect(self.import_wizard.open_window)
+        self.assess_action = self.import_menu.addAction("写真の良し悪しを測る（assess）…")
+        self.assess_action.triggered.connect(self.assess_window.open_window)
+
+        self.face_menu = bar.addMenu("顔の割り当て(&F)")
+        # 押せない理由（裏の処理の実行中）を出す
+        self.face_menu.setToolTipsVisible(True)
+        self.match_action = self.face_menu.addAction("自動割り当て（match）…")
+        self.match_action.triggered.connect(self.assignment._run_match)
+        self.unassign_action = self.face_menu.addAction("自動割り当てを取り消す（unassign-auto）…")
+        self.unassign_action.triggered.connect(self.assignment._run_unassign_auto)
+        self.evaluate_action = self.face_menu.addAction("精度を測る（evaluate）…")
+        self.evaluate_action.triggered.connect(self.evaluate_window.open_window)
+
+        self.settings_menu = bar.addMenu("設定(&S)")
+        self.settings_action = self.settings_menu.addAction("設定…")
+        self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
+        self.settings_action.triggered.connect(self.open_settings)
+
+    def _sync_menus(self) -> None:
+        """**顔の割り当ての項目は、顔の割り当てタブのときだけ。** `match` と取り消しは裏の処理の実行中も押せない。
+
+        `evaluate` の窓は実行中も開ける（前の結果と進み具合を見られる。測るボタンは窓の側で止める）。
+        """
+        on_faces = self.tabs.currentWidget() is self.assignment
+        running = self.jobs.is_running()
+        self.face_menu.setEnabled(on_faces)
+        self.match_action.setEnabled(on_faces and not running)
+        self.unassign_action.setEnabled(on_faces and not running)
+        self.evaluate_action.setEnabled(on_faces)
+        self.match_action.setToolTip(
+            MATCH_BLOCKED_BY_JOB
+            if running
+            else "手本をもとに、未分類と自動割当の顔を付け直します（photoarchive match と同じ）。"
+        )
+        self.unassign_action.setToolTip(
+            MATCH_BLOCKED_BY_JOB
+            if running
+            else "自動割当だけを未分類に戻します。手本と顔認証外には触りません（photoarchive unassign-auto と同じ）。"
+        )
+        self.evaluate_action.setToolTip(
+            "手本を使って、自動割り当ての取りこぼしと誤りの割合を測ります（photoarchive evaluate と同じ）。"
+        )
+
+    def _job_started(self, _name: str) -> None:
+        self.assignment.set_job_running(True)
+        self._sync_menus()
 
     def open_settings(self) -> Optional[dict]:
         """設定の窓を開く（#131）。保存したら、DB の場所以外をすぐ効かせる。保存した中身を返す。"""
@@ -3500,8 +3666,9 @@ class AppWindow(QTabWidget):
         shown = self.assignment.source_roots
         shown = [shown] if isinstance(shown, str) else list(shown or [])
         self.selection.set_paths(get_rule_path(settings), get_output_root(settings), shown)
-        self.scan_panel.settings_roots = roots
-        self.scan_panel.reload_roots()
+        for window in (self.import_wizard, self.assess_window):
+            window.settings_roots = roots
+            window.reload_roots()
 
     def start_measure(self) -> None:
         """未計測の顔の鮮明さを裏で測る（#135・`jobs.run_measure_faces`）。"""
@@ -3519,15 +3686,22 @@ class AppWindow(QTabWidget):
         self.jobs.start(job)
 
     def _job_finished(self, name: str, event: dict) -> None:
-        """裏の処理が終わったら、顔の一覧を読み直す（`scan` が顔を足し消しした）。"""
+        """裏の処理が終わったら、顔の一覧を読み直す（`scan` が顔を足し消しした）。
+
+        **別の窓を閉じていても分かるよう、ステータスバーにも1行出す。**
+        """
         from .gui_scan import describe_final
 
         self.assignment.set_job_running(False)
-        self.assignment._reload_person_list()
-        self.assignment.refresh_measure_count()
+        self._sync_menus()
+        self.statusBar().showMessage(describe_final(name, event).splitlines()[0])
+        # `evaluate` は読むだけなので、見ている一覧を読み直さない
+        if name != "evaluate":
+            self.assignment._reload_person_list()
+            self.assignment.refresh_measure_count()
         if name == "measure_faces":
             self.last_measure = event
-            # 取り込みタブのログには出ないので、ここで知らせる
+            # ほかの窓のログには出ないので、ここで知らせる
             if event["kind"] in ("aborted", "failed"):
                 QMessageBox.warning(self, "鮮明さを測る", describe_final(name, event))
             else:
@@ -3550,6 +3724,9 @@ class AppWindow(QTabWidget):
                 event.ignore()
                 return
             wait_for_stop(self.jobs, self)
+        # **別の窓も閉じる。** 残っていると、主窓を閉じてもアプリが終わらない
+        for window in (self.import_wizard, self.assess_window, self.evaluate_window):
+            window.close()
         super().closeEvent(event)
 
 

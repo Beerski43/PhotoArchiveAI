@@ -161,8 +161,7 @@ def test_a_missing_root_asks_instead_of_refusing(tmp_path):
 
 
 def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path, isolated_config, answers):
-    assert window.cornerWidget(gui.Qt.TopLeftCorner) is window.settings_button
-    assert window.scan_panel.roots == []
+    assert window.import_wizard.roots == [] and window.assess_window.roots == []
     media = _media(tmp_path, "media")
     rule = tmp_path / "rule.yml"
     _write(rule, {"weights": {"sharpness": 0.5}})
@@ -185,9 +184,10 @@ def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path,
     }
     # 設定ファイルが無かった（DB の場所を新しく書いた）ので、次に起動したときから
     assert dialog.database_needs_restart
-    # 取り込みタブの root・選定タブの出力先とルール（読み直して重みに出る）
-    assert window.scan_panel.roots == [str(media)]
-    assert window.scan_panel.start_button.isEnabled()
+    # ウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）
+    assert window.import_wizard.roots == [str(media)]
+    assert window.assess_window.roots == [str(media)]
+    assert window.import_wizard.start_button.isEnabled()
     assert window.selection.output_root == str(output)
     assert window.selection.rule_path == str(rule)
     assert window.selection.weight_spins["sharpness"].value() == pytest.approx(0.5)
@@ -267,7 +267,7 @@ def test_a_broken_settings_file_cannot_be_saved_over(window, isolated_config):
     assert "読めない" in dialog.read_error
 
 
-def test_the_corner_button_opens_saves_and_applies(window, tmp_path, isolated_config, answers, monkeypatch):
+def test_the_menu_opens_saves_and_applies(window, tmp_path, isolated_config, answers, monkeypatch):
     media = _media(tmp_path, "media")
 
     def exec_(dialog):
@@ -277,10 +277,9 @@ def test_the_corner_button_opens_saves_and_applies(window, tmp_path, isolated_co
         return dialog.result()
 
     monkeypatch.setattr(gui_settings.SettingsDialog, "exec", exec_)
-    saved = window.open_settings()
+    window.settings_action.trigger()
 
-    assert saved["source_roots"] == [str(media)]
-    assert window.scan_panel.roots == [str(media)]
+    assert window.import_wizard.roots == [str(media)]
     assert any("次に起動したときから" in text for text in answers["shown"])
 
     # 閉じただけなら何も変えない
