@@ -2674,7 +2674,7 @@ def apply_auto_assignments(
 
 
 def reset_auto_assignments(
-    connection: sqlite3.Connection, person_id: Optional[int] = None
+    connection: sqlite3.Connection, person_id: Optional[int] = None, commit: bool = True
 ) -> int:
     """自動割り当てを取り消す。**手本と顔認証外には触らない。**
 
@@ -2697,8 +2697,26 @@ def reset_auto_assignments(
         f" assigned_at = NULL WHERE {' AND '.join(clauses)}",
         tuple(params),
     )
-    connection.commit()
+    if commit:
+        connection.commit()
     return cursor.rowcount
+
+
+def unassign_auto(connection: sqlite3.Connection, person_id: Optional[int] = None) -> int:
+    """`unassign-auto` の本体（CLI と GUI・#132）。消した件数を返す。
+
+    **`family_score` も数え直す。** 消しただけだと、もう存在しない自動割り当てから
+    計算されたスコアが `AnalysisResult` に残る。**1つのトランザクションで書く**ので、
+    途中で失敗すれば何も変わらない。
+    """
+    try:
+        removed = reset_auto_assignments(connection, person_id=person_id, commit=False)
+        recompute_family_scores(connection, commit=False)
+    except Exception:
+        connection.rollback()
+        raise
+    connection.commit()
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -2875,7 +2893,7 @@ def largest_face_sizes(
             ).fetchall())
     return {int(row[0]): float(np.sqrt(row[1] or 0)) for row in rows}
 
-def recompute_family_scores(connection: sqlite3.Connection) -> None:
+def recompute_family_scores(connection: sqlite3.Connection, commit: bool = True) -> None:
     """``family_score`` を、家族の顔だけから計算し直す。
 
     **式は `scoring.family_photo_score` に1つだけある**（`select` もそれを使う）。
@@ -2903,7 +2921,8 @@ def recompute_family_scores(connection: sqlite3.Connection) -> None:
         " ON CONFLICT(media_id) DO UPDATE SET family_score = excluded.family_score",
         list(scores.items()),
     )
-    connection.commit()
+    if commit:
+        connection.commit()
 
 
 def count_stale_auto_assignments(connection: sqlite3.Connection, rule: str) -> int:

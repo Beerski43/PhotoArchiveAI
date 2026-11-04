@@ -1,7 +1,7 @@
 """長い処理を**裏の別プロセス**で流す（#129・Phase 9）。Qt に依存しない。
 
 GUI から `scan` のように何時間もかかる処理を流すための土台。いま載っている仕事は
-`run_scan`・`run_measure_faces`（#135）・`run_convert_heic` と `run_assess`（#130）。GUI はこのモジュールの
+`run_scan`・`run_measure_faces`（#135）・`run_convert_heic` と `run_assess`（#130）・`run_evaluate`（#132）。GUI はこのモジュールの
 `Job` を作って始め、タイマーで `poll` して進み具合を受け取り、`request_stop` で止める。
 
 **同じプロセスの別スレッドにしない。** GUI の接続と同じプロセスで書き込みが走り、
@@ -246,6 +246,40 @@ def run_assess(
     return summary
 
 
+def run_evaluate(
+    report: Report,
+    should_stop: Callable[[], bool],
+    database_path: str,
+    thresholds: Sequence[float],
+    margin: float,
+    keep_same_media: bool = False,
+) -> Dict[str, Any]:
+    """子プロセスの中で `evaluate` を流す（#132）。CLI と同じ `evaluation.evaluate_match`。
+
+    **DB には書かない。** 止めたら途中の数字は返さない（手本の前のほうだけの率になる）。
+    """
+    from . import evaluation
+
+    connection = db.ensure_database(database_path)
+    connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    try:
+        try:
+            return evaluation.evaluate_match(
+                connection,
+                thresholds=thresholds,
+                margin=margin,
+                keep_same_media=keep_same_media,
+                progress_callback=lambda current, total, _detail: report(
+                    {"kind": "progress", "current": current, "total": total, "detail": "手本"}
+                ),
+                should_stop=should_stop,
+            )
+        except evaluation.EvaluationStopped as stopped:
+            raise _Stopped({"evaluated": stopped.evaluated}) from None
+    finally:
+        connection.close()
+
+
 class _Stopped(Exception):
     def __init__(self, summary: Dict[str, Any]):
         super().__init__("stopped")
@@ -417,6 +451,11 @@ def describe_summary(summary: Dict[str, Any], name: str = "scan") -> str:
         return (
             f"測った顔 {summary.get('measured', 0):,} 件・"
             f"未計測のまま {summary.get('remaining', 0):,} 件"
+        )
+    if name == "evaluate":
+        return (
+            f"手本 {summary.get('teachers', 0):,} 件・"
+            f"評価対象 {summary.get('evaluated', 0):,} 件・対象外 {summary.get('skipped', 0):,} 件"
         )
     if name == "convert_heic":
         return (

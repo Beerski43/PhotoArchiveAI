@@ -1,6 +1,5 @@
 import argparse
 import logging
-import math
 import os
 import sys
 from datetime import datetime
@@ -19,7 +18,7 @@ from .config import (
 )
 from .converter import convert_heic_files
 from .db import SchemaVersionError, ensure_database
-from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report
+from .evaluation import DEFAULT_THRESHOLDS, evaluate_match, format_report, parse_thresholds
 from .face import get_latest_error
 from .logging_setup import setup_logging
 from .matcher import DEFAULT_MARGIN, DEFAULT_THRESHOLD, match_faces
@@ -525,33 +524,11 @@ def _run_match(args, db_path: str) -> None:
 
 
 def _parse_thresholds(raw: str) -> List[float]:
-    """カンマ区切りの閾値を読む。読めない値は握り潰さずに止める。
-
-    **同じ閾値を2度数えない。** 集計先は閾値の値で引くので、重複すると
-    片方が0件、もう片方が2倍になり、正解率が 200% になる。表に
-    「0.40 で正解 0.0%」という行が並ぶと、閾値を緩める方向に判断が傾く。
-
-    **`nan` や `inf` も弾く。** `float("nan")` は読めてしまうが、
-    `best_distance > nan` が常に False なので**閾値を掛けていないのと同じ**
-    判定になる。0 以下も、何も割り当たらない表が出るだけで意味がない。
-    """
-    values: List[float] = []
-    for part in str(raw).split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            value = float(part)
-        except ValueError:
-            raise SystemExit(f"閾値として読めない値です: {part}") from None
-        if not math.isfinite(value) or value <= 0:
-            raise SystemExit(f"閾値は正の有限の数で指定してください: {part}")
-        if value in values:
-            continue
-        values.append(value)
-    if not values:
-        raise SystemExit("閾値が1つも指定されていません。")
-    return values
+    """カンマ区切りの閾値を読む。読めない値は握り潰さずに止める（`evaluation.parse_thresholds`）。"""
+    try:
+        return parse_thresholds(raw)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
 
 
 def _resolve_person(connection, wanted: str) -> dict:
@@ -587,11 +564,8 @@ def _run_unassign_auto(args, db_path: str) -> None:
         if args.dry_run:
             print(f"(dry-run) Would remove {before} automatic assignments ({scope}).")
             return
-        removed = db.reset_auto_assignments(connection, person_id=person_id)
-        # **family_score を数え直す。** 消しただけだと、もう存在しない
-        # 自動割り当てから計算されたスコアが AnalysisResult に残り、
-        # `select` の family_only がその古い値で写真を選ぶ。
-        db.recompute_family_scores(connection)
+        # **family_score も数え直す**（`db.unassign_auto`）
+        removed = db.unassign_auto(connection, person_id=person_id)
     print(
         f"Removed {removed} automatic assignments ({scope}) "
         "(manual assignments and rejects are untouched); family_score recomputed."

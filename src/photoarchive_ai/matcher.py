@@ -210,6 +210,7 @@ def teacher_usable(
     faces: "db.ManualFaces",
     write: bool = True,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> np.ndarray:
     """手本ごとの「割り当ての根拠にしてよいか」。**未計測の手本はここで測る。**
 
@@ -225,6 +226,7 @@ def teacher_usable(
         assign_sources=(db.ASSIGN_MANUAL,),
         write=write,
         progress_callback=progress_callback,
+        should_stop=should_stop,
     )
     if measured:
         index = {int(face_id): i for i, face_id in enumerate(faces.face_ids)}

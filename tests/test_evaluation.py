@@ -15,8 +15,10 @@ from photoarchive_ai.evaluation import (
     MAX_WRONG_DETAILS,
     MISSED,
     WRONG,
+    EvaluationStopped,
     evaluate_match,
     format_report,
+    parse_thresholds,
 )
 
 #: **このファイルのテストはユークリッド距離を前提に座標を組んでいる。**
@@ -506,3 +508,38 @@ def test_a_teacher_whose_person_was_not_born_yet_is_not_silently_correct(connect
     row = _row(summary, 0.4)
     # 2005年の顔は、妹が生まれる前なので候補に妹が残らない＝取りこぼし。
     assert row[MISSED] >= 1
+
+
+# ---------------------------------------------------------------------------
+# GUI から流すための口（#132）
+# ---------------------------------------------------------------------------
+
+
+def test_should_stop_ends_the_measurement_without_a_result(connection):
+    person = db.add_person(connection, "人物")
+    media = _add_media(connection, 0)
+    face = db.add_face(
+        connection,
+        media_id=media,
+        bbox=(0, 10, 10, 0),
+        embedding=np.ones(db.EMBEDDING_DIM, dtype=np.float32).tolist(),
+        embed_version=db.embedding_model.ACTIVE.version,
+        thumbnail=b"",
+    )
+    db.assign_faces(connection, [face], person, db.ASSIGN_MANUAL)
+    connection.commit()
+
+    with pytest.raises(EvaluationStopped) as stopped:
+        evaluate_match(connection, thresholds=[0.4], should_stop=lambda: True)
+
+    assert stopped.value.evaluated == 0
+
+
+def test_parse_thresholds_keeps_order_and_drops_repeats():
+    assert parse_thresholds("0.45, 0.4,0.45,") == [0.45, 0.4]
+
+
+@pytest.mark.parametrize("value", ["abc", "nan", "inf", "0", "-0.1", "", " , "])
+def test_parse_thresholds_refuses_values_that_would_mislead(value):
+    with pytest.raises(ValueError):
+        parse_thresholds(value)
