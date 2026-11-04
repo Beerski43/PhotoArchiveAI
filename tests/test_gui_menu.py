@@ -449,6 +449,89 @@ def test_run_evaluate_reports_progress_and_the_summary(seeded):
     assert "手本 4 件" in jobs.describe_summary(summary, "evaluate")
 
 
+# ---------------------------------------------------------------------------
+# PR #141 のレビュー対応
+# ---------------------------------------------------------------------------
+
+
+def test_stopping_evaluate_does_not_promise_to_resume(window, monkeypatch):
+    """指摘3: 何も保存しない処理に「済んだぶんは保存」「続きから」と言わない。"""
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text: asked.append(text) or QMessageBox.No)
+    window.evaluate_window.start()
+    assert "続きから" not in window.job_status.stop_button.toolTip()
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted()
+    assert "続きから" not in asked[0] and "最初から" in asked[0]
+
+    statuses = []
+    window.jobs.status_changed.connect(statuses.append)
+    window.jobs.request_stop()
+    assert "保存" not in statuses[0] and "途中の結果は出しません" in statuses[0]
+    _wait(window)
+
+
+def test_other_jobs_still_promise_to_resume():
+    """指摘3: `scan` などの説明は変えない。"""
+    from photoarchive_ai import gui_scan
+
+    for name in ("scan", "convert_heic", "assess", "measure_faces"):
+        assert "続きから" in gui_scan.stop_tooltip(name)
+        assert "書きかけを保存" in gui_scan.stopping_status(name)
+        assert "続きから" in gui_scan.close_question(name)
+
+
+def test_the_stop_tooltip_follows_the_job_that_runs(window):
+    """指摘3: `evaluate` のあとに `scan` を流しても、説明が前の処理のまま残らない。"""
+    from photoarchive_ai import gui_scan
+
+    bar = window.job_status
+    assert bar.stop_button.toolTip() == gui_scan.stop_tooltip(None)
+    window.evaluate_window.start()
+    assert bar.stop_button.toolTip() == gui_scan.stop_tooltip("evaluate")
+    _wait(window)
+
+    class _Scan:
+        name = "scan"
+        stop_requested = False
+
+    window.jobs.job = _Scan()
+    bar._show("スキャン: 1 / 2 件")
+    assert "続きから" in bar.stop_button.toolTip()
+    window.jobs.job = None
+
+
+def test_a_failed_reload_after_unassign_does_not_say_nothing_changed(window, monkeypatch, shown):
+    """指摘4: 取り消しを commit したあとに一覧の読み直しだけが落ちても、消えていないと思わせない。"""
+    monkeypatch.setattr(gui, "UnassignAutoDialog", _accepting(backup=False))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("読み直せません")
+
+    monkeypatch.setattr(window.assignment, "_reload_person_list", broken)
+
+    window.assignment._run_unassign_auto()
+
+    kind, title, text = shown[-1]
+    assert kind == "critical" and "何も変えていません" not in text
+    assert "2 件は取り消してあります" in text
+    assert db.face_counts(window.assignment.connection)["auto"] == 0
+
+
+def test_the_bulk_button_does_not_name_only_some_jobs():
+    """指摘5: `evaluate` の実行中にも押せないので、処理の名前を挙げない（`match` の文と同じ）。"""
+    assert "スキャン" not in gui.BULK_BLOCKED_BY_JOB
+    assert "スキャン" not in gui.MATCH_BLOCKED_BY_JOB
+
+
+def test_the_settings_item_shows_its_tooltip(window):
+    """指摘6: ボタンのときに出ていた説明を、メニューでも出す。"""
+    assert window.settings_menu.toolTipsVisible()
+    assert "DB の場所" in window.settings_action.toolTip()
+
+
 def test_the_module_keeps_the_threshold_text_in_step_with_the_defaults():
     assert gui_evaluate.DEFAULT_THRESHOLD_TEXT == ",".join(
         f"{value:g}" for value in evaluation.DEFAULT_THRESHOLDS

@@ -281,6 +281,32 @@ def test_the_assess_window_assesses_family_photos_in_the_background(window, fami
     assert not panel.assess_button.isEnabled()
 
 
+def test_the_assess_count_follows_new_assignments_while_the_window_stays_open(window, tmp_path, monkeypatch):
+    """PR #141 の指摘2: 開いたまま顔を割り当てても、古い件数のまま押せなくならない。"""
+    from PySide6.QtCore import QEvent
+    from tests.helpers import add_family_photo
+
+    connection = window.assignment.connection
+    panel = window.assess_window
+    panel.open_window()
+    assert panel.assess_count.text() == "家族の写った写真はすべて測ってあります。"
+    assert not panel.assess_button.isEnabled()
+
+    add_family_photo(connection, tmp_path / "media" / "new.jpg", width=40)
+
+    # メニューを選び直す
+    panel.open_window()
+    assert panel.assess_count.text() == "まだ測っていない家族の写真: 1 枚"
+    assert panel.assess_button.isEnabled()
+
+    # 窓が前に来る（offscreen では窓を切り替えられないので、知らせを直に渡す）
+    add_family_photo(connection, tmp_path / "media" / "new2.jpg", width=41)
+    monkeypatch.setattr(panel, "isActiveWindow", lambda: True)
+    panel.changeEvent(QEvent(QEvent.ActivationChange))
+    assert panel.assess_count.text() == "まだ測っていない家族の写真: 2 枚"
+    panel.close()
+
+
 def test_assess_does_not_start_without_the_models(window, family_photos, monkeypatch):
     warned = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warned.append(args[2]) or QMessageBox.Ok)

@@ -570,8 +570,7 @@ MEASURE_TOOLTIP = (
 MATCH_BLOCKED_BY_JOB = "裏で処理を流しているあいだは実行できません。終わるか、止めてから実行してください。"
 #: まとめ処理を押せない理由（#135）
 BULK_BLOCKED_BY_JOB = (
-    "裏で処理（スキャン・鮮明さの計測）を流しているあいだは押せません。"
-    "一覧に出ていない顔が増えていくため、終わってから押してください。"
+    "裏で処理を流しているあいだは押せません。終わってから押してください。"
 )
 BULK_NEEDS_FILTER = (
     "撮影年月・撮影日時なしのみ・鮮明さ（人物なら年齢も）で絞ってから押してください。"
@@ -2350,6 +2349,7 @@ class MainWindow(QWidget):
         person_id = dialog.chosen_person_id()
 
         backup: Optional[Path] = None
+        removed: Optional[int] = None
         progress = WorkProgress(self, "自動割当を取り消す準備をしています", 1, delay_ms=0)
         try:
             with busy_cursor():
@@ -2361,12 +2361,21 @@ class MainWindow(QWidget):
                 self._reload_person_list()
         except Exception as error:  # noqa: BLE001 — 画面に理由を出して止まる
             progress.finish()
-            QMessageBox.critical(
-                self,
-                "取り消しに失敗しました",
-                f"{error}\n\n何も変えていません。\n"
-                + (f"控え: {backup}" if backup else "控えは取っていません。"),
-            )
+            backup_line = f"控え: {backup}" if backup else "控えは取っていません。"
+            if removed is None:
+                QMessageBox.critical(
+                    self,
+                    "取り消しに失敗しました",
+                    f"{error}\n\n何も変えていません。\n{backup_line}",
+                )
+            else:
+                # **commit のあとの失敗に「何も変えていません」と言わない**（PR #141 の指摘4）
+                QMessageBox.critical(
+                    self,
+                    "一覧を読み直せませんでした",
+                    f"{error}\n\n自動割当 {removed:,} 件は取り消してあります。"
+                    f"画面の件数が古いときは、開き直してください。\n{backup_line}",
+                )
             return
         progress.finish()
         QMessageBox.information(
@@ -3605,6 +3614,7 @@ class AppWindow(QMainWindow):
         self.evaluate_action.triggered.connect(self.evaluate_window.open_window)
 
         self.settings_menu = bar.addMenu("設定(&S)")
+        self.settings_menu.setToolTipsVisible(True)
         self.settings_action = self.settings_menu.addAction("設定…")
         self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
         self.settings_action.triggered.connect(self.open_settings)
@@ -3711,14 +3721,13 @@ class AppWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """**裏の処理を流したまま閉じない。** 止めるなら、書きかけを保存して終わるのを待つ。"""
-        from .gui_scan import wait_for_stop
+        from .gui_scan import close_question, wait_for_stop
 
         if self.jobs.is_running():
             answer = QMessageBox.question(
                 self,
                 "処理を流しています",
-                "裏で処理を流しています。止めて閉じますか？\n"
-                "済んだぶんは保存され、次に始めると続きからになります。",
+                close_question(self.jobs.job.name),
             )
             if answer != QMessageBox.Yes:
                 event.ignore()

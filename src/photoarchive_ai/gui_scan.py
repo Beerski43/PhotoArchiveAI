@@ -26,7 +26,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -70,6 +70,36 @@ NOTHING_TO_DO = {
     "assess": "測る写真はありません",
     "evaluate": "手本がありません",
 }
+#: 止めても何も残らない処理（読むだけ・途中の結果を出さない）
+NOTHING_TO_RESUME = {"evaluate"}
+
+
+def stop_tooltip(name: Optional[str]) -> str:
+    """「止める」の説明。**止めても続きからにならない処理に、続きからと言わない**（PR #141 の指摘3）。"""
+    if name in NOTHING_TO_RESUME:
+        return "途中の結果は出しません。何も保存しないので、測り直すときは最初からです。"
+    return "済んだぶんは保存されます。次に始めると続きからになります。"
+
+
+def stopping_status(name: str) -> str:
+    """止める合図を送ったあとの文。"""
+    label = JOB_NAMES.get(name, name)
+    if name in NOTHING_TO_RESUME:
+        return f"{label}を止めています（途中の結果は出しません）"
+    return f"{label}を止めています（書きかけを保存し、処理中の数件が終わるのを待っています）"
+
+
+def close_question(name: str) -> str:
+    """裏の処理を流したまま主窓を閉じようとしたときの確認。"""
+    if name in NOTHING_TO_RESUME:
+        return (
+            f"裏で{JOB_NAMES.get(name, name)}を流しています。止めて閉じますか？\n"
+            "途中の結果は出しません。何も保存しないので、測り直すときは最初からです。"
+        )
+    return (
+        "裏で処理を流しています。止めて閉じますか？\n"
+        "済んだぶんは保存され、次に始めると続きからになります。"
+    )
 
 
 def describe_event(name: str, event: Dict[str, Any]) -> Optional[str]:
@@ -153,10 +183,7 @@ class JobController(QObject):
         if not self.is_running():
             return
         self.job.request_stop()
-        self.status = (
-            f"{JOB_NAMES.get(self.job.name, self.job.name)}を止めています"
-            "（書きかけを保存し、処理中の数件が終わるのを待っています）"
-        )
+        self.status = stopping_status(self.job.name)
         self.status_changed.emit(self.status)
 
     def poll(self) -> None:
@@ -214,7 +241,7 @@ class JobStatusBar(QWidget):
         if in_window:
             self.label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.stop_button = QPushButton("止める")
-        self.stop_button.setToolTip("済んだぶんは保存されます。次に始めると続きからになります。")
+        self.stop_button.setToolTip(stop_tooltip(None))
         self.stop_button.clicked.connect(controller.request_stop)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
@@ -225,7 +252,9 @@ class JobStatusBar(QWidget):
 
     def _show(self, text: str) -> None:
         self.label.setText(text)
-        self.stop_button.setEnabled(not (self.controller.job and self.controller.job.stop_requested))
+        job = self.controller.job
+        self.stop_button.setEnabled(not (job and job.stop_requested))
+        self.stop_button.setToolTip(stop_tooltip(job.name if job else None))
         self.setVisible(bool(text))
 
 
@@ -582,10 +611,16 @@ class AssessWindow(_RootsMixin, QDialog):
             self.assess_count.setText("家族の写った写真はすべて測ってあります。")
         self._set_running(self.controller.is_running())
 
-    def showEvent(self, event) -> None:  # noqa: N802（Qt の名前）
-        # 顔の割り当てタブで割り当てると、測る写真が増える。**起動を遅くしないよう、開くときに数える**
+    def open_window(self) -> None:
+        # **起動を遅くしないよう、開くときに数える**（開いたままメニューを選び直したときも）
         self.refresh_assess_count()
-        super().showEvent(event)
+        super().open_window()
+
+    def changeEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        """窓が前に来たら数え直す。**開いたまま顔を割り当てると、測る写真が増える**（PR #141 の指摘2）。"""
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self.refresh_assess_count()
+        super().changeEvent(event)
 
     def _set_running(self, running: bool) -> None:
         self.assess_button.setEnabled(bool(self.roots) and not running and bool(self.unassessed))
@@ -651,7 +686,12 @@ def wait_for_stop(controller: JobController, parent: QWidget) -> bool:
     """閉じるときに、止まるのを待つ。待つあいだ「止めています」を出す。"""
     notice = QMessageBox(parent)
     notice.setWindowTitle("止めています")
-    notice.setText("書きかけを保存し、処理中の数件が終わるのを待っています。")
+    job = controller.job
+    notice.setText(
+        "止まるのを待っています。"
+        if job is not None and job.name in NOTHING_TO_RESUME
+        else "書きかけを保存し、処理中の数件が終わるのを待っています。"
+    )
     notice.setStandardButtons(QMessageBox.NoButton)
     notice.setWindowModality(Qt.ApplicationModal)
     notice.show()

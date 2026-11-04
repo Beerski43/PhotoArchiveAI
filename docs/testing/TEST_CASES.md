@@ -1056,7 +1056,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_an_assess_job_without_models_fails_with_how_to_make_them` | モデルが無ければ置き方つきで落ちる |
 | `test_nothing_to_assess_reads_naturally` | 測る写真が無いときの1行 |
 
-### `test_gui_scan.py` — GUI の取り込みウィザードと assess の窓（20件。#129・#130・#132）
+### `test_gui_scan.py` — GUI の取り込みウィザードと assess の窓（21件。#129・#130・#132）
 
 | テスト | 内容 |
 |---|---|
@@ -1071,6 +1071,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_wizard_converts_heic_in_the_background` | `HEIC を JPEG に変換する` を裏で流す。**実行中はほかの2つと `match` を押せない**。終われば「続けてスキャン」と出す（#130） |
 | `test_a_jpeg_that_cannot_be_written_stops_the_conversion_and_is_reported` | JPEG が書けなければ止めて窓で知らせる |
 | `test_the_assess_window_assesses_family_photos_in_the_background` | assess の窓から `写真の良し悪しを測る` を裏で流す。測っていない枚数を出し、測り終えたら押せなくなる |
+| `test_the_assess_count_follows_new_assignments_while_the_window_stays_open` | **開いたまま顔を割り当てても件数が古いまま押せなくならない**（窓が前に来る・メニューを選び直すで数え直す。PR #141 の指摘2） |
 | `test_assess_does_not_start_without_the_models` | **モデルが無ければ始めずに置き方を出す** |
 | `test_nothing_to_assess_disables_the_button` | 測る写真が無ければ押せない |
 | `test_status_lines_name_each_job` | 仕事ごとの進み具合・止めたときの文 |
@@ -1079,7 +1080,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_finishing_the_wizard_starts_over_next_time` | 完了を押したら次は最初の段から・記録も消える |
 | `test_without_roots_the_wizard_says_so_and_cannot_go_on` | root が無ければ設定へ案内し、先へ進めない |
 
-### `test_gui_menu.py` — GUI のメニュー・`evaluate`・`unassign-auto`（28件。#132）
+### `test_gui_menu.py` — GUI のメニュー・`evaluate`・`unassign-auto`（34件。#132）
 
 | テスト | 内容 |
 |---|---|
@@ -1102,6 +1103,9 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_stopped_evaluation_shows_no_partial_numbers` / `test_run_evaluate_stops_without_a_result` | **止めたら途中の数字を出さない** |
 | `test_a_failed_evaluation_is_reported` / `test_other_jobs_do_not_touch_the_evaluate_report` | 失敗は知らせる・ほかの処理の終わりで結果を消さない |
 | `test_run_evaluate_reports_progress_and_the_summary` / `test_the_module_keeps_the_threshold_text_in_step_with_the_defaults` | 進み具合と集計の1行・既定の閾値の文 |
+| `test_stopping_evaluate_does_not_promise_to_resume` / `test_other_jobs_still_promise_to_resume` / `test_the_stop_tooltip_follows_the_job_that_runs` | **何も保存しない `evaluate` に「続きから」と言わない**（止めるの説明・止めている文・閉じる確認）。ほかの処理の文は変えない（PR #141 の指摘3） |
+| `test_a_failed_reload_after_unassign_does_not_say_nothing_changed` | **取り消しの commit のあとの失敗に「何も変えていません」と言わない**（指摘4） |
+| `test_the_bulk_button_does_not_name_only_some_jobs` / `test_the_settings_item_shows_its_tooltip` | 押せない理由の文に処理名を挙げない（指摘5）・`設定…` の説明がメニューで出る（指摘6） |
 
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
@@ -1115,7 +1119,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_only_the_dialog_keys_can_be_written` | 窓の4つのキー以外は書かない |
 | `test_nested_roots_and_an_output_overlapping_a_root_are_refused` | root の入れ子と、**出力先が root と重なる（同じ・内側・外側）**のは止める。まだ無い出力先は聞くだけ |
 | `test_a_missing_root_asks_instead_of_refusing` | 見つからない root は止めずに聞く（NFS が外れているだけのことがある） |
-| `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く。ボタンはタブの左上 |
+| `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く |
 | `test_the_same_rule_path_keeps_the_weights_moved_on_screen` | ルールのパスが同じなら、画面で動かした重みは読み直さない |
 | `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
 | `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |

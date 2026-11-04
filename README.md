@@ -150,7 +150,7 @@ SQLite、`argparse`、`json`、`logging`、`pathlib`、`shutil`、`hashlib` な�
 cp config/app_settings.sample.yml config/app_settings.yml
 ```
 
-必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。**各キーの意味・既定・誤ったときの振る舞いは [docs/operation/CONFIG.md](docs/operation/CONFIG.md) にまとめてあります**（ルール・公開しない語の一覧も）。GUI を起動したあとなら、タブの左上の `設定…` でも直せます（#131）。
+必要に応じて `database_path` / `source_roots` / `output_root` / `rule_path` を編集します。**各キーの意味・既定・誤ったときの振る舞いは [docs/operation/CONFIG.md](docs/operation/CONFIG.md) にまとめてあります**（ルール・公開しない語の一覧も）。GUI を起動したあとなら、メニューの `設定…` でも直せます（#131）。
 
 **写真の置き場所（root）が複数あれば、`source_roots` に並べます**（#24）。
 
