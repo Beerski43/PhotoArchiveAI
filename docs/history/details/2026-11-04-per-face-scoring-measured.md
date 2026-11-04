@@ -56,4 +56,4 @@ DB の状態: 家族の写った写真 18,060 枚・`PhotoQuality` 16,330 枚・
 
 ## 測り直し
 
-スクリプトはリポジトリに入れていない（`selection.prepare` → `choose` の ID を develop と比べ、`family_of` で人数を数えるだけ）。
+スクリプトはリポジトリに入れていない（`selection.prepare` → `choose` の ID を develop と比べ、`family_of` で人数を数えるだけ）。**比重を動かす表は `weights.face_ratio` を上書きし、`extra_person` の表は `rule.yml` の比重のまま**（どちらの条件かを書くこと）。
