@@ -73,11 +73,17 @@ RETIRED_WEIGHT_KEYS = {
 
 #: 比重（``face_ratio``）の上限。
 FACE_RATIO_MAXIMUM = 100.0
+#: 2人目以降の効き（``extra_person``）の上限。1 を超えると、後ろの人ほど重くなってしまう。
+EXTRA_PERSON_MAXIMUM = 1.0
+
+
+def retired_weight_keys(rule: Dict[str, Any]) -> List[str]:
+    """ルールの ``weights:`` に書いてある、使わなくなったキー（GUI の画面にも出す・PR #140 の指摘3）。"""
+    return sorted(set(rule.get("weights") or {}) & set(RETIRED_WEIGHT_KEYS))
 
 
 def _warn_retired_weights(rule: Dict[str, Any], rule_path: str) -> None:
-    given = rule.get("weights") or {}
-    for key in sorted(set(given) & set(RETIRED_WEIGHT_KEYS)):
+    for key in retired_weight_keys(rule):
         logger.warning(
             "ルール %s の weights.%s は使いません: %s", rule_path, key, RETIRED_WEIGHT_KEYS[key]
         )
@@ -106,6 +112,10 @@ def rule_weights(rule: Dict[str, Any]) -> "scoring.Weights":
     if weights.face_ratio > FACE_RATIO_MAXIMUM:
         raise ValueError(
             f"ルールの weights.face_ratio は 0〜{FACE_RATIO_MAXIMUM:g} で書いてください: {weights.face_ratio!r}"
+        )
+    if weights.extra_person > EXTRA_PERSON_MAXIMUM:
+        raise ValueError(
+            f"ルールの weights.extra_person は 0〜{EXTRA_PERSON_MAXIMUM:g} で書いてください: {weights.extra_person!r}"
         )
     return weights
 

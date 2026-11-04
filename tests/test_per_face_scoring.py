@@ -2,7 +2,7 @@
 
 利用者の式（2026-11-03）:
 
-    家族の加点 = Σ(顔の点 × 人物の重み)
+    家族の加点 = Σ(顔の点 × 人物の重み)（PR #140 のレビュー後: 人物ごとに最良の顔・2人目以降を薄める）
     他人の減点 = Σ(他人(減点)の顔の点) × 重み
     総合 = (家族の加点 − 他人の減点) × 比重 / 100 + 写真全体の点 × (100 − 比重) / 100
 
@@ -92,6 +92,54 @@ def test_face_item_weights_are_shares(connection):
     assert scoring.face_score(face, nothing) == 0.0
 
 
+def _crisp(person_id, **changes):
+    face = {"person_id": person_id, "aligned": 1, "yaw": 0.0, "sharpness": 200.0, "eye_blink": 0.0,
+            "mouth_smile": 0.0, "bbox_top": 10, "bbox_right": 60, "bbox_bottom": 60, "bbox_left": 10}
+    face.update(changes)
+    return face
+
+
+def test_two_faces_of_one_person_count_once():
+    """**同じ人物の顔は、いちばん良い顔だけ足す**（PR #140 の指摘1・利用者の決定）。写真の中の写真や割り当ての誤りで伸びない。"""
+    one = scoring.family_photo_score([_crisp(1)])
+    twice = scoring.family_photo_score([_crisp(1), _crisp(1, sharpness=20.0)])
+    two_people = scoring.family_photo_score([_crisp(1), _crisp(2)])
+    assert twice == pytest.approx(one)
+    assert one < two_people
+    # 順に関わらず良いほうが残る
+    assert scoring.family_photo_score([_crisp(1, sharpness=20.0), _crisp(1)]) == pytest.approx(one)
+
+
+def test_the_second_person_and_later_are_thinned_in_turn():
+    """k 人目に `extra_person` の k−1 乗（PR #140 の指摘2・利用者の決定）。1 は全員同じ、0 は最良の1人だけ。"""
+    faces_only = scoring.Weights.default()._replace(technical=0, aesthetic=0, highlights=0, shadows=0)
+    one = scoring.family_photo_score([_crisp(1)], faces_only)
+    three = [_crisp(1), _crisp(2), _crisp(3)]
+    assert scoring.family_photo_score(three, faces_only._replace(extra_person=0.5)) == pytest.approx(1.75 * one)
+    assert scoring.family_photo_score(three, faces_only._replace(extra_person=1.0)) == pytest.approx(3 * one)
+    assert scoring.family_photo_score(three, faces_only._replace(extra_person=0.0)) == pytest.approx(one)
+
+
+def test_another_family_member_never_lowers_the_score():
+    """**平方根で割る形にしなかった理由。** ボケて目を閉じた家族が増えても、点は下がらない。"""
+    one = scoring.family_photo_score([_crisp(1)])
+    blurred = _crisp(2, aligned=0, yaw=None, sharpness=20.0, eye_blink=1.0)
+    assert scoring.family_photo_score([blurred, _crisp(1)]) >= one
+    # 悪い顔が先に並んでいても、高い順に足す
+    assert scoring.family_photo_score([blurred, _crisp(1)]) == pytest.approx(
+        scoring.family_photo_score([_crisp(1), blurred])
+    )
+
+
+def test_a_heavier_person_is_the_one_kept_whole():
+    """薄めるのは「人物の重み × 顔の点」の低いほう。誰を重く見るかが、並びの順で消えない。"""
+    weights = scoring.Weights.default()._replace(technical=0, aesthetic=0, highlights=0, shadows=0)
+    light, heavy = _crisp(1), _crisp(2, person_weight=2.0)
+    face = weights.ratio() * scoring.face_score(_crisp(1), weights)
+    expected = (2.0 + weights.extra_person) * face
+    assert scoring.family_photo_score([light, heavy], weights) == pytest.approx(expected)
+
+
 def test_the_old_weight_keys_are_skipped_with_a_warning(tmp_path: Path, caplog):
     """#139 で無くなった `member_bonus` と `stranger_penalty` は、止めずに警告して読み飛ばす。"""
     path = tmp_path / "rule.yml"
@@ -108,6 +156,13 @@ def test_the_old_weight_keys_are_skipped_with_a_warning(tmp_path: Path, caplog):
 def test_a_misspelled_weight_key_is_still_refused():
     with pytest.raises(ValueError, match="知らない項目"):
         selection.rule_weights({"weights": {"sharpnes": 0.3}})
+
+
+def test_the_extra_person_must_be_between_0_and_1():
+    assert selection.rule_weights({"weights": {"extra_person": 1}}).extra_person == 1.0
+    assert selection.rule_weights({"weights": {"extra_person": 0}}).extra_person == 0.0
+    with pytest.raises(ValueError, match="extra_person"):
+        selection.rule_weights({"weights": {"extra_person": 1.5}})
 
 
 def test_the_ratio_must_be_between_0_and_100():

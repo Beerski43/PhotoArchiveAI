@@ -513,3 +513,22 @@ def test_a_gauge_ignores_the_wheel_unless_focused(window):
     QApplication.processEvents()
     _wheel(technical.slider)
     assert panel.weight_spins["technical"].value() != pytest.approx(before["technical"]), "選んだゲージは動く"
+
+
+def test_the_panel_says_which_old_weight_keys_were_skipped(database, tmp_path, monkeypatch):
+    """**GUI は端末を見ずに起動されることがある**（PR #140 の指摘3）。読み飛ばしたキーを画面に出し、保存したら消す。"""
+    rule = tmp_path / "old.yml"
+    rule.write_text("weights:\n  stranger_penalty: 6\n  smile: 0.4\n", encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path=str(rule), output_root=str(tmp_path / "out"))
+    panel = window.selection
+    assert "stranger_penalty" in panel.retired_notice.text()
+    assert panel.weight_spins["strangers"].value() == scoring.WEIGHT_STRANGERS
+
+    panel.choose()  # 「選ぶ」で `status` が書き換わっても消えない
+    assert "stranger_penalty" in panel.retired_notice.text()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    panel.save_rule()
+    assert panel.retired_notice.text() == ""
+    assert selection.retired_weight_keys(selection.load_rule(str(rule))) == []
+    window.close()

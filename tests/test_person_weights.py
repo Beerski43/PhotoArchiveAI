@@ -46,8 +46,10 @@ CRISP = {
     "aligned": 1, "yaw": 0.0, "sharpness": 200.0, "eye_blink": None, "mouth_smile": None,
     "bbox_top": 10, "bbox_right": 60, "bbox_bottom": 60, "bbox_left": 10,
 }
-#: 写真全体の点を 0 にした重み（顔の点だけを見る）。
-FACES_ONLY = scoring.Weights.default()._replace(technical=0, aesthetic=0, highlights=0, shadows=0)
+#: 写真全体の点を 0 にし、2人目以降も薄めない重み（顔の点と人物の重みだけを見る）。
+FACES_ONLY = scoring.Weights.default()._replace(
+    technical=0, aesthetic=0, highlights=0, shadows=0, extra_person=1.0
+)
 
 
 def _face_points(weight_sum):

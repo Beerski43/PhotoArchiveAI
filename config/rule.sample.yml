@@ -19,10 +19,11 @@ include_auto_assigned: true
 # similar_far_distance: 14
 # copy_distance: 9
 # 並びの重み（書いていない項目は既定値）。
-# 点 = (Σ 家族の顔の点 × 人物の重み − Σ 他人(減点)の顔の点 × strangers) × face_ratio / 100
+# 点 = (家族の加点 − Σ 他人(減点)の顔の点 × strangers) × face_ratio / 100
 #      + 写真全体の点 × (100 − face_ratio) / 100。顔の6項目・写真全体の4項目は、それぞれの中での比（#139）
 # weights:
 #   face_ratio: 70     # 比重（0〜100）。顔の側の割合。残りが写真全体
+#   extra_person: 0.5  # 2人目以降の効き（0〜1）。家族の加点は高い順に、2人目に 0.5、3人目に 0.25 … をかけて足す
 #   sharpness: 0.3     # 顔: ボケていない
 #   frontal: 0.2       # 顔: 正面を向いている
 #   eyes: 0.15         # 顔: 目を開けている

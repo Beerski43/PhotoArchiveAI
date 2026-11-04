@@ -74,6 +74,7 @@ PREVIEW_PROMPT = "写真を選ぶと、ここに大きく出ます"
 #: 顔の項目どうし・写真全体の項目どうしは**比**で効く（和で割る）。
 WEIGHT_FIELDS = (
     ("face_ratio", "比重: 顔の側（家族の加点 − 他人の減点）の割合 %。残りが写真全体", 1.0),
+    ("extra_person", "2人目以降の効き（1 で全員を同じだけ足す・0 でいちばん良い1人だけ）", 0.05),
     ("sharpness", "顔: 鮮明さ（ボケていない）", 0.05),
     ("frontal", "顔: 正面を向いている", 0.05),
     ("eyes", "顔: 目を開けている", 0.05),
@@ -95,6 +96,11 @@ WEIGHT_SLIDER_MAXIMUM = {0.05: 1.0, 0.1: 3.0, 1.0: 100.0}
 #: 画面の値が CLI と黙ってずれ、保存すると丸めた値が残っていた）。`load_rule` は 0 以上なら受け付ける。
 WEIGHT_DECIMALS = 4
 WEIGHT_MAXIMUM = 1_000_000.0
+#: 上限のある重み。
+WEIGHT_LIMITS = {
+    "face_ratio": selection.FACE_RATIO_MAXIMUM,
+    "extra_person": selection.EXTRA_PERSON_MAXIMUM,
+}
 
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
@@ -404,10 +410,8 @@ class SelectionPanel(QWidget):
         defaults = scoring.Weights.default()
         for key, label, step in WEIGHT_FIELDS:
             spin = WheelSafeDoubleSpinBox()
-            # 比重は 0〜100（`selection.rule_weights` が超える値を止める）
-            spin.setRange(
-                0.0, selection.FACE_RATIO_MAXIMUM if key == "face_ratio" else WEIGHT_MAXIMUM
-            )
+            # 比重と2人目以降の効きには上限がある（`selection.rule_weights` が超える値を止める）
+            spin.setRange(0.0, WEIGHT_LIMITS.get(key, WEIGHT_MAXIMUM))
             spin.setDecimals(WEIGHT_DECIMALS)
             spin.setSingleStep(step)
             self.weight_spins[key] = spin
@@ -475,6 +479,11 @@ class SelectionPanel(QWidget):
         self.status = QLabel("")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        # 使わなくなったキーの知らせ（PR #140 の指摘3）。**`status` とは分ける**（「選ぶ」で消えないように）。
+        self.retired_notice = QLabel("")
+        self.retired_notice.setWordWrap(True)
+        layout.addWidget(self.retired_notice)
+        self._show_retired_keys()
         layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -567,6 +576,7 @@ class SelectionPanel(QWidget):
         self.rule_path = rule_path
         self.rule = self._read_rule()
         self._show_rule(self.rule)
+        self._show_retired_keys()
         self.year_table.setRowCount(0)
         if self._years_filled:
             self.refresh_years()
@@ -580,6 +590,15 @@ class SelectionPanel(QWidget):
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "ルールを読めません", str(error))
             return {}
+
+    def _show_retired_keys(self) -> None:
+        """いま読んでいるルールの、使わなくなったキーを画面に出す（GUI は端末を見ずに起動されることがある）。"""
+        retired = selection.retired_weight_keys(self.rule)
+        self.retired_notice.setText(
+            f"ルールの {'・'.join(retired)} は使わなくなりました。点の出し方が変わり、値は読み飛ばしています"
+            "（「ルールを保存」で消えます。docs/operation/CONFIG.md）。"
+            if retired else ""
+        )
 
     def _show_rule(self, rule: Dict[str, Any]) -> None:
         weights = selection.rule_weights(rule)
@@ -895,6 +914,7 @@ class SelectionPanel(QWidget):
             return
         write_rule(self.rule_path, rule)
         self.rule = rule
+        self._show_retired_keys()
         self.status.setText(f"ルールを保存しました: {self.rule_path}")
 
     def export(self) -> None:

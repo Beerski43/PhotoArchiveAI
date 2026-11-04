@@ -158,7 +158,9 @@ def test_a_family_member_with_closed_eyes_still_adds_but_less():
     both_open = scoring.family_photo_score([_row(1), _row(2)])
     one_closed = scoring.family_photo_score([_row(1), _row(2, eye_blink=0.5)])
     assert one < one_closed < both_open
-    assert both_open - one_closed == pytest.approx(_item_points("eyes"))
+    # 目を閉じた顔は2人目に回るので、2人目の効き（`extra_person`）をかけたぶんだけ下がる
+    extra = scoring.Weights.default().extra_person
+    assert both_open - one_closed == pytest.approx(extra * _item_points("eyes"))
 
 
 def test_an_unmeasured_expression_neither_helps_nor_excludes():

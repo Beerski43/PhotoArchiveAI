@@ -131,7 +131,7 @@ def aggregate_media_scores(
 #
 #     顔の点     = 100 × Σ(項目の重み × 項目の値) / Σ(項目の重み)          … 0〜100
 #                  項目: 鮮明さ・正面・目・笑顔・大きさ・見切れていない
-#     家族の加点 = Σ(家族と親しい人の顔の点 × 人物の重み)
+#     家族の加点 = 人物ごとに最良の顔の点 × 人物の重み を高い順に並べ、k 人目に extra_person^(k−1) をかけて足す
 #     他人の減点 = Σ(他人(減点)の顔の点) × strangers
 #     写真全体   = 100 × Σ(項目の重み × 項目の値) / Σ(項目の重み)          … 0〜100
 #                  項目: 画質・美しさ・白飛びしていない・黒つぶれしていない
@@ -142,7 +142,13 @@ def aggregate_media_scores(
 # 点に入らず、顔と写真全体のどちらに寄せるかを1つの値で動かせなかった。
 #
 # **項目の重みは「比」**（和で割る）。顔の点も写真全体の点も 0〜100 にそろうので、`face_ratio` が
-# 「顔と写真全体のどちらを見るか」だけを表す。**家族の加点は Σ のまま**（人数が多いほど伸びる・利用者の決定）。
+# 「顔と写真全体のどちらを見るか」だけを表す。
+#
+# **家族の加点は人数が多いほど伸びるが、2人目以降は薄める**（`extra_person`。PR #140 のレビュー後の利用者の決定）。
+# Σ をそのまま足すと出力 502 枚のうち1人の写真が 186 → 26 枚に減り、`face_ratio` で戻すには 10 前後が要って顔の良さが
+# 効かなくなった。人数の平方根で割る形にしなかったのは、ボケた家族が増えると点が下がるため。**順に薄める形なら、
+# 家族が増えて点が下がることはない。** **同じ人物の顔が複数あれば、いちばん良い顔だけを足す**（写真の中の写真や
+# 割り当ての誤りで点が伸びないように・PR #140 の指摘1・利用者の決定）。
 #
 # 鮮明さ・向き・目・笑顔の目盛りは実データの手本 10,701 件を目で見て決めた（鮮明さ・向きの帯ごとに
 # サムネイルを並べた。docs/history/details/2026-10-09-age-threshold-measured.md）。
@@ -202,11 +208,14 @@ WEIGHT_TECHNICAL = 0.3
 WEIGHT_AESTHETIC = 0.1
 WEIGHT_HIGHLIGHTS = 0.0
 WEIGHT_SHADOWS = 0.0
-#: 他人(減点)の顔の点にかける重み（#139）。1 なら、同じ写りの家族1人の加点をちょうど打ち消す。
+#: 他人(減点)の顔の点にかける重み（#139）。1 なら、同じ写りの家族（1人目）の加点をちょうど打ち消す。
 WEIGHT_STRANGERS = 1.0
 #: 比重（0〜100・#139）。顔の側（家族の加点 − 他人の減点）にかける割合。残りが写真全体。
 #: 以前の既定で、家族1人の写真の満点に占める写真全体の点（画質 30・美しさ 10）がおよそ 3 割だったので 70。
+#: **1人の写真でだけ成り立つ目安**で、人数が増えると顔の側の割合はこれより大きくなる。
 FACE_RATIO = 70.0
+#: 2人目以降の効き（0〜1）。k 人目の顔の点に、この値の k−1 乗をかけて足す。1 なら全員を同じだけ足し、0 なら最良の1人だけ。
+EXTRA_PERSON = 0.5
 
 #: 顔の項目と写真全体の項目（`Weights` のキー・内訳のキー）。
 FACE_ITEMS = ("sharpness", "frontal", "eyes", "smile", "size", "cutoff")
@@ -327,6 +336,7 @@ class Weights(NamedTuple):
     highlights: float = WEIGHT_HIGHLIGHTS
     shadows: float = WEIGHT_SHADOWS
     face_ratio: float = FACE_RATIO
+    extra_person: float = EXTRA_PERSON
 
     @classmethod
     def default(cls) -> "Weights":
@@ -335,7 +345,7 @@ class Weights(NamedTuple):
             WEIGHT_SHARPNESS, WEIGHT_FRONTAL, WEIGHT_EYES, WEIGHT_SMILE, WEIGHT_SIZE, WEIGHT_CUTOFF,
             WEIGHT_STRANGERS,
             WEIGHT_TECHNICAL, WEIGHT_AESTHETIC, WEIGHT_HIGHLIGHTS, WEIGHT_SHADOWS,
-            FACE_RATIO,
+            FACE_RATIO, EXTRA_PERSON,
         )
 
     def ratio(self) -> float:
@@ -404,6 +414,18 @@ def _has_family(faces) -> bool:
     return any(not face.get("close") for face in faces)
 
 
+def _best_face_per_person(faces, weights: Weights, largest, quality) -> list:
+    """同じ人物の顔が複数あれば、いちばん点の高い顔だけを残す。"""
+    best: dict = {}
+    for face in faces:
+        person = face.get("person_id")
+        if person not in best or face_score(face, weights, largest, quality) > face_score(
+            best[person], weights, largest, quality
+        ):
+            best[person] = face
+    return list(best.values())
+
+
 def largest_face(faces) -> float:
     """``faces`` のうち、いちばん大きい顔の一辺。顔が無ければ 0。"""
     return max((face_size(face) for face in faces), default=0.0)
@@ -428,7 +450,8 @@ def photo_breakdown(
     - ``largest``: その写真でいちばん大きい顔の一辺（`db.largest_face_sizes`）。渡さなければ ``faces`` と
       ``stranger_faces`` の中から取る
 
-    顔の項目と他人(減点)には `face_ratio`、写真全体の項目には残りをかけてある。**家族の顔が無ければ全部 0**
+    顔の項目（人物ごとの最良の顔を高い順に `extra_person` で薄めた和）と他人(減点)には `face_ratio`、
+    写真全体の項目には残りをかけてある。**家族の顔が無ければ全部 0**
     （親しい人だけの写真は家族の写真ではない・#110）。
     """
     weights = weights or Weights.default()
@@ -437,8 +460,14 @@ def photo_breakdown(
         if largest is None:
             largest = largest_face(list(faces) + list(stranger_faces))
         ratio = weights.ratio()
-        for face in faces:
-            scale = ratio * _person_weight(face)
+        # 高い順に足すので、家族が増えても点は下がらない（重み 0 の人物は最後に回って何も足さない）
+        people = sorted(
+            _best_face_per_person(faces, weights, largest, quality),
+            key=lambda face: _person_weight(face) * face_score(face, weights, largest, quality),
+            reverse=True,
+        )
+        for rank, face in enumerate(people):
+            scale = ratio * _person_weight(face) * weights.extra_person ** rank
             for key, value in face_parts(face, weights, largest, quality).items():
                 parts[key] += scale * value
         parts["strangers"] = -ratio * weights.strangers * sum(

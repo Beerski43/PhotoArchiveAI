@@ -564,7 +564,7 @@
 | `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
 | `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
-### `test_gui_select.py` — 写真の選定タブ（31件。#104・#106・#113・#120）
+### `test_gui_select.py` — 写真の選定タブ（32件。#104・#106・#113・#120）
 
 | テスト | 内容 |
 |---|---|
@@ -596,6 +596,7 @@
 | `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ・#139 の大きさ・他人・比重）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
 | `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
 | `test_each_weight_has_a_gauge_that_moves_its_value_by_the_step` | **重みと似た写真の判定の各項目に横ゲージ**。動かすと入力欄に刻みの倍数が入り、ルールに届く（#120。比重と他人の重みも・#139） |
+| `test_the_panel_says_which_old_weight_keys_were_skipped` | **読み飛ばした古いキーを画面に出す**（GUI は端末を見ずに起動されることがある・PR #140 の指摘3）。「選ぶ」で消えず、保存すると消える |
 | `test_a_value_off_the_gauge_is_kept_as_typed` | ゲージは値の上限でも目盛りでもない。右端より大きい値・目盛りに合わない値を丸めずにルールへ（#120・PR #108 の指摘3） |
 | `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
 | `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
@@ -864,7 +865,7 @@
 | `test_match_writes_the_same_score_as_select_with_the_photo_quality` | **`match` の `family_score` も `PhotoQuality` を読み、`select` と同じ点**（読まないと測った写真で食い違う） |
 | `test_the_real_models_give_scores_in_their_ranges`（`models`） | 実物の ONNX が範囲内の点を出す（環境依存・合否に含めない） |
 
-### `test_per_face_scoring.py` — 顔ごとの点の和と写真全体の点を比重で合わせる（7件。#139）
+### `test_per_face_scoring.py` — 顔ごとの点の和と写真全体の点を比重で合わせる（12件。#139）
 
 | テスト | 内容 |
 |---|---|
@@ -875,6 +876,11 @@
 | `test_the_old_weight_keys_are_skipped_with_a_warning` | **#139 で無くなった `member_bonus`・`stranger_penalty` は止めずに警告して読み飛ばす**（古い値を新しい `strangers` として読まない） |
 | `test_a_misspelled_weight_key_is_still_refused` | 綴りを誤ったキーは止める（いままでどおり） |
 | `test_the_ratio_must_be_between_0_and_100` | 比重は 0〜100。超えたら止める |
+| `test_two_faces_of_one_person_count_once` | **同じ人物の顔は、いちばん良い顔だけ足す**（PR #140 の指摘1）。写真の中の写真や割り当ての誤りで点が伸びない |
+| `test_the_second_person_and_later_are_thinned_in_turn` | k 人目に `extra_person` の k−1 乗。1 は全員同じ、0 は最良の1人だけ（PR #140 の指摘2） |
+| `test_another_family_member_never_lowers_the_score` | **ボケて目を閉じた家族が増えても点は下がらない**（人数の平方根で割る形にしなかった理由）。顔の順にもよらない |
+| `test_a_heavier_person_is_the_one_kept_whole` | 薄めるのは「人物の重み × 顔の点」の低いほう |
+| `test_the_extra_person_must_be_between_0_and_1` | 2人目以降の効きは 0〜1。超えたら止める |
 
 ### `test_strangers.py` — 他人(減点)の顔の写った写真の点を下げる（10件。#100・#110・#139）
 
