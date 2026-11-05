@@ -478,6 +478,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   ログファイルに1行も残らない（`scanner._start_worker` が
   `logging_setup.setup_logging` を呼ぶ）。テストはフェイクを `worker_initializer`
   で子へ入れる (`tests/fakes.py`)。
+- **`QWizard` は閉じると最初の段へ戻す。**何時間も流す取り込みウィザードは、閉じて開き直しても同じ段に戻すので `reject` を上書きして隠すだけにしてある。**別の窓は `AppWindow` を親に持たせる**（`WorkProgress` の `WindowModal` が `match` の最中に塞ぐ。外すとその最中に裏の処理を始められる）。**別の窓を足したら `AppWindow.closeEvent` でも閉じる**（残るとアプリが終わらない）
 - **`PRAGMA user_version` を、移行していないDBに刻まない。** スキーマは
   `CREATE TABLE IF NOT EXISTS` なので既存のテーブルを変えない。それなのに版だけ
   記録すると、**中身は古いまま「移行済み」の印が付く。** そうなると `migrate` が
