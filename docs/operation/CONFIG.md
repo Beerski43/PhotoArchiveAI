@@ -65,7 +65,7 @@ GUI には `--db` しかありません。写真の選定タブの出力先と�
 
 ### GUI の「設定…」
 
-GUI のタブの左上の `設定…` で、`database_path`・`source_roots`・`output_root`・`rule_path` を直せます（#131。手順は [GUI利用手順](GUI_USAGE.md#設定を直す)）。
+GUI のメニューの `設定…` で、`database_path`・`source_roots`・`output_root`・`rule_path` を直せます（#131。手順は [GUI利用手順](GUI_USAGE.md#設定を直す)）。
 
 - 書く先は**いま読んでいるファイル**。無ければ `PHOTOARCHIVE_CONFIG` が指す先、それも無ければカレントディレクトリの `config/app_settings.yml`
 - もとのファイルは `app_settings.yml.bak` に控えます。**ファイル内のコメントは消えます。** ほかのキー（`dlib_model_dir` など）は残ります。空にした欄はキーを消します
@@ -76,7 +76,7 @@ GUI のタブの左上の `設定…` で、`database_path`・`source_roots`・`
 ### 相対パス
 
 相対パスは**コマンドを実行したディレクトリ**から解きます。リポジトリ直下で実行するなら `data/photoarchive.db` のように書けます。
-例外は GUI の `source_roots` で、こちらは設定ファイルの置き場所（`config/` の1つ上）から解きます（取り込みタブの root・写真の選定の元写真・プレビューのフォルダ名・「設定…」の保存前の検査のすべてで同じ）。
+例外は GUI の `source_roots` で、こちらは設定ファイルの置き場所（`config/` の1つ上）から解きます（取り込みウィザードの root・写真の選定の元写真・プレビューのフォルダ名・「設定…」の保存前の検査のすべてで同じ）。
 別のディレクトリから実行するなら、絶対パスで書くのが確実です。
 
 ### 環境変数

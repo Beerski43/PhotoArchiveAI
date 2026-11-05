@@ -151,6 +151,16 @@ def test_no_backup_is_written_when_declined(seeded, monkeypatch, shown):
     assert "控え: 取っていません" in shown[-1][2]
 
 
+def test_the_left_panel_no_longer_has_a_match_button(seeded):
+    """match はメニューへ移した（#132）。実行中に押せないのは `AppWindow._sync_menus` が見る。"""
+    window, *_rest = seeded
+    assert not hasattr(window, "match_button")
+    window.set_job_running(True)
+    assert not window.measure_button.isEnabled()
+    window.set_job_running(False)
+    assert window.measure_button.isEnabled()
+
+
 def test_cancelling_the_dialog_changes_nothing(seeded, monkeypatch, shown):
     window, database, _person_id, faces = seeded
 

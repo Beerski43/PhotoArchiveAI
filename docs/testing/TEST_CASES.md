@@ -368,7 +368,7 @@
 | `test_matching_a_person_without_teachers_assigns_nothing` | 手本の無い人物を指定しても何も付かない（#123） |
 | `test_matching_a_person_whose_teachers_cannot_be_aligned_says_so` | **整列できない手本しか無い人物は「根拠にできる手本が無い」と数える**。行数で数えると、何も付かないのに理由が出なかった（PR #125 の指摘3） |
 
-### `test_evaluation.py` — 精度の実測（12件）
+### `test_evaluation.py` — 精度の実測（29件）
 
 手動割り当てを正解とみなし、手本を1件ずつ抜いて `match` の判定を通す
 （1件抜き交差検証）。**この測定が甘く出ると、閾値の判断ごと間違える。**
@@ -386,6 +386,8 @@
 | `test_the_report_shows_each_threshold_and_each_person` | 閾値ごと・人物ごとの内訳が出る |
 | `test_the_report_tells_the_user_when_nothing_could_be_evaluated` | 評価対象0件を 0.0%（＝取りこぼし無し）と出さない |
 | `test_the_person_column_lines_up_when_names_mix_japanese_and_ascii` | 人物名の列を見た目の幅で揃える |
+| `test_should_stop_ends_the_measurement_without_a_result` | 止める合図で `EvaluationStopped`。途中の率を返さない（#132） |
+| `test_parse_thresholds_keeps_order_and_drops_repeats` / `test_parse_thresholds_refuses_values_that_would_mislead` | 閾値の読み方（CLI と GUI で同じ）。重複を落とす・`nan`・`inf`・0 以下・空を弾く（#132） |
 
 ### `test_gui_migration.py` — 起動時の移行（8件）
 
@@ -548,11 +550,12 @@
 | `test_rejecting_a_persons_unassigned_face_does_not_ask_for_confirmation` | 未分類の顔認証外に確認を挟まない（毎件通る操作） |
 | `test_switching_back_from_unassigned_restores_the_persons_order` | 種別を戻すと人物の既定の並び（年齢順）に戻る |
 
-### `test_gui_match.py` — `match` を画面から流す（11件。人物ごとは #123）
+### `test_gui_match.py` — `match` を画面から流す（12件。人物ごとは #123）
 
 | テスト | 内容 |
 |---|---|
 | `test_match_runs_from_the_window_and_refreshes_the_counts` | 画面から流せて、終わったら左の件数まで出し直す |
+| `test_the_left_panel_no_longer_has_a_match_button` | `match` はメニューへ移した。実行中の状態の切り替えは残る（#132） |
 | `test_the_backup_is_taken_when_chosen` | 控えを選んだら、**流す前の状態**がそのまま入っている |
 | `test_no_backup_is_written_when_declined` | 控えを外したら書かない |
 | `test_cancelling_the_dialog_changes_nothing` | 「やめる」なら何も変えない |
@@ -568,7 +571,7 @@
 
 | テスト | 内容 |
 |---|---|
-| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが3枚。1枚目は今の顔の割り当て、2枚目は写真の選定、3枚目は取り込み（#129） |
+| `test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second` | 起動するとタブが2枚（顔の割り当て・写真の選定）。取り込みはメニューのウィザードへ移した（#132） |
 | `test_the_settings_start_from_the_rule_file` | 設定の初期値はルールファイルから |
 | `test_loading_lists_every_year_with_its_candidates` | **タブを開いた時点で**年ごとの候補の枚数が表に並び、枚数を入れられる（整数の `count_per_year` は全部の行に入る・「候補を読み込む」ボタンは無い・#113） |
 | `test_choosing_again_with_other_weights_changes_the_order` | **重みを動かして並べ直すと、その場で並びが変わる**（#102 の要望） |
@@ -1053,11 +1056,11 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_an_assess_job_without_models_fails_with_how_to_make_them` | モデルが無ければ置き方つきで落ちる |
 | `test_nothing_to_assess_reads_naturally` | 測る写真が無いときの1行 |
 
-### `test_gui_scan.py` — GUI の「取り込み」タブ（16件。#129・#130）
+### `test_gui_scan.py` — GUI の取り込みウィザードと assess の窓（21件。#129・#130・#132）
 
 | テスト | 内容 |
 |---|---|
-| `test_the_third_tab_runs_a_scan_in_the_background` | 3枚目のタブから `scan` を裏で流す。**実行中は `match` と「始める」が押せない**。終われば戻り、件数が出る |
+| `test_the_wizard_runs_a_scan_in_the_background` | ウィザードから `scan` を裏で流す。**実行中は `match` と「始める」が押せない**。終われば戻り、件数が出る |
 | `test_the_stop_button_stops_and_the_next_scan_continues` | 「止める」で止まり、次は続きから |
 | `test_a_scan_that_cannot_start_is_reported` | 中断（メディアが無い）を知らせる |
 | `test_closing_while_scanning_waits_for_the_stop` / `test_closing_can_be_cancelled_while_scanning` | **流したまま閉じない。** 止めて閉じるなら止まるのを待つ・閉じないこともできる |
@@ -1065,12 +1068,44 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_window_waits_for_other_writers` | 画面の接続はほかの書き込みを待つ（`busy_timeout`） |
 | `test_a_locked_write_is_rolled_back_and_reported` / `test_the_error_handler_reports_slot_failures` | **待ちきれなかった書き込みは rollback して知らせる**（書きかけを次の commit に混ぜない・黙って失わない） |
 | `test_status_lines_read_naturally` | 進み具合の文 |
-| `test_the_intake_tab_converts_heic_in_the_background` | `HEIC を JPEG に変換する` を裏で流す。**実行中はほかの2つと `match` を押せない**。終われば「続けてスキャン」と出す（#130） |
+| `test_the_wizard_converts_heic_in_the_background` | `HEIC を JPEG に変換する` を裏で流す。**実行中はほかの2つと `match` を押せない**。終われば「続けてスキャン」と出す（#130） |
 | `test_a_jpeg_that_cannot_be_written_stops_the_conversion_and_is_reported` | JPEG が書けなければ止めて窓で知らせる |
-| `test_the_intake_tab_assesses_family_photos_in_the_background` | `写真の良し悪しを測る` を裏で流す。測っていない枚数を出し、測り終えたら押せなくなる |
+| `test_the_assess_window_assesses_family_photos_in_the_background` | assess の窓から `写真の良し悪しを測る` を裏で流す。測っていない枚数を出し、測り終えたら押せなくなる |
+| `test_the_assess_count_follows_new_assignments_while_the_window_stays_open` | **開いたまま顔を割り当てても件数が古いまま押せなくならない**（窓が前に来る・メニューを選び直すで数え直す。PR #141 の指摘2） |
 | `test_assess_does_not_start_without_the_models` | **モデルが無ければ始めずに置き方を出す** |
 | `test_nothing_to_assess_disables_the_button` | 測る写真が無ければ押せない |
 | `test_status_lines_name_each_job` | 仕事ごとの進み具合・止めたときの文 |
+| `test_the_wizard_walks_through_convert_scan_and_the_next_steps` | root の確認 → HEIC → スキャン → 次にやること の順に進み、各段は飛ばせる（#132） |
+| `test_next_is_blocked_while_a_job_runs_and_closing_does_not_stop_it` | **流しているあいだは「次へ」を押せない。閉じても止まらず**、終わるとステータスバーに出て、開き直すと同じ段に戻る（`QWizard` の既定の「閉じると最初の段」を上書きした） |
+| `test_finishing_the_wizard_starts_over_next_time` | 完了を押したら次は最初の段から・記録も消える |
+| `test_without_roots_the_wizard_says_so_and_cannot_go_on` | root が無ければ設定へ案内し、先へ進めない |
+
+### `test_gui_menu.py` — GUI のメニュー・`evaluate`・`unassign-auto`（34件。#132）
+
+| テスト | 内容 |
+|---|---|
+| `test_the_menu_bar_has_import_faces_and_settings` | メニューは取り込み・顔の割り当て・設定。タブは2枚で、進み具合はタブの右上のまま |
+| `test_the_face_items_work_only_on_the_assignment_tab` / `test_a_finished_job_on_the_selection_tab_keeps_the_face_items_off` | **顔の割り当ての項目は、顔の割り当てタブのときだけ**（裏の処理が終わっても勝手に戻らない） |
+| `test_match_and_unassign_are_blocked_while_a_job_runs` | 実行中は `match` と取り消しを押せない。`evaluate` の窓は開ける（測るボタンは止まる） |
+| `test_the_match_action_runs_match` | メニューから `match` の確認の窓が開く |
+| `test_closing_the_main_window_closes_the_other_windows` | **主窓を閉じたら別の窓も閉じる**（残るとアプリが終わらない） |
+| `test_unassign_removes_only_automatic_assignments` | メニューから取り消すと自動割当だけが消える。**手本と顔認証外は残る** |
+| `test_unassign_can_be_limited_to_the_selected_person` | 左で選んだ人物だけ（ほかの人物には触らない） |
+| `test_unassign_takes_a_backup_when_chosen` | 控えは取り消す前の状態 |
+| `test_cancelling_unassign_changes_nothing` / `test_without_automatic_assignments_it_says_so` | やめたら何も変わらない・自動割当が無ければ窓を開かず知らせる |
+| `test_a_failed_unassign_is_reported_and_changes_nothing` | **数え直しで落ちたら取り消しも残らない**（`db.unassign_auto` の1つのトランザクション） |
+| `test_the_unassign_dialog_defaults_to_cancel_and_backup` / `test_the_unassign_dialog_cannot_run_for_a_person_without_automatic_assignments` | 既定は「やめる」・控えを取る。件数が 0 の範囲では実行できない |
+| `test_evaluate_runs_in_the_background_and_shows_the_same_report_as_the_cli` | **本物の子プロセスで流し、CLI と同じ文を出す。** 閾値・マージン・同じ写真の指定が効く。**DB に書かない** |
+| `test_evaluate_uses_the_cli_defaults` | 窓の既定は CLI と同じ |
+| `test_evaluate_refuses_bad_thresholds_before_starting` | 読めない閾値では始めない（`nan`・負の値・空） |
+| `test_evaluate_without_teachers_says_so` | 手本が無ければそう出す |
+| `test_closing_the_evaluate_window_keeps_it_running_and_the_result_stays` | 窓を閉じても止まらず、開き直すと結果がある |
+| `test_a_stopped_evaluation_shows_no_partial_numbers` / `test_run_evaluate_stops_without_a_result` | **止めたら途中の数字を出さない** |
+| `test_a_failed_evaluation_is_reported` / `test_other_jobs_do_not_touch_the_evaluate_report` | 失敗は知らせる・ほかの処理の終わりで結果を消さない |
+| `test_run_evaluate_reports_progress_and_the_summary` / `test_the_module_keeps_the_threshold_text_in_step_with_the_defaults` | 進み具合と集計の1行・既定の閾値の文 |
+| `test_stopping_evaluate_does_not_promise_to_resume` / `test_other_jobs_still_promise_to_resume` / `test_the_stop_tooltip_follows_the_job_that_runs` | **何も保存しない `evaluate` に「続きから」と言わない**（止めるの説明・止めている文・閉じる確認）。ほかの処理の文は変えない（PR #141 の指摘3） |
+| `test_a_failed_reload_after_unassign_does_not_say_nothing_changed` | **取り消しの commit のあとの失敗に「何も変えていません」と言わない**（指摘4） |
+| `test_the_bulk_button_does_not_name_only_some_jobs` / `test_the_settings_item_shows_its_tooltip` | 押せない理由の文に処理名を挙げない（指摘5）・`設定…` の説明がメニューで出る（指摘6） |
 
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
@@ -1084,7 +1119,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_only_the_dialog_keys_can_be_written` | 窓の4つのキー以外は書かない |
 | `test_nested_roots_and_an_output_overlapping_a_root_are_refused` | root の入れ子と、**出力先が root と重なる（同じ・内側・外側）**のは止める。まだ無い出力先は聞くだけ |
 | `test_a_missing_root_asks_instead_of_refusing` | 見つからない root は止めずに聞く（NFS が外れているだけのことがある） |
-| `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みタブの root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く。ボタンはタブの左上 |
+| `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く |
 | `test_the_same_rule_path_keeps_the_weights_moved_on_screen` | ルールのパスが同じなら、画面で動かした重みは読み直さない |
 | `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
 | `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |
@@ -1092,7 +1127,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_relative_roots_are_checked_from_the_settings_file` | **相対の root は起動時と同じく設定ファイルの置き場所から解いて確かめる**（カレントから解くと root の内側の出力先を止められなかった・PR #138 のレビュー指摘1） |
 | `test_an_empty_database_path_is_not_saved` | **DB の欄が空なら保存させない**（次に `--db` なしで起動できなくなる・指摘2・利用者の決定） |
 | `test_the_restart_notice_only_follows_a_changed_database_path` | 「次に起動したときから」は DB の欄を変えたときだけ（`--db` で起動していても・指摘3） |
-| `test_the_corner_button_opens_saves_and_applies` | `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
+| `test_the_menu_opens_saves_and_applies` | メニューの `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
 
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 

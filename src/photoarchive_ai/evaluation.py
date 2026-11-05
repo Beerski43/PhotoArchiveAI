@@ -24,6 +24,7 @@
   取りこぼしになり、混ぜると取りこぼし率が実態より悪く出る。
 """
 
+import math
 import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -63,6 +64,44 @@ WRONG = "wrong"
 MAX_WRONG_DETAILS = 20
 
 
+class EvaluationStopped(Exception):
+    """止める合図で止まった（GUI・#132）。**途中の数字は返さない**（手本の前のほうだけの率になるため）。"""
+
+    def __init__(self, evaluated: int):
+        super().__init__("stopped")
+        self.evaluated = evaluated
+
+
+def parse_thresholds(raw: str) -> List[float]:
+    """カンマ区切りの閾値を読む（CLI と GUI・#132）。読めなければ ``ValueError``。
+
+    **同じ閾値を2度数えない。** 集計先は閾値の値で引くので、重複すると
+    片方が0件、もう片方が2倍になり、正解率が 200% になる。表に
+    「0.40 で正解 0.0%」という行が並ぶと、閾値を緩める方向に判断が傾く。
+
+    **`nan` や `inf` も弾く。** `float("nan")` は読めてしまうが、
+    `best_distance > nan` が常に False なので**閾値を掛けていないのと同じ**
+    判定になる。0 以下も、何も割り当たらない表が出るだけで意味がない。
+    """
+    values: List[float] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = float(part)
+        except ValueError:
+            raise ValueError(f"閾値として読めない値です: {part}") from None
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"閾値は正の有限の数で指定してください: {part}")
+        if value in values:
+            continue
+        values.append(value)
+    if not values:
+        raise ValueError("閾値が1つも指定されていません。")
+    return values
+
+
 def _empty_threshold_row(threshold: float) -> Dict[str, Any]:
     return {
         "threshold": threshold,
@@ -90,8 +129,12 @@ def evaluate_match(
     metric: Optional[str] = None,
     keep_same_media: bool = False,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-    """手本の顔を1件ずつ抜いて、閾値ごとの正解・取りこぼし・誤りを数える。"""
+    """手本の顔を1件ずつ抜いて、閾値ごとの正解・取りこぼし・誤りを数える。
+
+    ``should_stop`` が真を返すと ``EvaluationStopped`` を投げる（GUI の「止める」・#132）。
+    """
     # 重複を落とす。集計先は閾値の値で引くので、同じ値が2つあると片方が0件、
     # もう片方が2倍になり、正解率が 200% になる。CLI 側でも弾いているが、
     # ここを直に呼ぶ経路(テストや将来の GUI)も守る。
@@ -129,7 +172,9 @@ def evaluate_match(
     media_ids = faces.media_ids
     # **`match` と同じく、整列できなかった手本を根拠にしない。** 未計測の手本は
     # その場で測るが、**DB には書かない**（このモジュールの約束）。
-    usable = teacher_usable(connection, faces, write=False)
+    usable = teacher_usable(
+        connection, faces, write=False, progress_callback=progress_callback, should_stop=should_stop
+    )
     summary["unusable_teachers"] = int((~usable).sum())
     limits_by_threshold = {value: teacher_limits(faces, value) for value in thresholds}
     rows_by_threshold = {row["threshold"]: row for row in summary["thresholds"]}
@@ -145,6 +190,8 @@ def evaluate_match(
     rejections = db.load_person_rejections(connection)
 
     for start in range(0, total, EVAL_CHUNK_SIZE):
+        if should_stop is not None and should_stop():
+            raise EvaluationStopped(summary["evaluated"])
         stop = min(start + EVAL_CHUNK_SIZE, total)
         distances = _distances(faces.embeddings[start:stop], faces.embeddings, metric)
         for offset in range(stop - start):
@@ -310,7 +357,7 @@ def format_report(summary: Dict[str, Any]) -> str:
     if summary["teachers"] == 0:
         return (
             "手本になる顔がありません。photoarchive-gui で顔を人物に割り当ててから"
-            "再実行してください。"
+            "測り直してください。"
         )
 
     names = summary["person_names"]
@@ -417,7 +464,7 @@ def format_report(summary: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(
             "「誤った最小の閾値」は**試した閾値の中での最小**。"
-            "刻みの外は分からないので、細かく見るなら --thresholds で刻む。"
+            "刻みの外は分からないので、細かく見るなら試す閾値を細かく刻む。"
         )
         lines.append(
             "**「自分の最短」が閾値よりずっと大きい誤りは、閾値では直らない。**"

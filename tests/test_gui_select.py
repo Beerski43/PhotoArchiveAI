@@ -59,14 +59,12 @@ def _names(panel):
 
 
 def test_the_window_has_the_assignment_tab_first_and_the_selection_tab_second(window):
-    from photoarchive_ai import gui_scan
-
-    # 3枚目は取り込み（#129）
-    assert window.count() == 3
-    assert window.tabText(0) == "顔の割り当て" and isinstance(window.widget(0), gui.MainWindow)
-    assert window.tabText(1) == "写真の選定"
-    assert isinstance(window.widget(1), gui_select.SelectionPanel)
-    assert window.tabText(2) == "取り込み" and isinstance(window.widget(2), gui_scan.ScanPanel)
+    # タブは2枚。取り込みはメニューのウィザードへ移した（#132）
+    tabs = window.tabs
+    assert tabs.count() == 2
+    assert tabs.tabText(0) == "顔の割り当て" and isinstance(tabs.widget(0), gui.MainWindow)
+    assert tabs.tabText(1) == "写真の選定"
+    assert isinstance(tabs.widget(1), gui_select.SelectionPanel)
 
 
 def test_the_settings_start_from_the_rule_file(window):
@@ -80,7 +78,7 @@ def test_loading_lists_every_year_with_its_candidates(window):
     """**タブを開いた時点で**年ごとの表が出て、枚数を入れられる（#113・「候補を読み込む」は無くした）。"""
     panel = window.selection
     assert not hasattr(panel, "load_button")
-    window.setCurrentWidget(panel)
+    window.tabs.setCurrentWidget(panel)
     window.show()
     assert panel.year_table.rowCount() > 0, "開いただけで表がある"
     rows = {
@@ -493,7 +491,7 @@ def test_a_gauge_ignores_the_wheel_unless_focused(window):
     ゲージと入力欄はフォーカスが無ければホイールを受けない。クリックかタブで選んだときだけ動く。
     """
     panel = window.selection
-    window.setCurrentWidget(panel)
+    window.tabs.setCurrentWidget(panel)
     window.show()
     QApplication.processEvents()
     panel.weight_rows["smile"].reset_button.setFocus()
