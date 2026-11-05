@@ -519,7 +519,7 @@ def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
     box = panel.year_range.old_year
     assert [box.itemData(i) for i in range(box.count())] == [None, 2016, 2017, 2019]
-    assert box.itemText(1) == "2016（1 枚）"
+    assert box.itemText(1) == "2016", "欄は数字だけ（利用者の要望）"
     assert len(shown()) == 4, "初めは全部の年"
     assert shown()[-1] == "年不明 undated.jpg"
 

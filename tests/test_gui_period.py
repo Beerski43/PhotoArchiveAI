@@ -42,12 +42,18 @@ def test_the_years_and_months_are_separate_fields_listed_oldest_first(picker):
     assert _items(picker.old_month) == [gui_period.ANY, "2", "7"], "その年にある月だけ"
 
 
-def test_the_fields_say_which_side_is_old_and_which_is_new(picker):
-    """**利用者の要望**: どちらが古くてどちらが新しいのかが見た目で分かる。古い方が左。"""
-    texts = [
-        widget.text() for widget in picker.children() if isinstance(widget, QLabel)
-    ]
-    assert texts.index(gui_period.OLD_LABEL) < texts.index(gui_period.NEW_LABEL)
+def test_an_arrow_points_from_the_old_side_to_the_new_side(picker):
+    """**利用者の要望**: 「～ではなく→にするだけで良い」。"""
+    texts = [widget.text() for widget in picker.children() if isinstance(widget, QLabel)]
+    assert texts == ["年", "月", "→", "年", "月"]
+
+
+def test_the_fields_hold_only_digits_and_dashes_mean_no_limit(picker):
+    """**利用者の要望**: 「数字だけで良い」「指定なしは[--]にして」。長い文字はその幅まで欄を広げる。"""
+    picker.set_range("2018-07", "2020-01")
+    for box in (picker.old_year, picker.old_month, picker.new_year, picker.new_month):
+        assert _items(box)[0] == "--"
+        assert all(text.isdigit() for text in _items(box)[1:])
 
 
 def test_a_blank_month_means_the_whole_year_and_a_blank_year_means_no_limit(picker):
@@ -116,9 +122,9 @@ def test_changed_fires_once_per_move_and_not_on_a_refill(picker):
     assert len(fired) == 2
 
 
-def test_year_labels_show_counts_and_years_without_a_known_month(picker):
-    """写真の選定タブ: 枚数を添える。年までしか分からない写真の年は、月が無くても年の欄に並ぶ。"""
-    picker.set_months(["2018-07"], {2012: "2012（3 枚）", 2018: "2018（1 枚）"})
-    assert _items(picker.old_year) == [gui_period.ANY, "2012（3 枚）", "2018（1 枚）"]
+def test_a_year_without_a_known_month_is_still_listed(picker):
+    """写真の選定タブ: 年までしか分からない写真の年は、月が無くても年の欄に並ぶ。"""
+    picker.set_months(["2018-07"], [2012, 2018])
+    assert _items(picker.old_year) == [gui_period.ANY, "2012", "2018"]
     _pick(picker.old_year, 2012)
     assert _items(picker.old_month) == [gui_period.ANY]

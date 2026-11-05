@@ -456,8 +456,8 @@ class SelectionPanel(QWidget):
             edit.setPlaceholderText(PERIOD_PLACEHOLDER)
             edit.editingFinished.connect(self._period_changed)
         self.period_end.setToolTip("その日の終わりまで含みます")
-        period_form.addRow("始め（古い方）", self.period_start)
-        period_form.addRow("終わり（新しい方）", self.period_end)
+        period_form.addRow("始め", self.period_start)
+        period_form.addRow("終わり", self.period_end)
         self.period_notice = QLabel("")
         self.period_notice.setWordWrap(True)
         period_form.addRow(self.period_notice)
@@ -881,7 +881,7 @@ class SelectionPanel(QWidget):
                 for period in map(selection._media_period, self.selected)
                 if period is not None and _month_text(period[0]) == _month_text(period[1])
             }),
-            {year: f"{year}（{len(self.by_year[year])} 枚）" for year in self.by_year if year is not None},
+            (year for year in self.by_year if year is not None),
         )
         blocked = self.year_range.blockSignals(True)
         self.year_range.set_range(None, None)

@@ -1596,15 +1596,11 @@ class MainWindow(QWidget):
         common_filters.addSpacing(12)
         common_filters.addWidget(QLabel("撮影"))
         common_filters.addWidget(self.month_range)
+        common_filters.addWidget(self.undated_only_box)
         common_filters.addStretch(1)
-        # 撮影の欄が年と月に分かれて長くなったので、ページャと一緒に次の行へ（#134）。
-        # 1行に詰めると窓の最小幅が広がり、左の人物の領域が押し縮められる。
-        pager_row = QHBoxLayout()
-        pager_row.addWidget(self.undated_only_box)
-        pager_row.addStretch(1)
-        pager_row.addWidget(self.prev_button)
-        pager_row.addWidget(self.page_label)
-        pager_row.addWidget(self.next_button)
+        common_filters.addWidget(self.prev_button)
+        common_filters.addWidget(self.page_label)
+        common_filters.addWidget(self.next_button)
 
         # --- 鮮明さで絞る（#135） ----------------------------------------
         # **ボケ・ぶれた顔を閾値で絞り、まとめて顔認証外にする。** 閾値は一覧を
@@ -1769,7 +1765,6 @@ class MainWindow(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.addLayout(common_filters)
-        layout.addLayout(pager_row)
         layout.addLayout(blur_filters)
         layout.addWidget(self.person_filter_row)
         layout.addWidget(face_area, 1)

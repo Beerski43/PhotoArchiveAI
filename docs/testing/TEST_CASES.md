@@ -1119,12 +1119,13 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_failed_reload_after_unassign_does_not_say_nothing_changed` | **取り消しの commit のあとの失敗に「何も変えていません」と言わない**（指摘4） |
 | `test_the_bulk_button_does_not_name_only_some_jobs` / `test_the_settings_item_shows_its_tooltip` | 押せない理由の文に処理名を挙げない（指摘5）・`設定…` の説明がメニューで出る（指摘6） |
 
-### `test_gui_period.py` — 撮影時期の範囲を年と月の欄で選ぶ部品（10件。#134）
+### `test_gui_period.py` — 撮影時期の範囲を年と月の欄で選ぶ部品（11件。#134）
 
 | テスト | 何を確かめるか |
 |---|---|
 | `test_the_years_and_months_are_separate_fields_listed_oldest_first` | **年と月は別の欄**（利用者の要望）。古い順・その年にある月だけ・年を選ぶまで月は選べない |
-| `test_the_fields_say_which_side_is_old_and_which_is_new` | **どちらが古い側かを書く**（利用者の要望）。古い方が左 |
+| `test_an_arrow_points_from_the_old_side_to_the_new_side` | **古い方 → 新しい方を矢印で示す**（利用者の要望）。ほかの文字を足さない |
+| `test_the_fields_hold_only_digits_and_dashes_mean_no_limit` | **欄は数字だけ・指定なしは `--`**（利用者の要望）。長い文字を入れると欄が広がる |
 | `test_a_blank_month_means_the_whole_year_and_a_blank_year_means_no_limit` | 月の指定なしは1月から・12月まで。年の指定なしは限りなし |
 | `test_the_new_side_offers_only_what_comes_after_the_old_side` | **古い方を入れると新しい方はそれ以降だけ**（利用者の要望）。外せば全部に戻る |
 | `test_moving_the_old_side_past_the_new_side_pushes_the_new_side_up` | 逆転したまま0件を見せない。指定なしにも戻さない |
@@ -1132,7 +1133,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_choice_survives_new_months_and_goes_blank_when_its_year_is_gone` | 月が増えても選んだ値を保つ。年が消えたら指定なし |
 | `test_a_range_that_is_not_on_offer_is_refused` | 無い年月は `ValueError` |
 | `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
-| `test_year_labels_show_counts_and_years_without_a_known_month` | 年に枚数を添える。月の分からない写真の年も並ぶ |
+| `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
 
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
