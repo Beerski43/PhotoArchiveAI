@@ -268,7 +268,7 @@ def test_unassigning_a_person_by_sharpness_touches_only_the_blurry_faces_of_that
 def test_a_month_range_alone_also_unlocks_the_bulk_action(window):
     """行事の行は消した（#135・利用者「これいらない」）。**撮影年月で絞っても**押せる。"""
     window, faces = window
-    window.month_from_box.setCurrentIndex(window.month_from_box.findText("2020-05"))
+    window.month_range.set_range("2020-05", None)
 
     assert window.bulk_button.isEnabled()
     window._bulk_action()

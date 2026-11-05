@@ -27,7 +27,7 @@ from __future__ import annotations
 import shutil
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import yaml
 from PIL import Image, ImageOps
@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -61,6 +62,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, scoring, selection, similar
+from .gui_period import YearMonthRange
 
 #: 結果の1ページの枚数。**ページャの無い一覧を作らない**（CLAUDE.md §8）。
 RESULT_PAGE_SIZE = 60
@@ -102,6 +104,14 @@ WEIGHT_LIMITS = {
     "extra_person": selection.EXTRA_PERSON_MAXIMUM,
 }
 
+#: 出力の形（`selection.OUTPUT_LAYOUTS`）と、画面に出す名前。確認の窓の文でも使う（#134）。
+LAYOUT_LABELS = {
+    selection.OUTPUT_LAYOUT_YEAR: "年ごとのフォルダ",
+    selection.OUTPUT_LAYOUT_FLAT: "出力先の直下（平らに）",
+}
+#: 期間の欄の空のときの文字（#134）。
+PERIOD_PLACEHOLDER = "指定なし（YYYY-MM-DD）"
+
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
     ("family_only", "家族の写った写真だけ"),
@@ -140,12 +150,20 @@ BREAKDOWN_LABELS = (
 YEAR_UNKNOWN = "年不明"
 #: 年の表の「年以降」の行の印（`selection.year_limits` の ``2027+``）。
 ROW_LATER = "later"
+#: ルールの「〜年以降」の枚数を、行の年に関わらず聞くための遠い先の年（4桁の上限）。
+FAR_FUTURE_YEAR = 9999
 CHOOSE_LABEL = "選ぶ"
 
 
-def later_year() -> int:
-    """「〜年以降」の行の年（今年の翌年）。年が変わったら設定し直す運用（利用者の決定・PR #108）。"""
-    return date.today().year + 1
+def later_row_year(years: Iterable[int], period_end: Optional[int]) -> Optional[int]:
+    """「〜年以降」の行の年。**期間の終わりがその年より前なら None（行を出さない）**（#134）。
+
+    始まりは候補のある最後の年の翌年（候補が無ければ今年）。表の行の続きなので、どの年も行から漏れない。
+    以前は「今年の翌年」に固定で、期間が 2025 年までなのに「2027 年以降」と出て、今年に候補が無ければ
+    今年がどの行にも入らなかった。``period_end`` は期間の終わりの年。
+    """
+    first = max(years, default=date.today().year - 1) + 1
+    return None if period_end is not None and period_end < first else first
 
 
 def year_label(year: Optional[int]) -> str:
@@ -310,6 +328,12 @@ class WheelSafeSpinBox(_WheelOnlyWhenFocused, QSpinBox):
         self._init_wheel_guard()
 
 
+class WheelSafeComboBox(_WheelOnlyWhenFocused, QComboBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
 class ParameterRow(QWidget):
     """1つの設定の行: 横ゲージ・入力欄・「既定」ボタン（#120）。
 
@@ -375,6 +399,10 @@ class SelectionPanel(QWidget):
         #: 候補を用意したときの `db.selection_state`。変わっていたら「選ぶ」の前に用意し直す。
         self.candidates_state: Any = None
         self._years_filled = False
+        #: いま年の表に効いている期間の欄の値（同じ値なら表を作り直さない）。
+        self._applied_period = ("", "")
+        #: 年の表の「〜年以降」の行の年。行が無ければ None（`later_row_year`）。
+        self.later_year: Optional[int] = None
         self.selected: List[Dict[str, Any]] = []
         self.by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
         self.page = 0
@@ -420,6 +448,21 @@ class SelectionPanel(QWidget):
             weights_form.addRow(label, row)
         layout.addWidget(weights_box)
 
+        period_box = QGroupBox("撮影時期（空欄なら絞り込まない）")
+        period_form = QFormLayout(period_box)
+        self.period_start = QLineEdit()
+        self.period_end = QLineEdit()
+        for edit in (self.period_start, self.period_end):
+            edit.setPlaceholderText(PERIOD_PLACEHOLDER)
+            edit.editingFinished.connect(self._period_changed)
+        self.period_end.setToolTip("その日の終わりまで含みます")
+        period_form.addRow("始め（古い方）", self.period_start)
+        period_form.addRow("終わり（新しい方）", self.period_end)
+        self.period_notice = QLabel("")
+        self.period_notice.setWordWrap(True)
+        period_form.addRow(self.period_notice)
+        layout.addWidget(period_box)
+
         flags_box = QGroupBox("絞り込み")
         flags_layout = QVBoxLayout(flags_box)
         self.flag_checks: Dict[str, QCheckBox] = {}
@@ -464,6 +507,15 @@ class SelectionPanel(QWidget):
         years_layout.addLayout(fill_row)
         layout.addWidget(years_box)
 
+        output_box = QGroupBox("出力の形")
+        output_layout = QVBoxLayout(output_box)
+        self.layout_combo = WheelSafeComboBox()
+        for key in selection.OUTPUT_LAYOUTS:
+            self.layout_combo.addItem(LAYOUT_LABELS[key], key)
+        self.layout_combo.setToolTip("選ぶ写真は変わりません。「選ぶ」を押し直さなくても「出力する」に効きます")
+        output_layout.addWidget(self.layout_combo)
+        layout.addWidget(output_box)
+
         self.choose_button = QPushButton(CHOOSE_LABEL)
         self.choose_button.setToolTip(
             "重み・絞り込み・年ごとの枚数で写真を選びます（何度押してもよい）。\n"
@@ -495,20 +547,21 @@ class SelectionPanel(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         top = QHBoxLayout()
-        # **年は「何年〜何年」で選ぶ**（#113・利用者の指定）。並びは年の古い順で、年不明は最後。
-        self.year_from_combo = QComboBox()
-        self.year_to_combo = QComboBox()
-        for combo in (self.year_from_combo, self.year_to_combo):
-            combo.currentIndexChanged.connect(self._year_changed)
+        # **撮影時期は年と月の欄で選ぶ**（#113・#134・利用者の指定）。並びは年の古い順で、年不明は最後。
+        self.year_range = YearMonthRange()
+        self.year_range.changed.connect(self._year_changed)
+        self.unknown_only = QCheckBox(f"{YEAR_UNKNOWN}のみ")
+        self.unknown_only.setToolTip("年の分からない写真は、年の範囲を指定すると出ません。ここで見ます")
+        self.unknown_only.toggled.connect(self._year_changed)
         self.previous_button = QPushButton("前へ")
         self.previous_button.clicked.connect(lambda: self._turn(-1))
         self.next_button = QPushButton("次へ")
         self.next_button.clicked.connect(lambda: self._turn(1))
         self.page_label = QLabel("")
-        top.addWidget(QLabel("年"))
-        top.addWidget(self.year_from_combo, 1)
-        top.addWidget(QLabel("〜"))
-        top.addWidget(self.year_to_combo, 1)
+        top.addWidget(QLabel("撮影"))
+        top.addWidget(self.year_range)
+        top.addWidget(self.unknown_only)
+        top.addStretch(1)
         top.addWidget(self.previous_button)
         top.addWidget(self.page_label)
         top.addWidget(self.next_button)
@@ -608,22 +661,62 @@ class SelectionPanel(QWidget):
             check.setChecked(selection._rule_flag(rule, key))
         for key, spin in self.number_spins.items():
             spin.setValue(int(selection._rule_number(rule, key, selection.RULE_NUMBERS[key])))
+        period = rule.get("date")
+        period = period if isinstance(period, dict) else {}
+        self.period_start.setText(_period_text(period.get("start")))
+        self.period_end.setText(_period_text(period.get("end")))
+        self._applied_period = self._period_values()
+        self.period_notice.setText(selection.period_problem(*self._applied_period) or "")
+        self.layout_combo.setCurrentIndex(self.layout_combo.findData(selection.output_layout(rule)))
+
+    def _period_values(self) -> tuple:
+        return self.period_start.text().strip(), self.period_end.text().strip()
+
+    def _rule_with_period(self, rule: Dict[str, Any]) -> Dict[str, Any]:
+        """期間の欄を ``date`` に入れる。**空欄の端はキーごと消す**（両方空なら ``date`` も消す）。"""
+        start, end = self._period_values()
+        period = {key: value for key, value in (("start", start), ("end", end)) if value}
+        rule.pop("date", None)
+        if period:
+            rule["date"] = period
+        return rule
+
+    def _period_changed(self) -> None:
+        """期間の欄を変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。入っている値は引き継ぐ。"""
+        values = self._period_values()
+        problem = selection.period_problem(*values)
+        self.period_notice.setText(problem or "")
+        if problem or values == self._applied_period:
+            return
+        self._applied_period = values
+        if self._years_filled:
+            self.refresh_years()
+
+    def _period_is_readable(self) -> bool:
+        """「選ぶ」と「ルールを保存」の前に。読めなければ知らせて止める。読めれば表にも効かせる。"""
+        problem = selection.period_problem(*self._period_values())
+        if problem:
+            QMessageBox.warning(self, "設定を読めません", problem)
+            return False
+        self._period_changed()
+        return True
 
     def current_rule(self) -> Dict[str, Any]:
-        """画面の設定から作ったルール。画面に出していないキー（`date` など）は元のルールのまま。"""
-        rule = dict(self.rule)
+        """画面の設定から作ったルール。画面に出していないキーは元のルールのまま。"""
+        rule = self._rule_with_period(dict(self.rule))
         rule["weights"] = {key: spin.value() for key, spin in self.weight_spins.items()}
         for key, check in self.flag_checks.items():
             rule[key] = check.isChecked()
         for key, spin in self.number_spins.items():
             rule[key] = spin.value()
+        rule["output_layout"] = self.layout_combo.currentData()
         if self.year_table.rowCount():
             counts: Dict[Any, int] = {}
             for key, value in self._year_values().items():
                 if key == selection.COUNT_UNKNOWN:
                     counts[selection.COUNT_UNKNOWN] = value
                 elif key == ROW_LATER:
-                    counts[f"{later_year()}{selection.LATER_SUFFIX}"] = value
+                    counts[f"{self.later_year}{selection.LATER_SUFFIX}"] = value
                 else:
                     counts[int(key)] = value
             rule["count_per_year"] = counts
@@ -655,17 +748,22 @@ class SelectionPanel(QWidget):
     def _fill_year_table(self) -> None:
         """候補の年ごとの枚数を表に出す。**入っている値は引き継ぐ**（PR #108 のレビュー指摘1）。
 
-        行は、候補のある年・**年不明**・**翌年以降**（利用者の決定・PR #108。これから増える年は
-        ここで決め、年が変わったら設定し直す）。新しく現れた行の初期値はルールファイルから
-        （年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が無ければ候補の枚数。
+        行は、候補のある年・**年不明**・**〜年以降**（利用者の決定・PR #108。これから増える年は
+        ここで決める。年は `later_row_year`・期間が届かなければ行が無い・#134）。新しく現れた行の
+        初期値はルールファイルから（年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が
+        無ければ候補の枚数。
         """
         previous = self._year_values()
         # 候補を用意していなくても数えられる（DB だけ・#113）。数は `candidate_counts` と同じ。
-        counts = selection.year_counts(self.connection, self.current_rule_without_years())
+        rule = self.current_rule_without_years()
+        counts = selection.year_counts(self.connection, rule)
         limit_of = selection.year_limits(self.rule)
         rows = [(year, year_label(year), counts[year]) for year in sorted(y for y in counts if y is not None)]
         rows.append((selection.COUNT_UNKNOWN, YEAR_UNKNOWN, counts.get(None, 0)))
-        rows.append((ROW_LATER, f"{later_year()} 年以降", None))
+        end = selection._rule_end((rule.get("date") or {}).get("end"))
+        self.later_year = later_row_year((y for y in counts if y is not None), end.year if end else None)
+        if self.later_year is not None:
+            rows.append((ROW_LATER, f"{self.later_year} 年以降", None))
         self.year_table.setRowCount(0)
         for key, label, candidates in rows:
             row = self.year_table.rowCount()
@@ -679,8 +777,9 @@ class SelectionPanel(QWidget):
             if key in previous:
                 spin.setValue(previous[key])
             elif limit_of is not None:
+                # 行の年が動いても（候補が増減した）ファイルの「〜年以降」の枚数を引き継ぐ
                 year = None if key == selection.COUNT_UNKNOWN else (
-                    later_year() if key == ROW_LATER else key
+                    FAR_FUTURE_YEAR if key == ROW_LATER else key
                 )
                 spin.setValue(limit_of(year) or 0)
             else:
@@ -693,14 +792,14 @@ class SelectionPanel(QWidget):
             self.refresh_years()
 
     def current_rule_without_years(self) -> Dict[str, Any]:
-        rule = dict(self.rule)
+        rule = self._rule_with_period(dict(self.rule))
         for key, check in self.flag_checks.items():
             rule[key] = check.isChecked()
         rule.pop("count_per_year", None)
         return rule
 
     def fill_all_years(self) -> None:
-        """全部の行（年不明・翌年以降も）に同じ数を入れる。"""
+        """全部の行（年不明・〜年以降も）に同じ数を入れる。"""
         for row in range(self.year_table.rowCount()):
             self.year_table.cellWidget(row, 2).setValue(self.fill_spin.value())
 
@@ -747,6 +846,8 @@ class SelectionPanel(QWidget):
 
     def choose(self) -> None:
         """`selection.choose`。設定が読めない値なら止める。"""
+        if not self._period_is_readable():
+            return
         if not self._candidates_are_current():
             self.load_candidates()
         rule = self.current_rule()
@@ -773,20 +874,28 @@ class SelectionPanel(QWidget):
         self.by_year = {}
         for media in self.selected:
             self.by_year.setdefault(selection._get_media_year(media), []).append(media)
-        for combo in (self.year_from_combo, self.year_to_combo):
-            combo.blockSignals(True)
-            combo.clear()
-            for year in self._years_in_order():
-                combo.addItem(f"{year_label(year)}（{len(self.by_year[year])} 枚）", year)
-        # 初めは全部の年（最初の年〜最後の年）。
-        self.year_from_combo.setCurrentIndex(0)
-        self.year_to_combo.setCurrentIndex(self.year_to_combo.count() - 1)
-        for combo in (self.year_from_combo, self.year_to_combo):
-            combo.blockSignals(False)
+        # 初めは全部の年。月まで分かる写真の月だけを月の欄に並べる（年までしか分からない写真は年の欄だけ）。
+        self.year_range.set_months(
+            sorted({
+                _month_text(period[0])
+                for period in map(selection._media_period, self.selected)
+                if period is not None and _month_text(period[0]) == _month_text(period[1])
+            }),
+            {year: f"{year}（{len(self.by_year[year])} 枚）" for year in self.by_year if year is not None},
+        )
+        blocked = self.year_range.blockSignals(True)
+        self.year_range.set_range(None, None)
+        self.year_range.blockSignals(blocked)
+        blocked = self.unknown_only.blockSignals(True)
+        self.unknown_only.setChecked(False)
+        self.unknown_only.blockSignals(blocked)
+        self.unknown_only.setVisible(None in self.by_year)
+        self.year_range.setEnabled(True)
         self.page = 0
         self._show_page()
 
-    def _year_changed(self, _index: int) -> None:
+    def _year_changed(self) -> None:
+        self.year_range.setEnabled(not self.unknown_only.isChecked())
         self.page = 0
         self._show_page()
 
@@ -794,19 +903,19 @@ class SelectionPanel(QWidget):
         """年の古い順。年不明は最後。"""
         return sorted(self.by_year, key=lambda y: (y is None, y or 0))
 
-    def set_year_range(self, first: Optional[int], last: Optional[int]) -> None:
-        """「何年〜何年」を選ぶ（年不明は ``None``）。"""
-        self.year_from_combo.setCurrentIndex(self.year_from_combo.findData(first))
-        self.year_to_combo.setCurrentIndex(self.year_to_combo.findData(last))
-
     def _current_year_media(self) -> List[Dict[str, Any]]:
-        """選んだ年の範囲の写真。年の古い順に、年の中は選んだ順。**始めと終わりが逆でも同じ範囲。**"""
-        years = self._years_in_order()
-        start, end = self.year_from_combo.currentIndex(), self.year_to_combo.currentIndex()
-        if not years or start < 0 or end < 0:
-            return []
-        start, end = sorted((start, end))
-        return [media for year in years[start : end + 1] for media in self.by_year[year]]
+        """選んだ撮影時期の写真。年の古い順に、年の中は選んだ順。
+
+        **範囲を指定したら年不明は出さない**（`年不明のみ` で見る・顔の割り当てタブと同じ）。
+        月まで分からない写真は、**撮影時期がまるごと範囲に入るときだけ**出す（顔の割り当てタブと同じ）。
+        """
+        if self.unknown_only.isChecked():
+            return list(self.by_year.get(None, ()))
+        start, end = self.year_range.bounds()
+        everything = [media for year in self._years_in_order() for media in self.by_year[year]]
+        if start is None and end is None:
+            return everything
+        return [media for media in everything if _period_within(selection._media_period(media), start, end)]
 
     def _turn(self, step: int) -> None:
         pages = max(1, -(-len(self._current_year_media()) // RESULT_PAGE_SIZE))
@@ -897,6 +1006,8 @@ class SelectionPanel(QWidget):
         if not self.rule_path:
             QMessageBox.warning(self, "保存できません", "設定に rule_path がありません。")
             return
+        if not self._period_is_readable():
+            return
         rule = self.current_rule()
         try:
             selection.rule_weights(rule)
@@ -933,12 +1044,9 @@ class SelectionPanel(QWidget):
         if not self.output_root:
             QMessageBox.warning(self, "出力できません", "設定に output_root がありません。")
             return
-        try:
-            layout = selection.output_layout(self.chosen_rule)
-        except ValueError as error:
-            QMessageBox.warning(self, "出力できません", str(error))
-            return
-        where = "年ごとのフォルダ" if layout == selection.OUTPUT_LAYOUT_YEAR else "直下"
+        # 出力の形は選ぶ写真を変えないので、選んだときではなく今の欄の値で出す（#134）。
+        layout = self.layout_combo.currentData()
+        where = LAYOUT_LABELS[layout]
         answer = QMessageBox.question(
             self,
             "出力",
@@ -957,6 +1065,24 @@ class SelectionPanel(QWidget):
         finally:
             progress.finish()
         self.status.setText(f"{copied} 枚を {self.output_root} にコピーしました。")
+
+
+def _month_text(moment) -> str:
+    return f"{moment.year:04d}-{moment.month:02d}"
+
+
+def _period_within(period, start: Optional[str], end: Optional[str]) -> bool:
+    """撮影時期（`selection._media_period`）が範囲（``YYYY-MM``・両端を含む）にまるごと入るか。"""
+    if period is None:
+        return False
+    return (start is None or _month_text(period[0]) >= start) and (
+        end is None or _month_text(period[1]) <= end
+    )
+
+
+def _period_text(value: Any) -> str:
+    """ルールの日付を欄の文字に（YAML の引用符の無い日付は `date` で読まれる）。"""
+    return "" if value is None else str(value)
 
 
 def write_rule(rule_path: str, rule: Dict[str, Any]) -> None:

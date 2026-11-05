@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 
 from photoarchive_ai import db
 from photoarchive_ai import gui as photoarchive_gui
+from photoarchive_ai import gui_period
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -1131,13 +1132,14 @@ def _seed_months(connection, dates):
     connection.commit()
 
 
+def _choices(box):
+    return [box.itemText(i) for i in range(box.count())]
+
+
 def _set_months(window, start=None, end=None, undated=False):
     """撮影年月の範囲を選ぶ。``None`` は「指定なし」。"""
     window.undated_only_box.setChecked(undated)
-    for box, value in ((window.month_from_box, start), (window.month_to_box, end)):
-        index = box.findText(value if value else photoarchive_gui.MONTH_ANY)
-        assert index >= 0, f"年月に {value} が無い"
-        box.setCurrentIndex(index)
+    window.month_range.set_range(start, end)
 
 
 def test_the_unassigned_list_can_be_filtered_by_a_month_range(tmp_path):
@@ -1199,9 +1201,9 @@ def test_the_range_is_kept_in_order(tmp_path):
         _set_months(window, "2015-07", "2015-07")
 
         # 下限を上限より後ろにする → 上限が押し上げられる
-        window.month_from_box.setCurrentIndex(window.month_from_box.findText("2020-01"))
+        window.month_range.old_year.setCurrentIndex(window.month_range.old_year.findData(2020))
 
-        assert window.month_to_box.currentText() == "2020-01"
+        assert window.month_range.bounds() == ("2020-01", "2020-12")
         assert _window_total(window) == 1
     finally:
         window.connection.close()
@@ -1230,11 +1232,9 @@ def test_the_month_list_holds_only_months_that_have_faces(tmp_path):
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        months = [
-            window.month_from_box.itemText(i)
-            for i in range(window.month_from_box.count())
-        ]
-        assert months == [photoarchive_gui.MONTH_ANY, "2020-01", "2015-08"]
+        assert _choices(window.month_range.old_year) == [gui_period.ANY, "2015", "2020"]
+        window.month_range.set_range("2015", None)
+        assert _choices(window.month_range.old_month) == [gui_period.ANY, "8"]
     finally:
         window.connection.close()
 
@@ -1247,12 +1247,8 @@ def test_undated_photos_can_be_picked_out_on_their_own(tmp_path):
     connection.close()
     window = photoarchive_gui.MainWindow(str(database))
     try:
-        months = [
-            window.month_from_box.itemText(i)
-            for i in range(window.month_from_box.count())
-        ]
-        assert months == [photoarchive_gui.MONTH_ANY, "2015-08"]
-        assert "TTTT-TT" not in months, "壊れた日付を月として並べない"
+        # 壊れた日付を年月として並べない
+        assert _choices(window.month_range.old_year) == [gui_period.ANY, "2015"]
 
         # 広い範囲を指定しても、読めない顔は入らない。
         _set_months(window, "2015-08", "2015-08")
@@ -1262,7 +1258,7 @@ def test_undated_photos_can_be_picked_out_on_their_own(tmp_path):
 
         assert window._filter_arguments()["undated_only"] is True
         assert _window_total(window) == 2
-        assert not window.month_from_box.isEnabled(), "範囲とは排他だと見た目で分かる"
+        assert not window.month_range.isEnabled(), "範囲とは排他だと見た目で分かる"
     finally:
         window.connection.close()
 

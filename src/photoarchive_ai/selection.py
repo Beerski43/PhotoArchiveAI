@@ -324,6 +324,20 @@ def _rule_end(value: Any) -> Optional[datetime]:
     return parsed
 
 
+def period_problem(start: str, end: str) -> Optional[str]:
+    """期間の欄の値（空欄は指定なし）がおかしければその説明。GUI が「選ぶ」と「ルールを保存」の前に見る（#134）。
+
+    **`_passes_date_filter` は読めない値を指定なしとして扱う**ので、画面で打ち間違えると黙って絞り込まれない。
+    10文字に満たない形（``2025-1-1``）も止める。`_rule_end` が「日付だけ」と見なさず、その日の終わりまで含まない。
+    """
+    for label, value in (("始め", start), ("終わり", end)):
+        if value and (len(value) < 10 or _parse_date(value) is None):
+            return f"期間の{label}を読めません（YYYY-MM-DD で書いてください）: {value}"
+    if start and end and _parse_date(start) > _rule_end(end):
+        return f"期間の始め（{start}）が終わり（{end}）より後です。"
+    return None
+
+
 def _passes_date_filter(media: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     """撮影時期が指定の範囲に入るか。**フォルダ名から起こした区間は、まるごと入るときだけ通す。**"""
     date_rule = rule.get("date") or {}

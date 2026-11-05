@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from . import db, face, matcher, migration, recommend, scoring, undo
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
+from .gui_period import YearMonthRange
 from .gui_select import WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 
@@ -72,12 +73,6 @@ THUMBNAIL_SIZE = 120
 #: `13391 (自動 55) (0歳)` のように長い）。
 ITEM_WIDTH = THUMBNAIL_SIZE + 44
 ITEM_HEIGHT = THUMBNAIL_SIZE + 48
-
-#: 撮影年月の範囲で「端を決めない」を表す表示。
-#:
-#: **「指定なし」と具体的な年月を同じ値で表さない。** 下限だけ・上限だけの
-#: 指定ができる必要がある（「2015-06 以降すべて」など）。
-MONTH_ANY = "指定なし"
 
 #: 撮影日時が読めない顔だけを見るときの表示。
 #:
@@ -1577,13 +1572,8 @@ class MainWindow(QWidget):
         # **撮影年月の範囲で絞る。** 家族の写っていない行事（結婚式・旅行先の
         # 他人など）は時期でまとまっているので、**その期間だけを開いてまとめて
         # 顔認証外にできる。** 片方だけの指定（「2015-06 以降」など）もできる。
-        self.month_from_box = QComboBox()
-        self.month_to_box = QComboBox()
-        for box, tip in (
-            (self.month_from_box, "この年月から（含む）。指定なしなら下限を決めない"),
-            (self.month_to_box, "この年月まで（含む）。指定なしなら上限を決めない"),
-        ):
-            box.setToolTip(tip)
+        # 年と月は別の欄で、どちらが古い側かを書いてある（`gui_period`・#134）。
+        self.month_range = YearMonthRange()
         self.undated_only_box = QCheckBox(MONTH_UNDATED)
         self.undated_only_box.setToolTip(
             "撮影日時が読めない写真の顔だけを見る。\n"
@@ -1591,8 +1581,7 @@ class MainWindow(QWidget):
             "**範囲の指定とは併用できない**（読めない日付はどの範囲にも入らない）。"
         )
         self._reload_months()
-        self.month_from_box.currentIndexChanged.connect(self._month_changed)
-        self.month_to_box.currentIndexChanged.connect(self._month_changed)
+        self.month_range.changed.connect(self._month_changed)
         self.undated_only_box.stateChanged.connect(self._month_changed)
 
         self.prev_button = QPushButton("< 前")
@@ -1606,14 +1595,16 @@ class MainWindow(QWidget):
         common_filters.addWidget(self.order_box)
         common_filters.addSpacing(12)
         common_filters.addWidget(QLabel("撮影"))
-        common_filters.addWidget(self.month_from_box)
-        common_filters.addWidget(QLabel("〜"))
-        common_filters.addWidget(self.month_to_box)
-        common_filters.addWidget(self.undated_only_box)
+        common_filters.addWidget(self.month_range)
         common_filters.addStretch(1)
-        common_filters.addWidget(self.prev_button)
-        common_filters.addWidget(self.page_label)
-        common_filters.addWidget(self.next_button)
+        # 撮影の欄が年と月に分かれて長くなったので、ページャと一緒に次の行へ（#134）。
+        # 1行に詰めると窓の最小幅が広がり、左の人物の領域が押し縮められる。
+        pager_row = QHBoxLayout()
+        pager_row.addWidget(self.undated_only_box)
+        pager_row.addStretch(1)
+        pager_row.addWidget(self.prev_button)
+        pager_row.addWidget(self.page_label)
+        pager_row.addWidget(self.next_button)
 
         # --- 鮮明さで絞る（#135） ----------------------------------------
         # **ボケ・ぶれた顔を閾値で絞り、まとめて顔認証外にする。** 閾値は一覧を
@@ -1778,6 +1769,7 @@ class MainWindow(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.addLayout(common_filters)
+        layout.addLayout(pager_row)
         layout.addLayout(blur_filters)
         layout.addWidget(self.person_filter_row)
         layout.addWidget(face_area, 1)
@@ -2662,62 +2654,24 @@ class MainWindow(QWidget):
         `scan` のあとなどに月が増えるので、選び直しを強いないようにする。
         **撮影日時が読めない顔が1件も無ければ、その選択肢は出さない。**
         """
-        months = db.available_months(self.connection)
-        for box in (self.month_from_box, self.month_to_box):
-            keep = box.currentText() if box.count() else MONTH_ANY
-            blocked = box.blockSignals(True)
-            try:
-                box.clear()
-                box.addItem(MONTH_ANY)
-                box.addItems(months)
-                index = box.findText(keep)
-                box.setCurrentIndex(index if index >= 0 else 0)
-            finally:
-                box.blockSignals(blocked)
+        self.month_range.set_months(db.available_months(self.connection))
         has_undated = bool(db.count_undated_faces(self.connection))
         self.undated_only_box.setVisible(has_undated)
         if not has_undated:
             self.undated_only_box.setChecked(False)
 
     def _month_changed(self) -> None:
-        """範囲を触ったとき。**上下が逆転したまま空の一覧を見せない。**
-
-        下限を上限より後ろにしたら、上限を押し上げる（その逆も同じ）。
-        黙って0件にすると、絞り込みが壊れているように見える。
-        """
-        if not self.undated_only_box.isChecked():
-            start, end = self._month_texts()
-            if start != MONTH_ANY and end != MONTH_ANY and start > end:
-                mover = (
-                    self.month_to_box
-                    if self.sender() is self.month_from_box
-                    else self.month_from_box
-                )
-                target = start if mover is self.month_to_box else end
-                blocked = mover.blockSignals(True)
-                try:
-                    mover.setCurrentIndex(mover.findText(target))
-                finally:
-                    mover.blockSignals(blocked)
+        """範囲を触ったとき。上下の逆転は `YearMonthRange` が押し戻す。"""
         # 「撮影日時なしのみ」は範囲と排他。見た目でも分かるようにする。
-        enabled = not self.undated_only_box.isChecked()
-        self.month_from_box.setEnabled(enabled)
-        self.month_to_box.setEnabled(enabled)
+        self.month_range.setEnabled(not self.undated_only_box.isChecked())
         self._reset_page()
-
-    def _month_texts(self):
-        return (self.month_from_box.currentText(), self.month_to_box.currentText())
 
     def _month_range(self):
         """``(開始, 終了, 読めない顔だけか)``。端の「指定なし」は ``None``。"""
         if self.undated_only_box.isChecked():
             return None, None, True
-        start, end = self._month_texts()
-        return (
-            None if start in ("", MONTH_ANY) else start,
-            None if end in ("", MONTH_ANY) else end,
-            False,
-        )
+        start, end = self.month_range.bounds()
+        return start, end, False
 
     def _age_range(self):
         """絞り込みの下限と上限。「指定なし」は ``None``。
