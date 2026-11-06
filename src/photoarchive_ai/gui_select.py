@@ -166,6 +166,17 @@ def later_row_year(years: Iterable[int], period_end: Optional[int]) -> Optional[
     return None if period_end is not None and period_end < first else first
 
 
+def _initial_count(key: Any, candidates: Optional[int], limit_of) -> int:
+    """年の表の行に初めて入れる枚数。ルールファイルから。ファイルに枚数が無ければ候補の枚数。
+
+    「〜年以降」は、行の年が動いても（候補が増減した）ファイルの枚数を引き継ぐ。
+    """
+    if limit_of is None:
+        return candidates or 0
+    year = None if key == selection.COUNT_UNKNOWN else (FAR_FUTURE_YEAR if key == ROW_LATER else key)
+    return limit_of(year) or 0
+
+
 def year_label(year: Optional[int]) -> str:
     return YEAR_UNKNOWN if year is None else str(year)
 
@@ -403,6 +414,11 @@ class SelectionPanel(QWidget):
         self._applied_period = ("", "")
         #: 年の表の「〜年以降」の行の年。行が無ければ None（`later_row_year`）。
         self.later_year: Optional[int] = None
+        #: 表に出ていない行の枚数（``{年 / ROW_LATER: 枚数}``）。期間や絞り込みで行が消えても、
+        #: 枚数を失わないために持つ（`_remember_hidden_rows`・PR #142 のレビュー指摘1）。
+        self._hidden_counts: Dict[Any, int] = {}
+        #: 「〜年以降」の行が隠れているときに、その枚数を書く年。
+        self._hidden_later_year: Optional[int] = None
         self.selected: List[Dict[str, Any]] = []
         self.by_year: Dict[Optional[int], List[Dict[str, Any]]] = {}
         self.page = 0
@@ -631,6 +647,7 @@ class SelectionPanel(QWidget):
         self._show_rule(self.rule)
         self._show_retired_keys()
         self.year_table.setRowCount(0)
+        self._hidden_counts = {}
         if self._years_filled:
             self.refresh_years()
         return True
@@ -665,8 +682,7 @@ class SelectionPanel(QWidget):
         period = period if isinstance(period, dict) else {}
         self.period_start.setText(_period_text(period.get("start")))
         self.period_end.setText(_period_text(period.get("end")))
-        self._applied_period = self._period_values()
-        self.period_notice.setText(selection.period_problem(*self._applied_period) or "")
+        self.period_notice.setText(selection.period_problem(*self._period_values()) or "")
         self.layout_combo.setCurrentIndex(self.layout_combo.findData(selection.output_layout(rule)))
 
     def _period_values(self) -> tuple:
@@ -688,7 +704,6 @@ class SelectionPanel(QWidget):
         self.period_notice.setText(problem or "")
         if problem or values == self._applied_period:
             return
-        self._applied_period = values
         if self._years_filled:
             self.refresh_years()
 
@@ -711,14 +726,14 @@ class SelectionPanel(QWidget):
             rule[key] = spin.value()
         rule["output_layout"] = self.layout_combo.currentData()
         if self.year_table.rowCount():
-            counts: Dict[Any, int] = {}
-            for key, value in self._year_values().items():
-                if key == selection.COUNT_UNKNOWN:
-                    counts[selection.COUNT_UNKNOWN] = value
-                elif key == ROW_LATER:
-                    counts[f"{self.later_year}{selection.LATER_SUFFIX}"] = value
-                else:
-                    counts[int(key)] = value
+            # **表に出ていない行の枚数も書く**（期間を狭めて保存しても、ほかの年の枚数を消さない）
+            values = {**self._hidden_counts, **self._year_values()}
+            later = self._hidden_later_year if self.later_year is None else self.later_year
+            counts: Dict[Any, int] = {year: values[year] for year in sorted(k for k in values if isinstance(k, int))}
+            if selection.COUNT_UNKNOWN in values:
+                counts[selection.COUNT_UNKNOWN] = values[selection.COUNT_UNKNOWN]
+            if ROW_LATER in values:
+                counts[f"{later}{selection.LATER_SUFFIX}"] = values[ROW_LATER]
             rule["count_per_year"] = counts
         return rule
 
@@ -753,7 +768,8 @@ class SelectionPanel(QWidget):
         初期値はルールファイルから（年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が
         無ければ候補の枚数。
         """
-        previous = self._year_values()
+        previous = {**self._hidden_counts, **self._year_values()}
+        self._applied_period = self._period_values()
         # 候補を用意していなくても数えられる（DB だけ・#113）。数は `candidate_counts` と同じ。
         rule = self.current_rule_without_years()
         counts = selection.year_counts(self.connection, rule)
@@ -774,17 +790,29 @@ class SelectionPanel(QWidget):
             self.year_table.setItem(row, 1, QTableWidgetItem("" if candidates is None else str(candidates)))
             spin = QSpinBox()
             spin.setRange(0, 99_999)
-            if key in previous:
-                spin.setValue(previous[key])
-            elif limit_of is not None:
-                # 行の年が動いても（候補が増減した）ファイルの「〜年以降」の枚数を引き継ぐ
-                year = None if key == selection.COUNT_UNKNOWN else (
-                    FAR_FUTURE_YEAR if key == ROW_LATER else key
-                )
-                spin.setValue(limit_of(year) or 0)
-            else:
-                spin.setValue(candidates or 0)
+            spin.setValue(previous[key] if key in previous else _initial_count(key, candidates, limit_of))
             self.year_table.setCellWidget(row, 2, spin)
+        self._remember_hidden_rows(rule, {key for key, _, _ in rows}, previous, counts, limit_of)
+
+    def _remember_hidden_rows(self, rule, shown, previous, counts, limit_of) -> None:
+        """表に出ていない行の枚数を持っておく（PR #142 のレビュー指摘1）。
+
+        期間で行が消えるのは普段の操作になった。持っておかないと、戻したときにファイルの値へ戻り、
+        消したまま保存するとファイルからも消えて、広げ直しても 0 のまま黙ってその年を外す。
+        期間の外の年は、期間を外して数える（**期間が入っているときだけ**もう1回数える）。
+        """
+        hidden = {key: value for key, value in previous.items() if key not in shown}
+        every = counts
+        if rule.get("date"):
+            every = selection.year_counts(self.connection, {k: v for k, v in rule.items() if k != "date"})
+        years = [year for year in every if year is not None]
+        for year in years:
+            if year not in shown and year not in hidden:
+                hidden[year] = _initial_count(year, every[year], limit_of)
+        if ROW_LATER not in shown:
+            hidden.setdefault(ROW_LATER, _initial_count(ROW_LATER, None, limit_of))
+            self._hidden_later_year = max(years, default=date.today().year - 1) + 1
+        self._hidden_counts = hidden
 
     def _filters_changed(self, _checked: bool) -> None:
         """絞り込みを変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。入っている値は引き継ぐ。"""

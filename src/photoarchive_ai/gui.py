@@ -45,9 +45,9 @@ from PySide6.QtWidgets import (
 )
 
 from . import db, face, matcher, migration, recommend, scoring, undo
+from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
-from .gui_period import YearMonthRange
 from .gui_select import WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 

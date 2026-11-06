@@ -329,9 +329,11 @@ def period_problem(start: str, end: str) -> Optional[str]:
 
     **`_passes_date_filter` は読めない値を指定なしとして扱う**ので、画面で打ち間違えると黙って絞り込まれない。
     10文字に満たない形（``2025-1-1``）も止める。`_rule_end` が「日付だけ」と見なさず、その日の終わりまで含まない。
+    タイムゾーン付きの値も止める。写真の撮影日時（タイムゾーン無し）と比べられず `TypeError` になる。
     """
     for label, value in (("始め", start), ("終わり", end)):
-        if value and (len(value) < 10 or _parse_date(value) is None):
+        parsed = _parse_date(value) if value else None
+        if value and (len(value) < 10 or parsed is None or parsed.tzinfo is not None):
             return f"期間の{label}を読めません（YYYY-MM-DD で書いてください）: {value}"
     if start and end and _parse_date(start) > _rule_end(end):
         return f"期間の始め（{start}）が終わり（{end}）より後です。"

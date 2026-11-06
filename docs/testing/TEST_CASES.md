@@ -567,7 +567,7 @@
 | `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
 | `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
-### `test_gui_select.py` — 写真の選定タブ（44件。#104・#106・#113・#120・#134）
+### `test_gui_select.py` — 写真の選定タブ（53件。#104・#106・#113・#120・#134）
 
 | テスト | 内容 |
 |---|---|
@@ -605,6 +605,15 @@
 | `test_the_later_row_is_gone_when_the_period_ends_before_it` | **期間が 2025-12-31 までなのに「2027 年以降」と出ていた**（利用者の報告）。期間が届かなければ行を出さない（#134） |
 | `test_the_later_row_starts_right_after_the_last_candidate_year` | 「〇年以降」は候補のある最後の年の翌年から。今年に候補が無いと今年がどの行にも入らなかった（#134） |
 | `test_the_later_count_in_the_rule_follows_the_row_when_its_year_moves` | ファイルの `2027+` の枚数は、行の年が動いても引き継ぐ（#134） |
+| `test_counts_of_rows_hidden_by_the_period_come_back` | **期間で消えた行の枚数を失わない**（ファイルの値に戻っていた。PR #142 の指摘1） |
+| `test_saving_with_a_period_keeps_the_counts_of_the_other_years` | **狭めたまま保存しても、ほかの年の枚数を消さない**（対応と整数の両方。広げ直しても 0 で黙って外れていた。指摘1） |
+| `test_saving_a_rule_without_counts_under_a_period_does_not_write_zero` | ルールに枚数が無ければ隠れた年も候補の枚数。0 と書かない |
+| `test_counts_of_rows_hidden_by_a_filter_come_back` | 絞り込みで消えた行の枚数も残す（指摘1 と同じ原因） |
+| `test_opening_another_rule_forgets_the_hidden_counts` | 別のルールを読んだら、隠れた枚数を持ち越さない |
+| `test_the_year_table_follows_the_period_after_an_unreadable_value` | 読めない値の間に絞り込みを動かしても、直したら表が追いつく（指摘4） |
+| `test_a_year_missing_from_the_rule_shows_zero_and_is_not_chosen` | **書いていない年は 0 で出て選ばない**（#102 のまま・利用者の決定） |
+| `test_the_unknown_row_stays_under_a_period` | **期間を入れても「年不明」の行は残す**（候補 0・利用者の決定） |
+| `test_a_period_with_a_time_zone_is_refused` | タイムゾーン付きの値は読めない扱い。`TypeError` にしない（指摘5） |
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
 | `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「〇年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
 | `test_the_later_row_covers_years_after_this_one` | 「〇年以降」の行は、表に無い新しい年の枚数 |

@@ -280,10 +280,136 @@ def test_the_later_row_is_gone_when_the_period_ends_before_it(database, tmp_path
     # 候補は 2019 年まで。実データの「2025 年まで候補があり、期間も 2025 年まで」と同じ形
     window, panel, _ = _rule_panel(database, tmp_path, "date:\n  end: 2019-12-31\ncount_per_year: 5\n")
     assert not [label for label in _rows(panel) if "以降" in label]
-    assert list(panel.current_rule()["count_per_year"]) == [2018, 2019, "unknown"]
+    # 行は無くても枚数は持っている（期間を外したときのため・PR #142 の指摘1）
+    assert list(panel.current_rule()["count_per_year"]) == [2018, 2019, "unknown", "2020+"]
     _set_period(panel, "", "")
     assert _rows(panel)["2020 年以降"] == 5
     window.close()
+
+
+def _value(panel, label, count):
+    for row in range(panel.year_table.rowCount()):
+        if panel.year_table.item(row, 0).text() == label:
+            panel.year_table.cellWidget(row, 2).setValue(count)
+
+
+def test_counts_of_rows_hidden_by_the_period_come_back(database, tmp_path):
+    """**期間で消えた行の枚数を失わない**（PR #142 のレビュー指摘1）。ファイルの値に戻っていた。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\nremove_similar: false\n")
+    _value(panel, "2019", 9)
+    _value(panel, "2020 年以降", 7)
+    _set_period(panel, "", "2018-12-31")
+    assert "2019" not in _rows(panel)
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2018": 5, "2019": 9, "年不明": 5, "2020 年以降": 7}
+    window.close()
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("count_per_year: {2018: 11, 2019: 22, unknown: 4, 2027+: 8}\n", (11, 22, 4, 8)),
+    ("count_per_year: 5\n", (5, 5, 5, 5)),
+])
+def test_saving_with_a_period_keeps_the_counts_of_the_other_years(database, tmp_path, monkeypatch, text, expected):
+    """**狭めたまま保存しても、ほかの年の枚数を消さない**（指摘1）。消えると広げ直しても 0 で、黙って外れた。"""
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, text + "remove_similar: false\n")
+    _set_period(panel, "", "2018-12-31")
+    panel.save_rule()
+    first, second, unknown, later = expected
+    assert selection.load_rule(str(path))["count_per_year"] == {
+        2018: first, 2019: second, "unknown": unknown, "2020+": later
+    }
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2018": first, "2019": second, "年不明": unknown, "2020 年以降": later}
+    panel.choose()
+    assert len(panel.selected) == 3, "2019 年も選ばれる"
+    window.close()
+
+
+def test_saving_a_rule_without_counts_under_a_period_does_not_write_zero(database, tmp_path, monkeypatch):
+    """ルールに枚数が無ければ隠れた年も候補の枚数。0 と書くと、期間を外したときにその年が消える。"""
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, "remove_similar: false\n")
+    _set_period(panel, "", "2018-12-31")
+    panel.save_rule()
+    assert selection.load_rule(str(path))["count_per_year"][2019] == 2
+    window.close()
+
+
+def test_counts_of_rows_hidden_by_a_filter_come_back(mixed, tmp_path):
+    """絞り込みで消えた行も同じ（指摘1 と同じ原因）。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\ncount_per_year: 5\n")
+    panel.refresh_years()
+    _value(panel, "2016", 3)
+    panel.flag_checks["family_only"].setChecked(True)
+    assert "2016" not in _rows(panel)
+    panel.flag_checks["family_only"].setChecked(False)
+    assert _rows(panel)["2016"] == 3
+    window.close()
+
+
+def test_opening_another_rule_forgets_the_hidden_counts(database, tmp_path):
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _value(panel, "2019", 9)
+    _set_period(panel, "", "2018-12-31")
+    other = tmp_path / "other.yml"
+    other.write_text("count_per_year: 2\n", encoding="utf-8")
+    panel.set_paths(str(other), panel.output_root, panel.source_roots)
+    assert _rows(panel)["2019"] == 2
+    assert panel.current_rule()["count_per_year"][2019] == 2
+    window.close()
+
+
+def test_the_year_table_follows_the_period_after_an_unreadable_value(database, tmp_path):
+    """読めない値の間に絞り込みを動かしても、直したら表が追いつく（PR #142 のレビュー指摘4）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _set_period(panel, "", "2018-12-31")
+    _set_period(panel, "", "bad")
+    check = panel.flag_checks["include_video"]
+    check.setChecked(not check.isChecked())
+    assert "2019" in _rows(panel), "読めない値は絞らない扱い"
+    _set_period(panel, "", "2018-12-31")
+    assert "2019" not in _rows(panel), "欄の値と表が一致する"
+    window.close()
+
+
+def test_a_year_missing_from_the_rule_shows_zero_and_is_not_chosen(tmp_path):
+    """**利用者の決定**（PR #142 の (a)）: 書いていない年は選ばない（#102）。2027+ の手前の年は 0 で見える。"""
+    path = tmp_path / "gap.db"
+    connection = db.ensure_database(str(path))
+    for seed, year in enumerate((2025, 2026), 1):
+        photo = write_photo(tmp_path / f"{year}.jpg", scene(seed))
+        _add(connection, photo, shooting_date=f"{year}-05-03T10:00:00", faces=[_face("${PERSON_4}")])
+    connection.close()
+    window, panel, _ = _rule_panel(
+        path, tmp_path, "date: {end: 2025-12-31}\ncount_per_year: {2025: 30, unknown: 5, 2027+: 30}\nremove_similar: false\n"
+    )
+    assert _rows(panel) == {"2025": 30, "年不明": 5}
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2025": 30, "2026": 0, "年不明": 5, "2027 年以降": 30}
+    panel.choose()
+    assert _names(panel) == ["2025.jpg"], "CLI と同じ"
+    _value(panel, "2026", 4)
+    panel.choose()
+    assert "2026.jpg" in _names(panel)
+    window.close()
+
+
+def test_the_unknown_row_stays_under_a_period(database, tmp_path):
+    """**利用者の決定**（PR #142 の (b)）: 候補 0 と見えれば、年不明が期間で外れたと画面から分かる。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _set_period(panel, "", "2018-12-31")
+    assert _rows(panel)["年不明"] == 5
+    row = next(r for r in range(panel.year_table.rowCount()) if panel.year_table.item(r, 0).text() == "年不明")
+    assert panel.year_table.item(row, 1).text() == "0"
+    window.close()
+
+
+def test_a_period_with_a_time_zone_is_refused():
+    """写真の撮影日時と比べられず `TypeError` になっていた（PR #142 のレビュー指摘5）。"""
+    assert selection.period_problem("", "2025-12-31T00:00:00+09:00")
+    assert selection.period_problem("2025-01-01T00:00:00+09:00", "2025-12-31")
+    assert selection.period_problem("2025-01-01", "2025-12-31T23:59:59") is None
 
 
 def test_the_later_row_starts_right_after_the_last_candidate_year():
