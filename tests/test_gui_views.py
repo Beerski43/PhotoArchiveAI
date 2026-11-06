@@ -526,9 +526,7 @@ def test_the_month_range_also_narrows_a_person_s_faces(seeded):
     window._reload_person_list(select_person_id=persons["${PERSON_3}"])
     assert len(_ids(window)) == 2
 
-    index = window.month_from_box.findText("2018-07")
-    assert index >= 0
-    window.month_from_box.setCurrentIndex(index)
+    window.month_range.set_range("2018-07", None)
 
     assert _ids(window) == [faces["自動・強い"]]
 
@@ -554,7 +552,7 @@ def test_the_rejection_list_can_also_be_narrowed_and_paged(seeded, monkeypatch):
     assert window.face_list.count() == 1, "ページ単位で読むこと"
     assert "1 / 2 ページ（全 2 件）" in window.page_label.text()
 
-    window.month_from_box.setCurrentIndex(window.month_from_box.findText("2018-07"))
+    window.month_range.set_range("2018-07", None)
     assert _ids(window) == [faces["未分類・新しい"]]
 
 

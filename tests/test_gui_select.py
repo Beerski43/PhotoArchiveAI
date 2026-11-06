@@ -88,8 +88,8 @@ def test_loading_lists_every_year_with_its_candidates(window):
         for row in range(panel.year_table.rowCount())
     }
     # 整数の count_per_year（5）は全部の年に入る
-    later = f"{gui_select.later_year()} 年以降"
-    assert rows == {"2018": ("1", 5), "2019": ("2", 5), "年不明": ("0", 5), later: ("", 5)}
+    # 「〜年以降」は候補のある最後の年の翌年から（#134）
+    assert rows == {"2018": ("1", 5), "2019": ("2", 5), "年不明": ("0", 5), "2020 年以降": ("", 5)}
 
 
 def test_choosing_again_with_other_weights_changes_the_order(window):
@@ -112,7 +112,7 @@ def test_a_year_set_to_zero_is_not_chosen(window):
     panel.choose()
     assert "2018.jpg" not in _names(panel)
     assert panel.current_rule()["count_per_year"] == {
-        2018: 0, 2019: 5, "unknown": 5, f"{gui_select.later_year()}+": 5
+        2018: 0, 2019: 5, "unknown": 5, "2020+": 5
     }
 
 
@@ -122,7 +122,7 @@ def test_fill_all_years_sets_every_year(window):
     panel.fill_spin.setValue(7)
     panel.fill_all_years()
     assert panel.current_rule()["count_per_year"] == {
-        2018: 7, 2019: 7, "unknown": 7, f"{gui_select.later_year()}+": 7
+        2018: 7, 2019: 7, "unknown": 7, "2020+": 7
     }
 
 
@@ -138,7 +138,7 @@ def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatc
     saved = selection.load_rule(str(rule_path))
     assert saved["weights"]["smile"] == pytest.approx(0.5)
     assert saved["count_per_year"] == {
-        2018: 5, 2019: 5, "unknown": 5, f"{gui_select.later_year()}+": 5
+        2018: 5, 2019: 5, "unknown": 5, "2020+": 5
     }
     assert saved["family_only"] is True
 
@@ -157,7 +157,7 @@ def test_the_results_are_paged(window, monkeypatch):
     monkeypatch.setattr(gui_select, "RESULT_PAGE_SIZE", 1)
     panel = window.selection
     panel.choose()
-    panel.set_year_range(2019, 2019)
+    panel.year_range.set_range("2019", "2019")
     assert panel.result_list.count() == 1 and panel.page_label.text() == "1 / 2"
     panel._turn(1)
     assert panel.page_label.text() == "2 / 2"
@@ -177,15 +177,256 @@ def test_exporting_copies_the_chosen_photos(window, tmp_path, monkeypatch):
     assert "年ごとのフォルダ" in asked[0]
 
 
-def test_exporting_follows_a_flat_output_layout_in_the_rule(window, tmp_path, monkeypatch):
+def _rows(panel):
+    return {
+        panel.year_table.item(row, 0).text(): panel.year_table.cellWidget(row, 2).value()
+        for row in range(panel.year_table.rowCount())
+    }
+
+
+def _rule_panel(database, tmp_path, text):
+    path = tmp_path / "period-rule.yml"
+    path.write_text(text, encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path=str(path), output_root=str(tmp_path / "out"))
+    window.selection.refresh_years()
+    return window, window.selection, path
+
+
+def _set_period(panel, start, end):
+    panel.period_start.setText(start)
+    panel.period_end.setText(end)
+    panel._period_changed()
+
+
+def test_exporting_uses_the_layout_on_the_screen_without_choosing_again(window, tmp_path, monkeypatch):
+    """出力の形は選ぶ写真を変えないので、**選んだあとに変えても「出力する」に効く**（#134）。"""
     asked = []
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: asked.append(args[2]) or QMessageBox.Yes)
     panel = window.selection
-    panel.rule = {**panel.rule, "output_layout": "flat"}
     panel.choose()
+    panel.layout_combo.setCurrentIndex(panel.layout_combo.findData(selection.OUTPUT_LAYOUT_FLAT))
     panel.export()
     assert sorted(path.is_file() for path in (tmp_path / "out").iterdir()) == [True, True, True]
     assert "直下" in asked[0]
+
+
+def test_the_layout_on_the_screen_comes_from_the_rule_and_is_saved(database, tmp_path, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, "output_layout: flat\n")
+    assert panel.layout_combo.currentData() == selection.OUTPUT_LAYOUT_FLAT
+    panel.layout_combo.setCurrentIndex(panel.layout_combo.findData(selection.OUTPUT_LAYOUT_YEAR))
+    panel.save_rule()
+    assert selection.load_rule(str(path))["output_layout"] == selection.OUTPUT_LAYOUT_YEAR
+    window.close()
+
+
+def test_the_period_comes_from_the_rule_quoted_or_not(database, tmp_path):
+    # 引用符の無い日付は YAML が date で読む
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-01-01\n  end: '2018-12-31'\n")
+    assert panel._period_values() == ("2018-01-01", "2018-12-31")
+    window.close()
+
+
+def test_changing_the_period_rebuilds_the_years_and_keeps_the_counts(database, tmp_path):
+    """**期間で外れた年が画面から分かる**（2026 年が表に出ない原因が見えなかった・#134）。入れた枚数は残す。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\nremove_similar: false\n")
+    panel.year_table.cellWidget(0, 2).setValue(9)  # 2018
+    _set_period(panel, "", "2018-12-31")
+    assert "2019" not in _rows(panel)
+    _set_period(panel, "", "")
+    assert _rows(panel)["2018"] == 9 and "2019" in _rows(panel)
+    window.close()
+
+
+def test_the_period_on_the_screen_narrows_the_choice(database, tmp_path):
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\nremove_similar: false\n")
+    _set_period(panel, "2019-01-01", "")
+    panel.choose()
+    assert "2018.jpg" not in _names(panel) and len(panel.selected) == 2
+    window.close()
+
+
+def test_saving_writes_the_period_and_a_blank_period_drops_the_key(database, tmp_path, monkeypatch):
+    """**空欄は絞り込まない**ので、キーごと消す（端だけ空なら、その端だけ消す）。"""
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, "date:\n  start: 2000-01-01\n  end: 2025-12-31\n")
+    _set_period(panel, "2018-01-01", "")
+    panel.save_rule()
+    assert selection.load_rule(str(path))["date"] == {"start": "2018-01-01"}
+    _set_period(panel, "", "")
+    panel.save_rule()
+    assert "date" not in selection.load_rule(str(path))
+    window.close()
+
+
+@pytest.mark.parametrize("start, end", [("2019-13-01", ""), ("", "someday"), ("", "2019-1-1"), ("2020-01-01", "2019-12-31")])
+def test_an_unreadable_period_is_shown_and_stops_choosing_and_saving(database, tmp_path, monkeypatch, start, end):
+    """読めない値は `select` では指定なしになるので、**打ち間違えたまま黙って絞らずに選ばない**。"""
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warned.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: pytest.fail("保存まで進んだ"))
+    window, panel, path = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _set_period(panel, start, end)
+    assert panel.period_notice.text()
+    panel.choose()
+    panel.save_rule()
+    assert len(warned) == 2 and not panel.selected
+    assert path.read_text(encoding="utf-8") == "count_per_year: 5\n"
+    window.close()
+
+
+def test_the_later_row_is_gone_when_the_period_ends_before_it(database, tmp_path):
+    """**利用者の報告**（2026-11-05）: 期間が 2025-12-31 までなのに「2027 年以降」と出ていた。"""
+    # 候補は 2019 年まで。実データの「2025 年まで候補があり、期間も 2025 年まで」と同じ形
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  end: 2019-12-31\ncount_per_year: 5\n")
+    assert not [label for label in _rows(panel) if "以降" in label]
+    # 行は無くても枚数は持っている（期間を外したときのため・PR #142 の指摘1）
+    assert list(panel.current_rule()["count_per_year"]) == [2018, 2019, "unknown", "2020+"]
+    _set_period(panel, "", "")
+    assert _rows(panel)["2020 年以降"] == 5
+    window.close()
+
+
+def _value(panel, label, count):
+    for row in range(panel.year_table.rowCount()):
+        if panel.year_table.item(row, 0).text() == label:
+            panel.year_table.cellWidget(row, 2).setValue(count)
+
+
+def test_counts_of_rows_hidden_by_the_period_come_back(database, tmp_path):
+    """**期間で消えた行の枚数を失わない**（PR #142 のレビュー指摘1）。ファイルの値に戻っていた。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\nremove_similar: false\n")
+    _value(panel, "2019", 9)
+    _value(panel, "2020 年以降", 7)
+    _set_period(panel, "", "2018-12-31")
+    assert "2019" not in _rows(panel)
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2018": 5, "2019": 9, "年不明": 5, "2020 年以降": 7}
+    window.close()
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("count_per_year: {2018: 11, 2019: 22, unknown: 4, 2027+: 8}\n", (11, 22, 4, 8)),
+    ("count_per_year: 5\n", (5, 5, 5, 5)),
+])
+def test_saving_with_a_period_keeps_the_counts_of_the_other_years(database, tmp_path, monkeypatch, text, expected):
+    """**狭めたまま保存しても、ほかの年の枚数を消さない**（指摘1）。消えると広げ直しても 0 で、黙って外れた。"""
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, text + "remove_similar: false\n")
+    _set_period(panel, "", "2018-12-31")
+    panel.save_rule()
+    first, second, unknown, later = expected
+    assert selection.load_rule(str(path))["count_per_year"] == {
+        2018: first, 2019: second, "unknown": unknown, "2020+": later
+    }
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2018": first, "2019": second, "年不明": unknown, "2020 年以降": later}
+    panel.choose()
+    assert len(panel.selected) == 3, "2019 年も選ばれる"
+    window.close()
+
+
+def test_saving_a_rule_without_counts_under_a_period_does_not_write_zero(database, tmp_path, monkeypatch):
+    """ルールに枚数が無ければ隠れた年も候補の枚数。0 と書くと、期間を外したときにその年が消える。"""
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    window, panel, path = _rule_panel(database, tmp_path, "remove_similar: false\n")
+    _set_period(panel, "", "2018-12-31")
+    panel.save_rule()
+    assert selection.load_rule(str(path))["count_per_year"][2019] == 2
+    window.close()
+
+
+def test_counts_of_rows_hidden_by_a_filter_come_back(mixed, tmp_path):
+    """絞り込みで消えた行も同じ（指摘1 と同じ原因）。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\ncount_per_year: 5\n")
+    panel.refresh_years()
+    _value(panel, "2016", 3)
+    panel.flag_checks["family_only"].setChecked(True)
+    assert "2016" not in _rows(panel)
+    panel.flag_checks["family_only"].setChecked(False)
+    assert _rows(panel)["2016"] == 3
+    window.close()
+
+
+def test_opening_another_rule_forgets_the_hidden_counts(database, tmp_path):
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _value(panel, "2019", 9)
+    _set_period(panel, "", "2018-12-31")
+    other = tmp_path / "other.yml"
+    other.write_text("count_per_year: 2\n", encoding="utf-8")
+    panel.set_paths(str(other), panel.output_root, panel.source_roots)
+    assert _rows(panel)["2019"] == 2
+    assert panel.current_rule()["count_per_year"][2019] == 2
+    window.close()
+
+
+def test_the_year_table_follows_the_period_after_an_unreadable_value(database, tmp_path):
+    """読めない値の間に絞り込みを動かしても、直したら表が追いつく（PR #142 のレビュー指摘4）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _set_period(panel, "", "2018-12-31")
+    _set_period(panel, "", "bad")
+    check = panel.flag_checks["include_video"]
+    check.setChecked(not check.isChecked())
+    assert "2019" in _rows(panel), "読めない値は絞らない扱い"
+    _set_period(panel, "", "2018-12-31")
+    assert "2019" not in _rows(panel), "欄の値と表が一致する"
+    window.close()
+
+
+def test_a_year_missing_from_the_rule_shows_zero_and_is_not_chosen(tmp_path):
+    """**利用者の決定**（PR #142 の (a)）: 書いていない年は選ばない（#102）。2027+ の手前の年は 0 で見える。"""
+    path = tmp_path / "gap.db"
+    connection = db.ensure_database(str(path))
+    for seed, year in enumerate((2025, 2026), 1):
+        photo = write_photo(tmp_path / f"{year}.jpg", scene(seed))
+        _add(connection, photo, shooting_date=f"{year}-05-03T10:00:00", faces=[_face("${PERSON_4}")])
+    connection.close()
+    window, panel, _ = _rule_panel(
+        path, tmp_path, "date: {end: 2025-12-31}\ncount_per_year: {2025: 30, unknown: 5, 2027+: 30}\nremove_similar: false\n"
+    )
+    assert _rows(panel) == {"2025": 30, "年不明": 5}
+    _set_period(panel, "", "")
+    assert _rows(panel) == {"2025": 30, "2026": 0, "年不明": 5, "2027 年以降": 30}
+    panel.choose()
+    assert _names(panel) == ["2025.jpg"], "CLI と同じ"
+    _value(panel, "2026", 4)
+    panel.choose()
+    assert "2026.jpg" in _names(panel)
+    window.close()
+
+
+def test_the_unknown_row_stays_under_a_period(database, tmp_path):
+    """**利用者の決定**（PR #142 の (b)）: 候補 0 と見えれば、年不明が期間で外れたと画面から分かる。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _set_period(panel, "", "2018-12-31")
+    assert _rows(panel)["年不明"] == 5
+    row = next(r for r in range(panel.year_table.rowCount()) if panel.year_table.item(r, 0).text() == "年不明")
+    assert panel.year_table.item(row, 1).text() == "0"
+    window.close()
+
+
+def test_a_period_with_a_time_zone_is_refused():
+    """写真の撮影日時と比べられず `TypeError` になっていた（PR #142 のレビュー指摘5）。"""
+    assert selection.period_problem("", "2025-12-31T00:00:00+09:00")
+    assert selection.period_problem("2025-01-01T00:00:00+09:00", "2025-12-31")
+    assert selection.period_problem("2025-01-01", "2025-12-31T23:59:59") is None
+
+
+def test_the_later_row_starts_right_after_the_last_candidate_year():
+    """どの年も行から漏れない。以前は「今年の翌年」固定で、今年に候補が無いと今年がどの行にも入らなかった。"""
+    assert gui_select.later_row_year([2018, 2025], None) == 2026
+    assert gui_select.later_row_year([2018, 2026], None) == 2027
+    assert gui_select.later_row_year([2018, 2025], 2025) is None
+    assert gui_select.later_row_year([2018, 2025], 2026) == 2026
+    assert gui_select.later_row_year([], None) == gui_select.date.today().year
+
+
+def test_the_later_count_in_the_rule_follows_the_row_when_its_year_moves(database, tmp_path):
+    """ファイルが ``2027+`` でも行が「2020 年以降」なら同じ枚数を引き継ぐ（0 に落とすと保存で消える）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year:\n  2018: 1\n  2019: 1\n  2027+: 8\n")
+    assert _rows(panel)["2020 年以降"] == 8
+    assert panel.current_rule()["count_per_year"]["2020+"] == 8
+    window.close()
 
 
 def test_a_thumbnail_comes_from_the_exif_and_follows_the_orientation(tmp_path):
@@ -310,7 +551,7 @@ def test_reloading_clears_the_previous_results(mixed, tmp_path, monkeypatch):
     コピーしていた。#113 で「候補を読み込む」を無くしたので、出力の前に割り当ての変化を見る。"""
     window, panel = _panel(mixed, tmp_path, "remove_similar: false\n")
     panel.choose()
-    assert panel.result_list.count() > 0 or panel.year_from_combo.count() > 0
+    assert panel.result_list.count() > 0 or panel.year_range.old_year.count() > 0
     # 選んだあとに割り当てを変えた（1枚目のタブでの操作と同じ）。
     face_id = panel.connection.execute("SELECT id FROM Face WHERE person_id IS NOT NULL").fetchone()[0]
     db.unassign_faces(panel.connection, [face_id])
@@ -347,8 +588,8 @@ def test_reading_an_int_rule_and_choosing_gives_the_cli_result(mixed, tmp_path):
 
 
 def test_the_later_row_covers_years_after_this_one(tmp_path):
-    """翌年以降の行は、表に無い新しい年の枚数（年が変わったら設定し直す運用）。"""
-    later = gui_select.later_year()
+    """「〜年以降」の行は、表に無い新しい年の枚数。"""
+    later = 2027
     limit = selection.year_limits({"count_per_year": {2019: 1, f"{later}+": 3, "unknown": 2}})
     assert (limit(2019), limit(2020), limit(later), limit(later + 5), limit(None)) == (1, 0, 3, 3, 2)
 
@@ -398,22 +639,47 @@ def test_the_year_counts_from_the_database_match_the_prepared_candidates(mixed):
 
 
 def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
-    """結果は「何年〜何年」で絞る（#113・利用者の指定）。初めは全部の年。年不明は最後。"""
+    """結果は年の範囲で絞る（#113・#134）。初めは全部の年で年不明は最後。範囲を指定すると年不明は出ない。"""
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
     panel.choose()
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
-    assert [panel.year_from_combo.itemData(i) for i in range(panel.year_from_combo.count())] == [
-        2016, 2017, 2019, None
-    ]
+    box = panel.year_range.old_year
+    assert [box.itemData(i) for i in range(box.count())] == [None, 2016, 2017, 2019]
+    assert box.itemText(1) == "2016", "欄は数字だけ（利用者の要望）"
     assert len(shown()) == 4, "初めは全部の年"
+    assert shown()[-1] == "年不明 undated.jpg"
 
-    panel.set_year_range(2016, 2017)
+    panel.year_range.set_range("2016", "2017")
     assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg"]
-    panel.set_year_range(2019, 2017)
-    assert shown() == ["2017 auto2017.jpg", "2019 dated.jpg"], "逆に選んでも同じ範囲"
-    panel.set_year_range(2019, None)
-    assert shown() == ["2019 dated.jpg", "年不明 undated.jpg"]
+    panel.year_range.set_range("2019", None)
+    assert shown() == ["2019 dated.jpg"], "範囲を指定すると年不明は出ない"
+
+    panel.unknown_only.setChecked(True)
+    assert shown() == ["年不明 undated.jpg"]
+    assert not panel.year_range.isEnabled(), "範囲とは排他だと見た目で分かる"
     window.close()
+
+
+def test_the_results_can_be_narrowed_by_month(mixed, tmp_path):
+    """**年と月を別の欄で選ぶ**（#134・利用者の要望）。どの写真も 5 月なので、4 月までなら 2019 年は外れる。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+    panel.year_range.set_range("2017-05", "2019")
+    assert shown() == ["2017 auto2017.jpg", "2019 dated.jpg"]
+    panel.year_range.old_year.setCurrentIndex(panel.year_range.old_year.findData(2019))
+    assert shown() == ["2019 dated.jpg"], "欄を動かしても一覧が追いつく"
+    window.close()
+
+
+def test_a_photo_known_only_by_year_stays_out_of_a_narrower_month_range():
+    """月まで分からない写真は、撮影時期がまるごと入るときだけ（顔の割り当てタブと同じ）。"""
+    from datetime import datetime
+
+    whole_year = (datetime(2012, 1, 1), datetime(2012, 12, 31))
+    assert gui_select._period_within(whole_year, "2012-01", "2012-12")
+    assert not gui_select._period_within(whole_year, "2012-05", "2012-12")
+    assert not gui_select._period_within(None, "2012-01", None)
 
 
 def test_each_weight_has_a_gauge_that_moves_its_value_by_the_step(window):

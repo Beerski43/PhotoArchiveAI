@@ -567,7 +567,7 @@
 | `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
 | `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
-### `test_gui_select.py` — 写真の選定タブ（32件。#104・#106・#113・#120）
+### `test_gui_select.py` — 写真の選定タブ（53件。#104・#106・#113・#120・#134）
 
 | テスト | 内容 |
 |---|---|
@@ -592,10 +592,31 @@
 | `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
 | `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
 | `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
-| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は「何年〜何年」で絞る。初めは全部の年・年不明は最後・逆に選んでも同じ範囲（#113） |
+| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は年の範囲で絞る。初めは全部の年で年不明は最後。範囲を指定すると年不明は出ず、`年不明のみ` で見る（#113・#134） |
+| `test_the_results_can_be_narrowed_by_month` | 年と月を別の欄で選び、欄を動かすと一覧が追いつく（#134） |
+| `test_a_photo_known_only_by_year_stays_out_of_a_narrower_month_range` | 月まで分からない写真は撮影時期がまるごと入るときだけ（顔の割り当てタブと同じ・#134） |
+| `test_exporting_uses_the_layout_on_the_screen_without_choosing_again` | 出力の形は選び直さなくても「出力する」に効く（#134） |
+| `test_the_layout_on_the_screen_comes_from_the_rule_and_is_saved` | 出力の形の欄はルールから読み、保存する（#134） |
+| `test_the_period_comes_from_the_rule_quoted_or_not` | 撮影時期の欄はルールから読む。YAML の引用符の有無を問わない（#134） |
+| `test_changing_the_period_rebuilds_the_years_and_keeps_the_counts` | **期間で外れた年が画面から分かる**（2026 年が表に出ない原因が見えなかった）。入れた枚数は残す（#134） |
+| `test_the_period_on_the_screen_narrows_the_choice` | 撮影時期の欄が「選ぶ」に効く（#134） |
+| `test_saving_writes_the_period_and_a_blank_period_drops_the_key` | 撮影時期を保存する。**空欄の端はキーごと消す**（#134） |
+| `test_an_unreadable_period_is_shown_and_stops_choosing_and_saving` | 読めない値・始めが終わりより後は知らせて止める。打ち間違いのまま絞らずに選ばない（#134） |
+| `test_the_later_row_is_gone_when_the_period_ends_before_it` | **期間が 2025-12-31 までなのに「2027 年以降」と出ていた**（利用者の報告）。期間が届かなければ行を出さない（#134） |
+| `test_the_later_row_starts_right_after_the_last_candidate_year` | 「〇年以降」は候補のある最後の年の翌年から。今年に候補が無いと今年がどの行にも入らなかった（#134） |
+| `test_the_later_count_in_the_rule_follows_the_row_when_its_year_moves` | ファイルの `2027+` の枚数は、行の年が動いても引き継ぐ（#134） |
+| `test_counts_of_rows_hidden_by_the_period_come_back` | **期間で消えた行の枚数を失わない**（ファイルの値に戻っていた。PR #142 の指摘1） |
+| `test_saving_with_a_period_keeps_the_counts_of_the_other_years` | **狭めたまま保存しても、ほかの年の枚数を消さない**（対応と整数の両方。広げ直しても 0 で黙って外れていた。指摘1） |
+| `test_saving_a_rule_without_counts_under_a_period_does_not_write_zero` | ルールに枚数が無ければ隠れた年も候補の枚数。0 と書かない |
+| `test_counts_of_rows_hidden_by_a_filter_come_back` | 絞り込みで消えた行の枚数も残す（指摘1 と同じ原因） |
+| `test_opening_another_rule_forgets_the_hidden_counts` | 別のルールを読んだら、隠れた枚数を持ち越さない |
+| `test_the_year_table_follows_the_period_after_an_unreadable_value` | 読めない値の間に絞り込みを動かしても、直したら表が追いつく（指摘4） |
+| `test_a_year_missing_from_the_rule_shows_zero_and_is_not_chosen` | **書いていない年は 0 で出て選ばない**（#102 のまま・利用者の決定） |
+| `test_the_unknown_row_stays_under_a_period` | **期間を入れても「年不明」の行は残す**（候補 0・利用者の決定） |
+| `test_a_period_with_a_time_zone_is_refused` | タイムゾーン付きの値は読めない扱い。`TypeError` にしない（指摘5） |
 | `test_the_weights_from_the_rule_are_shown_as_they_are` | 重みを丸めない・頭打ちにしない（0.125 → 0.13、20 → 10 になっていた。指摘3） |
-| `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「翌年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
-| `test_the_later_row_covers_years_after_this_one` | 翌年以降の行は、表に無い新しい年の枚数 |
+| `test_reading_an_int_rule_and_choosing_gives_the_cli_result` | **「年不明」「〇年以降」の行があるので、整数のルールを読んで並べ直しても CLI と同じ**（年不明の写真が落ちていた。指摘4・利用者の決定） |
+| `test_the_later_row_covers_years_after_this_one` | 「〇年以降」の行は、表に無い新しい年の枚数 |
 | `test_every_weight_has_a_field_on_the_screen` | **重みを足したら画面にも出す**（#106 の5つ・#139 の大きさ・他人・比重）。内訳の項目も `scoring.BREAKDOWN_KEYS` と同じ |
 | `test_the_breakdown_shows_the_measured_values_or_says_they_are_missing` | 重みが 0 でも `assess` で測った値を見せる。測っていなければそう書く |
 | `test_each_weight_has_a_gauge_that_moves_its_value_by_the_step` | **重みと似た写真の判定の各項目に横ゲージ**。動かすと入力欄に刻みの倍数が入り、ルールに届く（#120。比重と他人の重みも・#139） |
@@ -1106,6 +1127,22 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_stopping_evaluate_does_not_promise_to_resume` / `test_other_jobs_still_promise_to_resume` / `test_the_stop_tooltip_follows_the_job_that_runs` | **何も保存しない `evaluate` に「続きから」と言わない**（止めるの説明・止めている文・閉じる確認）。ほかの処理の文は変えない（PR #141 の指摘3） |
 | `test_a_failed_reload_after_unassign_does_not_say_nothing_changed` | **取り消しの commit のあとの失敗に「何も変えていません」と言わない**（指摘4） |
 | `test_the_bulk_button_does_not_name_only_some_jobs` / `test_the_settings_item_shows_its_tooltip` | 押せない理由の文に処理名を挙げない（指摘5）・`設定…` の説明がメニューで出る（指摘6） |
+
+### `test_gui_period.py` — 撮影時期の範囲を年と月の欄で選ぶ部品（11件。#134）
+
+| テスト | 何を確かめるか |
+|---|---|
+| `test_the_years_and_months_are_separate_fields_listed_oldest_first` | **年と月は別の欄**（利用者の要望）。古い順・その年にある月だけ・年を選ぶまで月は選べない |
+| `test_an_arrow_points_from_the_old_side_to_the_new_side` | **古い方 → 新しい方を矢印で示す**（利用者の要望）。ほかの文字を足さない |
+| `test_the_fields_hold_only_digits_and_dashes_mean_no_limit` | **欄は数字だけ・指定なしは `--`**（利用者の要望）。長い文字を入れると欄が広がる |
+| `test_a_blank_month_means_the_whole_year_and_a_blank_year_means_no_limit` | 月の指定なしは1月から・12月まで。年の指定なしは限りなし |
+| `test_the_new_side_offers_only_what_comes_after_the_old_side` | **古い方を入れると新しい方はそれ以降だけ**（利用者の要望）。外せば全部に戻る |
+| `test_moving_the_old_side_past_the_new_side_pushes_the_new_side_up` | 逆転したまま0件を見せない。指定なしにも戻さない |
+| `test_a_blank_new_side_stays_blank_when_the_old_side_moves` | 新しい方の指定なしは古い方を動かしても残る |
+| `test_the_choice_survives_new_months_and_goes_blank_when_its_year_is_gone` | 月が増えても選んだ値を保つ。年が消えたら指定なし |
+| `test_a_range_that_is_not_on_offer_is_refused` | 無い年月は `ValueError` |
+| `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
+| `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
 
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
