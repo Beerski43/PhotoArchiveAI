@@ -49,7 +49,7 @@ def test_an_arrow_points_from_the_old_side_to_the_new_side(picker):
 
 
 def test_the_fields_hold_only_digits_and_dashes_mean_no_limit(picker):
-    """**利用者の要望**: 「数字だけで良い」「指定なしは[--]にして」。長い文字はその幅まで欄を広げる。"""
+    """**利用者の要望**: 「数字だけで良い」。指定なしは `--`。長い文字はその幅まで欄を広げる。"""
     picker.set_range("2018-07", "2020-01")
     for box in (picker.old_year, picker.old_month, picker.new_year, picker.new_month):
         assert _items(box)[0] == "--"
