@@ -72,7 +72,8 @@
 **エージェントのミス。** 引き継ぎの片付けで、このセッションの合成データだけを消すつもりの `find "$CLAUDE_JOB_DIR/tmp" -maxdepth 1 -name 'tmp*' -type d -newermt ... -exec rm -rf {} +` を流した。**起点の `tmp` 自身も `tmp*` に一致して**、`$CLAUDE_JOB_DIR/tmp` が中身ごと消えた（空のフォルダは作り直した）。**元に戻せない。**
 
 - 消えたもの: 前のセッションから残っていた約 3.4GB。一覧は控えていない。分かっているのは `w106/`（2026-10-16）・`variant.py`・`worklog.py`・`unassign.png`・`wiz1〜4.png` など（直前の `ls` の末尾）と、過去の申し送りが挙げているもの（`q106.db.bak-*` などの DB の複製）。本物の DB の複製はあくまで複製で、**どの申し送りでも「消してよいかを利用者に聞く」扱いだったものを、聞かずに消した**
-- 無事なもの: `data/photoarchive.db` とその控え（`*.bak-*`）・`data/iqa-*`・`config/`・リポジトリ（どれも別の場所）
+- 過去の申し送り（2026-11-03）が挙げていた大きいもの: `iqa/`・`iqa-models/`・`buffalo_l.zip`・`musiq.onnx` / `nima.onnx`。**`scripts/export_iqa_onnx.py` や試験をやり直すときは、取得し直しが要るかもしれない**
+- 無事なもの: `data/photoarchive.db` とその控え（`*.bak-*`）・`data/iqa-*`・`config/`・リポジトリ。**アプリが読むモデルは `models/` の実ファイルで無事**（`w600k_r50.onnx`・`iqa_musiq_koniq.onnx`・`iqa_nima_ava.onnx`・`face_landmarker.task`。2026-11-06 に確かめた。`src/` と設定は一時置き場を参照していない）
 - **過去の申し送りに `$CLAUDE_JOB_DIR/tmp` の残り物の話があるが、もう無い**（探さないこと）
 - 再発させないために: `find` に `-mindepth 1` を付ける。**`rm -rf` の前に、消す一覧を出して見る**
 
