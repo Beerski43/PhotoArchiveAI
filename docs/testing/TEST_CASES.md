@@ -624,7 +624,17 @@
 | `test_a_value_off_the_gauge_is_kept_as_typed` | ゲージは値の上限でも目盛りでもない。右端より大きい値・目盛りに合わない値を丸めずにルールへ（#120・PR #108 の指摘3） |
 | `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
 | `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
-| `test_a_gauge_ignores_the_wheel_unless_focused` | **フォーカスの無いゲージと入力欄はホイールで値を変えない**（設定欄をスクロールすると、マウスの下の重みが黙って変わっていた。PR #122 のレビュー指摘1）。選んだゲージは動く |
+| `test_loading_a_rule_file_replaces_the_screen_and_becomes_the_save_target` | **読み込むと画面と年の表が置き換わり、以後の上書きはそのファイルへ**（#18）。もとのファイルには書かない |
+| `test_an_unreadable_rule_file_leaves_the_screen_as_it_was` | 構文の壊れた YAML・辞書でない・読めない重みでは知らせるだけで、動かした値も保存先もそのまま |
+| `test_declining_or_cancelling_a_load_changes_nothing` | 確認で断る・選ぶ窓を取り消すと何も変わらない |
+| `test_saving_to_another_file_leaves_the_original_and_becomes_the_save_target` | **別のファイルに保存しても、もとのファイルは変わらない**（#18）。以後の上書きは新しいファイルへ |
+| `test_saving_to_another_file_adds_a_readable_suffix_and_backs_up_an_existing_file` | 拡張子が無ければ `.yml` を足す。既にあるファイルは `.bak` に控える |
+| `test_cancelling_save_as_or_failing_to_write_keeps_the_save_target` | 取り消しと書けない場所では保存先が変わらない（書けなければ知らせる） |
+| `test_saving_without_a_rule_file_asks_where` | `rule_path` が無いときの「ルールを保存」は保存先を聞く |
+| `test_a_loaded_file_survives_saving_the_settings_with_the_same_rule_path` | 設定の窓で `rule_path` を変えていなければ読み込んだファイルのまま。変えたらそちらが効く |
+| `test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing` | 構文の壊れた YAML で起動しても落ちず知らせる（本筋の外で直した） |
+| `test_the_wheel_never_changes_a_value_in_the_settings_column` | **設定欄の入力部品はすべて、ホイールで値を変えない**（上を通っただけでも、クリックしたあとでも。年の表の欄も。設定欄をスクロールすると、マウスの下の値が黙って変わっていた。PR #122 のレビュー指摘1・#18）。イベントを受けず親へ渡す（スクロールになる）。部品を全部たどるので、足した欄も見張られる |
+| `test_the_sharpness_gauge_still_takes_the_wheel_after_clicking` | 顔の割り当てタブの鮮明さのゲージは、クリックしたあとならホイールで動く（設定欄とは扱いが違う・#135） |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（66件）
 

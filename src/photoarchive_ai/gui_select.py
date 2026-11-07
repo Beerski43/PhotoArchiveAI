@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -298,6 +299,11 @@ class _Progress:
         self.dialog.close()
 
 
+#: ルールのファイルを選ぶ窓の絞り込みと、読み書きする拡張子（YAML だけ・#27）。先頭は拡張子を足すときに使う。
+RULE_FILE_FILTER = "YAML (*.yml *.yaml)"
+RULE_FILE_SUFFIXES = (".yml", ".yaml")
+
+
 def _number_text(value: float) -> str:
     """既定値の見せ方（``0.35`` / ``20`` / ``0``）。"""
     return f"{value:.4f}".rstrip("0").rstrip(".")
@@ -327,19 +333,44 @@ class WheelSafeSlider(_WheelOnlyWhenFocused, QSlider):
         self._init_wheel_guard()
 
 
-class WheelSafeDoubleSpinBox(_WheelOnlyWhenFocused, QDoubleSpinBox):
-    def __init__(self, *args):
-        super().__init__(*args)
-        self._init_wheel_guard()
-
-
 class WheelSafeSpinBox(_WheelOnlyWhenFocused, QSpinBox):
     def __init__(self, *args):
         super().__init__(*args)
         self._init_wheel_guard()
 
 
-class WheelSafeComboBox(_WheelOnlyWhenFocused, QComboBox):
+class _NoWheel(_WheelOnlyWhenFocused):
+    """**ホイールを一切受けず、設定欄のスクロールへ渡す**（#18）。**設定欄の入力部品はすべてこれを使う。**
+
+    `_WheelOnlyWhenFocused` だけでは足りない。ゲージや欄をクリックしたあと、そのままスクロールすると
+    クリックした欄の値が動く（利用者「スクロールしていると、たまたまポインタが、どこかしらの入力欄に
+    重なって、その値がスクロールされたものと認識されて変わってしまう」）。値を変えるのは、
+    ドラッグ・打鍵・上下キー・欄の矢印。
+    """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        event.ignore()
+
+
+class NoWheelSlider(_NoWheel, QSlider):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class NoWheelDoubleSpinBox(_NoWheel, QDoubleSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class NoWheelSpinBox(_NoWheel, QSpinBox):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._init_wheel_guard()
+
+
+class NoWheelComboBox(_NoWheel, QComboBox):
     def __init__(self, *args):
         super().__init__(*args)
         self._init_wheel_guard()
@@ -360,7 +391,7 @@ class ParameterRow(QWidget):
         self.spin = spin
         self.step = step
         self.default = default
-        self.slider = WheelSafeSlider(Qt.Horizontal)
+        self.slider = NoWheelSlider(Qt.Horizontal)
         self.slider.setRange(0, int(round(slider_maximum / step)))
         self.slider.setPageStep(max(1, self.slider.maximum() // 10))
         self.slider.setMinimumWidth(120)
@@ -402,7 +433,10 @@ class SelectionPanel(QWidget):
     ):
         super().__init__()
         self.connection = connection
+        #: いま読み書きするルールのファイル。「ルールを読み込む」と「別のファイルに保存」で変わる（#18）。
         self.rule_path = rule_path
+        #: 設定の `rule_path`。上と違っていてよい。**設定ファイルは書き換えない**ので、次に起動するとこちらに戻る。
+        self.configured_rule_path = rule_path
         self.output_root = output_root
         self.source_roots = list(source_roots or [])
         self.rule: Dict[str, Any] = self._read_rule()
@@ -453,7 +487,7 @@ class SelectionPanel(QWidget):
         self.weight_rows: Dict[str, ParameterRow] = {}
         defaults = scoring.Weights.default()
         for key, label, step in WEIGHT_FIELDS:
-            spin = WheelSafeDoubleSpinBox()
+            spin = NoWheelDoubleSpinBox()
             # 比重と2人目以降の効きには上限がある（`selection.rule_weights` が超える値を止める）
             spin.setRange(0.0, WEIGHT_LIMITS.get(key, WEIGHT_MAXIMUM))
             spin.setDecimals(WEIGHT_DECIMALS)
@@ -495,7 +529,7 @@ class SelectionPanel(QWidget):
         self.number_spins: Dict[str, QSpinBox] = {}
         self.number_rows: Dict[str, ParameterRow] = {}
         for key, label, maximum, slider_maximum in NUMBER_FIELDS:
-            spin = WheelSafeSpinBox()
+            spin = NoWheelSpinBox()
             spin.setRange(0, maximum)
             self.number_spins[key] = spin
             row = ParameterRow(spin, 1, slider_maximum, selection.RULE_NUMBERS[key])
@@ -513,7 +547,7 @@ class SelectionPanel(QWidget):
         self.year_table.setMinimumHeight(220)
         years_layout.addWidget(self.year_table)
         fill_row = QHBoxLayout()
-        self.fill_spin = QSpinBox()
+        self.fill_spin = NoWheelSpinBox()
         self.fill_spin.setRange(0, 9999)
         self.fill_spin.setValue(30)
         self.fill_button = QPushButton("全部の年に入れる")
@@ -525,7 +559,7 @@ class SelectionPanel(QWidget):
 
         output_box = QGroupBox("出力の形")
         output_layout = QVBoxLayout(output_box)
-        self.layout_combo = WheelSafeComboBox()
+        self.layout_combo = NoWheelComboBox()
         for key in selection.OUTPUT_LAYOUTS:
             self.layout_combo.addItem(LAYOUT_LABELS[key], key)
         self.layout_combo.setToolTip("選ぶ写真は変わりません。「選ぶ」を押し直さなくても「出力する」に効きます")
@@ -538,11 +572,24 @@ class SelectionPanel(QWidget):
             "顔の割り当てが変わっていれば、先に読み直します（初回は数分かかることがあります）。"
         )
         self.choose_button.clicked.connect(self.choose)
+        # いま読み書きするルールのファイル。読み込みと別名の保存で変わるので、画面に出す（#18）
+        self.rule_file_label = QLabel("")
+        self.rule_file_label.setWordWrap(True)
+        self._show_rule_file()
+        self.load_rule_button = QPushButton("ルールを読み込む…")
+        self.load_rule_button.setToolTip("ファイルを選んで、画面の設定をその内容に置き換えます")
+        self.load_rule_button.clicked.connect(self.load_rule_file)
         self.save_button = QPushButton("ルールを保存")
+        self.save_button.setToolTip("いま読み込んでいるルールのファイルに上書きします")
         self.save_button.clicked.connect(self.save_rule)
+        self.save_as_button = QPushButton("別のファイルに保存…")
+        self.save_as_button.setToolTip("保存先を選んで書きます。以後はそのファイルを読み書きします")
+        self.save_as_button.clicked.connect(self.save_rule_as)
         self.export_button = QPushButton("出力する")
         self.export_button.clicked.connect(self.export)
-        for button in (self.choose_button, self.save_button, self.export_button):
+        layout.addWidget(self.choose_button)
+        layout.addWidget(self.rule_file_label)
+        for button in (self.load_rule_button, self.save_button, self.save_as_button, self.export_button):
             layout.addWidget(button)
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -629,7 +676,8 @@ class SelectionPanel(QWidget):
 
         - **ルールのパスが変わったら、新しいファイルを読み直して画面に出す**（重みと年の表。
           年の表は入っている値を引き継がず、新しいファイルの枚数から作り直す）。同じパスなら
-          画面で動かした重みはそのまま
+          画面で動かした重みはそのまま。**比べる相手は設定の値**で、読み込んだファイルではない
+          （設定の窓でルールを変えていないのに、読み込んだファイルが設定のファイルへ戻らないように）
         - root が変わったら、用意した候補と結果を捨てる（候補は root から元写真を引く）
         """
         roots = list(source_roots or [])
@@ -640,24 +688,36 @@ class SelectionPanel(QWidget):
             self.chosen_rule = {}
             self._group_by_year()
         self.output_root = output_root
-        if rule_path == self.rule_path:
+        if rule_path == self.configured_rule_path:
             return False
+        self.configured_rule_path = rule_path
         self.rule_path = rule_path
-        self.rule = self._read_rule()
-        self._show_rule(self.rule)
+        self._use_rule(self._read_rule())
+        return True
+
+    def _use_rule(self, rule: Dict[str, Any]) -> None:
+        """ルールを画面に出す。年の表は入っている値を引き継がず、このルールの枚数から作り直す。"""
+        self.rule = rule
+        self._show_rule(rule)
         self._show_retired_keys()
+        self._show_rule_file()
         self.year_table.setRowCount(0)
         self._hidden_counts = {}
         if self._years_filled:
             self.refresh_years()
-        return True
+
+    def _show_rule_file(self) -> None:
+        name = Path(self.rule_path).name if self.rule_path else "なし"
+        self.rule_file_label.setText(f"ルールのファイル: {name}")
+        self.rule_file_label.setToolTip(self.rule_path or "")
 
     def _read_rule(self) -> Dict[str, Any]:
         if not self.rule_path or not Path(self.rule_path).exists():
             return {}
         try:
             return selection.load_rule(self.rule_path)
-        except (OSError, ValueError) as error:
+        # YAML の構文の誤りは ValueError ではない（受けないと GUI ごと落ちる）
+        except (OSError, ValueError, yaml.YAMLError) as error:
             QMessageBox.warning(self, "ルールを読めません", str(error))
             return {}
 
@@ -788,7 +848,7 @@ class SelectionPanel(QWidget):
             item.setData(Qt.UserRole, key)
             self.year_table.setItem(row, 0, item)
             self.year_table.setItem(row, 1, QTableWidgetItem("" if candidates is None else str(candidates)))
-            spin = QSpinBox()
+            spin = NoWheelSpinBox()
             spin.setRange(0, 99_999)
             spin.setValue(previous[key] if key in previous else _initial_count(key, candidates, limit_of))
             self.year_table.setCellWidget(row, 2, spin)
@@ -1029,32 +1089,92 @@ class SelectionPanel(QWidget):
     # 保存と出力
     # ------------------------------------------------------------------
 
-    def save_rule(self) -> None:
-        """ルールファイルに書く。**書く前に控え（``.bak``）を取る。** YAML のコメントは消える。"""
-        if not self.rule_path:
-            QMessageBox.warning(self, "保存できません", "設定に rule_path がありません。")
+    def _rule_folder(self) -> str:
+        """ファイルを選ぶ窓を開く場所。"""
+        return str(Path(self.rule_path).parent) if self.rule_path else str(Path.cwd())
+
+    def load_rule_file(self) -> None:
+        """ファイルを選んで画面の設定を置き換える（#18）。**読めないファイルでは画面を変えない。**
+
+        以後の「ルールを保存」はこのファイルへ書く。設定の `rule_path` は書き換えない。
+        """
+        path, _ = QFileDialog.getOpenFileName(self, "ルールを読み込む", self._rule_folder(), RULE_FILE_FILTER)
+        if not path:
             return
+        try:
+            rule = selection.load_rule(path)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            QMessageBox.warning(self, "ルールを読めません", str(error))
+            return
+        answer = QMessageBox.question(
+            self,
+            "ルールを読み込む",
+            f"画面の設定を {path} の内容に置き換えます。保存していない変更は消えます。",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.rule_path = path
+        self._use_rule(rule)
+        self.status.setText(f"ルールを読み込みました: {path}。結果に効かせるには「{CHOOSE_LABEL}」を押してください。")
+
+    def _rule_to_save(self) -> Optional[Dict[str, Any]]:
+        """画面の設定から書くルールを作る。読めない値があれば知らせて None。"""
         if not self._period_is_readable():
-            return
+            return None
         rule = self.current_rule()
         try:
             selection.rule_weights(rule)
             selection.year_limits(rule)
         except ValueError as error:
             QMessageBox.warning(self, "設定を読めません", str(error))
+            return None
+        return rule
+
+    def _write_rule_to(self, path: str, rule: Dict[str, Any]) -> None:
+        try:
+            write_rule(path, rule)
+        except OSError as error:
+            QMessageBox.warning(self, "保存できません", str(error))
+            return
+        self.rule_path = path
+        self.rule = rule
+        self._show_retired_keys()
+        self._show_rule_file()
+        self.status.setText(f"ルールを保存しました: {path}")
+
+    def save_rule(self) -> None:
+        """いまのファイルに上書きする。**書く前に控え（``.bak``）を取る。** YAML のコメントは消える。"""
+        if not self.rule_path:
+            self.save_rule_as()  # 上書きする先が無いので、保存先を聞く
+            return
+        rule = self._rule_to_save()
+        if rule is None:
             return
         answer = QMessageBox.question(
             self,
             "ルールを保存",
-            f"{self.rule_path} に書きます。もとのファイルは {self.rule_path}.bak に控えます。"
+            f"{self.rule_path} に上書きします。もとのファイルは {self.rule_path}.bak に控えます。"
             "ファイル内のコメントは消えます。",
         )
         if answer != QMessageBox.Yes:
             return
-        write_rule(self.rule_path, rule)
-        self.rule = rule
-        self._show_retired_keys()
-        self.status.setText(f"ルールを保存しました: {self.rule_path}")
+        self._write_rule_to(self.rule_path, rule)
+
+    def save_rule_as(self) -> None:
+        """保存先を選んで書く（#18）。以後はそのファイルを読み書きする。設定の `rule_path` は書き換えない。
+
+        既にあるファイルを選んだときの確認は、ファイルを選ぶ窓が出す。そのときも ``.bak`` は取る。
+        """
+        rule = self._rule_to_save()
+        if rule is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "別のファイルに保存", self._rule_folder(), RULE_FILE_FILTER)
+        if not path:
+            return
+        # 拡張子を打たなくても、読み込める名前にする
+        if Path(path).suffix.lower() not in RULE_FILE_SUFFIXES:
+            path += RULE_FILE_SUFFIXES[0]
+        self._write_rule_to(path, rule)
 
     def export(self) -> None:
         """選んだ写真を出力先へコピーする（CLI の `select` と同じ。前の出力は消える）。"""

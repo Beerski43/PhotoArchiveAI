@@ -143,6 +143,174 @@ def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatc
     assert saved["family_only"] is True
 
 
+def _yes(monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+
+
+def _pick_file(monkeypatch, path):
+    """ファイルを選ぶ窓で ``path`` を選ぶ（空文字は取り消し）。"""
+    for name in ("getOpenFileName", "getSaveFileName"):
+        monkeypatch.setattr(gui_select.QFileDialog, name, lambda *args, **kwargs: (str(path), ""))
+
+
+def test_loading_a_rule_file_replaces_the_screen_and_becomes_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    """**読み込んだファイルが以後の保存先になる**（#18）。もとのファイルにも設定にも書かない。年の表も新しい枚数から。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    panel.refresh_years()
+    panel.weight_spins["smile"].setValue(0.9)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\ncount_per_year: 3\ndate:\n  start: 2019-01-01\n", encoding="utf-8")
+    original = rule_path.read_text(encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    panel.load_rule_file()
+
+    assert panel.rule_path == str(other)
+    assert other.name in panel.rule_file_label.text()
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+    assert panel.period_start.text() == "2019-01-01"
+    assert panel._year_values()[2019] == 3
+    panel.weight_spins["smile"].setValue(0.5)
+    panel.save_rule()
+    assert selection.load_rule(str(other))["weights"]["smile"] == pytest.approx(0.5)
+    assert rule_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["weights: [\n", "- not-a-mapping\n", "weights:\n  smile: -1\n"],
+    ids=["broken-yaml", "not-a-dict", "bad-weight"],
+)
+def test_an_unreadable_rule_file_leaves_the_screen_as_it_was(window, rule_path, tmp_path, monkeypatch, text):
+    """読めないファイルでは知らせるだけ。**動かした値も保存先もそのまま。** 壊れた YAML で落ちない。"""
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    panel = window.selection
+    panel.weight_spins["smile"].setValue(0.9)
+    bad = tmp_path / "bad.yml"
+    bad.write_text(text, encoding="utf-8")
+    _pick_file(monkeypatch, bad)
+
+    panel.load_rule_file()
+
+    assert len(warnings) == 1
+    assert panel.rule_path == str(rule_path)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.9)
+
+
+def test_declining_or_cancelling_a_load_changes_nothing(window, rule_path, tmp_path, monkeypatch):
+    panel = window.selection
+    panel.weight_spins["smile"].setValue(0.9)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+    _pick_file(monkeypatch, "")
+    panel.load_rule_file()
+
+    assert panel.rule_path == str(rule_path)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.9)
+
+
+def test_saving_to_another_file_leaves_the_original_and_becomes_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    """**別のファイルに保存しても、もとのファイルは変わらない**（#18）。以後の上書きは新しいファイルへ。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    panel.refresh_years()
+    panel.weight_spins["smile"].setValue(0.5)
+    original = rule_path.read_text(encoding="utf-8")
+    target = tmp_path / "movie.yml"
+    _pick_file(monkeypatch, target)
+
+    panel.save_rule_as()
+
+    assert selection.load_rule(str(target))["weights"]["smile"] == pytest.approx(0.5)
+    assert rule_path.read_text(encoding="utf-8") == original
+    assert panel.rule_path == str(target)
+    assert target.name in panel.rule_file_label.text()
+    assert not Path(str(target) + ".bak").exists(), "新しいファイルに控えは要らない"
+
+    panel.weight_spins["smile"].setValue(0.75)
+    panel.save_rule()
+    assert selection.load_rule(str(target))["weights"]["smile"] == pytest.approx(0.75)
+    assert rule_path.read_text(encoding="utf-8") == original
+    assert Path(str(target) + ".bak").exists()
+
+
+def test_saving_to_another_file_adds_a_readable_suffix_and_backs_up_an_existing_file(window, tmp_path, monkeypatch):
+    panel = window.selection
+    _pick_file(monkeypatch, tmp_path / "plain")
+    panel.save_rule_as()
+    assert panel.rule_path == str(tmp_path / "plain.yml")
+    selection.load_rule(panel.rule_path)
+
+    existing = tmp_path / "existing.yaml"
+    existing.write_text("# 残す\n", encoding="utf-8")
+    _pick_file(monkeypatch, existing)
+    panel.save_rule_as()
+    assert panel.rule_path == str(existing)
+    assert "残す" in Path(str(existing) + ".bak").read_text(encoding="utf-8")
+
+
+def test_cancelling_save_as_or_failing_to_write_keeps_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    panel = window.selection
+    _pick_file(monkeypatch, "")
+    panel.save_rule_as()
+    assert panel.rule_path == str(rule_path) and not warnings
+
+    _pick_file(monkeypatch, tmp_path / "no-such-folder" / "rule.yml")
+    panel.save_rule_as()
+    assert panel.rule_path == str(rule_path)
+    assert len(warnings) == 1
+
+
+def test_saving_without_a_rule_file_asks_where(database, tmp_path, monkeypatch):
+    window = gui.AppWindow(str(database), rule_path=None, output_root=str(tmp_path / "out"))
+    target = tmp_path / "new.yml"
+    _pick_file(monkeypatch, target)
+    window.selection.save_rule()
+    assert window.selection.rule_path == str(target) and target.exists()
+    window.close()
+
+
+def test_a_loaded_file_survives_saving_the_settings_with_the_same_rule_path(window, rule_path, tmp_path, monkeypatch):
+    """設定の窓の保存は `set_paths` を呼ぶ。設定のルールを変えていなければ、読み込んだファイルを戻さない。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+
+    assert not panel.set_paths(str(rule_path), str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(other)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+
+    # 設定のルールを変えたら、そちらが効く
+    changed = tmp_path / "changed.yml"
+    changed.write_text("weights:\n  smile: 0.1\n", encoding="utf-8")
+    assert panel.set_paths(str(changed), str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(changed)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.1)
+
+
+def test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing(database, tmp_path, monkeypatch):
+    """本筋の外だが直した。構文の壊れた YAML は ValueError ではないので、起動ごと落ちていた。"""
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    rule = tmp_path / "broken.yml"
+    rule.write_text("weights: [\n", encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path=str(rule), output_root=str(tmp_path / "out"))
+    assert len(warnings) == 1
+    assert window.selection.rule == {}
+    window.close()
+
+
 def test_the_breakdown_adds_up_to_the_score(window):
     """点の内訳の合計が、並びに使った点と一致する（なぜその順位かを見せる）。"""
     panel = window.selection
@@ -749,34 +917,78 @@ def _wheel(widget, notches=-1):
                         QPoint(0, 120 * notches), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
                         False)
     QApplication.sendEvent(widget, event)
+    return event
 
 
-def test_a_gauge_ignores_the_wheel_unless_focused(window):
-    """**設定欄をホイールでスクロールしても、マウスの下の重みが変わらない**（PR #122 のレビュー指摘1）。
+def _settings_inputs(panel):
+    """設定欄にある、ホイールで値の動く部品すべて（年の表の欄も）。"""
+    from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox, QComboBox, QScrollArea
 
-    ゲージと入力欄はフォーカスが無ければホイールを受けない。クリックかタブで選んだときだけ動く。
+    inner = panel.findChild(QScrollArea).widget()
+    found = []
+    for kind in (QAbstractSpinBox, QAbstractSlider, QComboBox):
+        # 表やスクロール領域が持つスクロールバーも QAbstractSlider だが、値の入力欄ではない
+        found += [w for w in inner.findChildren(kind) if type(w).__name__ != "QScrollBar"]
+    return found
+
+
+def _input_value(widget):
+    return widget.currentIndex() if hasattr(widget, "currentIndex") else widget.value()
+
+
+@pytest.mark.parametrize("focused", [False, True], ids=["pointer-only", "after-clicking"])
+def test_the_wheel_never_changes_a_value_in_the_settings_column(window, focused):
+    """**設定欄をスクロールしても、マウスの下の値が変わらない**（#18・PR #122 のレビュー指摘1）。
+
+    利用者「スクロールしていると、たまたまポインタが、どこかしらの入力欄に重なって、その値が
+    スクロールされたものと認識されて変わってしまう」。年の表の欄は素の `QSpinBox` のままで、
+    それ以外もクリックしたあとはホイールで動いていた。**全部の部品を見るので、足した欄も見張られる。**
     """
     panel = window.selection
     window.tabs.setCurrentWidget(panel)
     window.show()
+    panel.refresh_years()
     QApplication.processEvents()
-    panel.weight_rows["smile"].reset_button.setFocus()
-    before = panel.current_rule()["weights"]
-    for key in ("technical", "aesthetic"):
-        row = panel.weight_rows[key]
-        assert not row.slider.hasFocus() and not row.spin.hasFocus()
-        _wheel(row.slider)
-        _wheel(row.spin)
-    _wheel(panel.number_rows["similar_distance"].slider)
-    _wheel(panel.number_spins["similar_distance"])
-    assert panel.current_rule()["weights"] == before
-    assert panel.number_spins["similar_distance"].value() == selection.RULE_NUMBERS["similar_distance"]
+    inputs = _settings_inputs(panel)
+    assert panel.year_table.rowCount() > 0
+    assert panel.year_table.cellWidget(0, 2) in inputs
+    assert panel.fill_spin in inputs and panel.layout_combo in inputs
 
-    technical = panel.weight_rows["technical"]
-    technical.slider.setFocus()
+    for widget in inputs:
+        # 真ん中の値に置く（端の値だと、向きによっては元から動かず、テストが素通りする）
+        if hasattr(widget, "currentIndex"):
+            widget.setCurrentIndex(0)
+        else:
+            widget.setValue(type(widget.value())((widget.minimum() + widget.maximum()) / 2))
+    for widget in inputs:
+        if focused:
+            widget.setFocus()
+            QApplication.processEvents()
+        before = _input_value(widget)
+        event = _wheel(widget)
+        assert _input_value(widget) == before, f"{type(widget).__name__} の値がホイールで動いた"
+        # 受けなければ Qt が親へ送り、スクロールになる（テストから送るイベントは親へ伝わらないので、受けないことを見る）
+        assert not event.isAccepted(), f"{type(widget).__name__} がホイールを受けた"
+
+
+def test_the_sharpness_gauge_still_takes_the_wheel_after_clicking(window):
+    """顔の割り当てタブの鮮明さは**スクロール領域の外**で、絞り込みをホイールで調整できる（#135）。設定欄とは扱いが違う。"""
+    faces = window.assignment
+    window.tabs.setCurrentWidget(faces)
+    window.show()
+    faces.blur_check.setChecked(True)
+    faces.blur_spin.setValue(30)
+    faces.blur_check.setFocus()
     QApplication.processEvents()
-    _wheel(technical.slider)
-    assert panel.weight_spins["technical"].value() != pytest.approx(before["technical"]), "選んだゲージは動く"
+
+    _wheel(faces.blur_slider)
+    assert faces.blur_spin.value() == 30, "上を通っただけでは動かない"
+
+    faces.blur_slider.setFocus()
+    QApplication.processEvents()
+    assert faces.blur_slider.hasFocus()
+    _wheel(faces.blur_slider)
+    assert faces.blur_spin.value() != 30, "選んだゲージは動く"
 
 
 def test_the_panel_says_which_old_weight_keys_were_skipped(database, tmp_path, monkeypatch):
