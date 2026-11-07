@@ -2095,6 +2095,7 @@ def assign_faces(
     """顔を人物へ割り当てる。
 
     ``age`` を省くと年齢は触らない。``None`` を明示すると未設定へ戻す。
+    **辞書（顔 id → 年齢）を渡すと、顔ごとに別の年齢を入れる**（#18。辞書に無い顔は未設定）。
     ``progress`` を渡すと ``(終わった件数, 全体の件数)`` を知らせる。
     """
     if not face_ids:
@@ -2112,8 +2113,10 @@ def assign_faces(
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
             " assign_rule = NULL, penalize = NULL, assigned_at = ?, age = ? WHERE id = ?"
         )
+        age_of = age.get if isinstance(age, dict) else (lambda _face_id: age)
         rows = [
-            (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
+            (person_id, assign_source, assign_score, now, age_of(face_id), face_id)
+            for face_id in face_ids
         ]
     affected = _executemany_with_progress(cursor, statement, rows, progress)
     connection.commit()

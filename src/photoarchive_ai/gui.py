@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -39,6 +41,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -48,7 +52,7 @@ from . import config, db, face, gui_theme, matcher, migration, recommend, scorin
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
-from .gui_select import DATE_FIRST_YEAR, DATE_UNSET, DateBoxes, WheelSafeSlider, WheelSafeSpinBox
+from .gui_select import DATE_FIRST_YEAR, DATE_UNSET, DateBoxes, NoWheelSpinBox, WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -58,6 +62,8 @@ from .config import find_settings_path
 from .dates import Taken, age_at, as_taken, calculate_age, format_taken, parse_date, taken_at  # noqa: F401
 
 PAGE_SIZE = 200
+#: 年齢を確かめる窓の1行のサムネイルの大きさ。
+AGE_ROW_THUMBNAIL = 64
 THUMBNAIL_SIZE = 120
 
 #: 顔の一覧の1枠の大きさ。**サムネイルの寸法に任せない。**
@@ -1267,6 +1273,117 @@ class FaceAgeDialog(QDialog):
     def age(self) -> Optional[int]:
         value = self.age_input.value()
         return None if value < 0 else value
+
+
+def computed_ages(
+    birth_date: Optional[str], taken_by_face: Dict[int, Optional[Taken]]
+) -> Dict[int, Optional[int]]:
+    """顔ごとに、誕生日と撮影時期から計算した年齢。**出せない顔と誕生前の顔は ``None``**（`suggested_age` と同じ）。"""
+    ages: Dict[int, Optional[int]] = {}
+    for face_id, taken in taken_by_face.items():
+        age = age_at(birth_date, as_taken(taken))
+        ages[face_id] = None if age is None or age < 0 else age
+    return ages
+
+
+def format_taken_cell(taken: Optional[Taken]) -> str:
+    """一覧の1行に出す撮影時期。フォルダ名から推測した時期はそう分かる形で。"""
+    if taken is None:
+        return "撮影日時 不明"
+    return format_taken(taken) or taken.earliest.strftime("%Y-%m-%d %H:%M")
+
+
+class FaceAgesDialog(QDialog):
+    """**年齢の揃わない顔をまとめて割り当てるときの確認**（#18）。
+
+    利用者「各写真の年齢を表示させて、その年齢で登録してよいかを問う形にしてほしい。写真が多すぎるときでも
+    スクロールで見える形にして」。以前は `未設定` の欄1つで開き、入れた年齢が全件に入った。
+
+    **計算した年齢は初期値で、押して初めて入る**（`FaceAgeDialog` と同じ・Issue #48 の判断2）。欄で直せる。
+    **欄はホイールで変わらない**（一覧をスクロールするだけで年齢が変わらないように）。
+    サムネイルはレコードの持っている分だけ使う（1ページ分しか選べないので多くても `PAGE_SIZE`）。
+    """
+
+    def __init__(
+        self,
+        parent,
+        person_name: str,
+        records: Sequence[dict],
+        taken_by_face: Dict[int, Optional[Taken]],
+        ages: Dict[int, Optional[int]],
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("写真ごとの年齢を確かめる")
+        unknown = sum(age is None for age in ages.values())
+        text = (
+            f"選んだ {len(records):,} 件は年齢が揃っていません。{person_name} の誕生日と撮影日時から計算した年齢です。"
+            "\nこの年齢で登録してよければ、そのまま押してください（欄で直せます）。"
+        )
+        if unknown:
+            text += f"\n{unknown:,} 件は年齢を出せないので `未設定` です。"
+        summary = QLabel(text)
+        summary.setWordWrap(True)
+
+        self.table = QTableWidget(len(records), 3)
+        self.table.setHorizontalHeaderLabels(["写真", "撮影日時", "年齢"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setIconSize(QSize(AGE_ROW_THUMBNAIL, AGE_ROW_THUMBNAIL))
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.age_inputs: Dict[int, QSpinBox] = {}
+        # 撮影時期の順に並べる。分からない顔は最後（直す顔がまとまる）
+        ordered = sorted(
+            records,
+            key=lambda record: (
+                taken_by_face.get(record["id"]) is None,
+                taken_by_face[record["id"]].earliest if taken_by_face.get(record["id"]) else None,
+                record["id"],
+            ) if taken_by_face.get(record["id"]) else (True, 0, record["id"]),
+        )
+        for row, record in enumerate(ordered):
+            face_id = record["id"]
+            picture = QTableWidgetItem()
+            pixmap = QPixmap()
+            pixmap.loadFromData(record.get("thumbnail") or b"")
+            if not pixmap.isNull():
+                picture.setIcon(pixmap)
+            self.table.setItem(row, 0, picture)
+            self.table.setItem(row, 1, QTableWidgetItem(format_taken_cell(taken_by_face.get(face_id))))
+            spin = NoWheelSpinBox()
+            # 最小値を「未設定」に当てる（`FaceAgeDialog` と同じ。0歳と区別する）
+            spin.setRange(-1, 150)
+            spin.setSpecialValueText("未設定")
+            spin.setSuffix(" 歳")
+            age = ages.get(face_id)
+            spin.setValue(-1 if age is None else age)
+            spin.focusInEvent = _make_select_all_on_focus(spin)
+            self.age_inputs[face_id] = spin
+            self.table.setCellWidget(row, 2, spin)
+            self.table.setRowHeight(row, AGE_ROW_THUMBNAIL + 8)
+
+        buttons = QDialogButtonBox()
+        self.register_button = buttons.addButton("この年齢で登録", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.register_button.setProperty("look", "primary")
+        self.cancel_button = buttons.addButton("やめる", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(summary)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(buttons)
+        self.resize(560, 640)
+
+    def ages(self) -> Dict[int, Optional[int]]:
+        """顔 id → 年齢（`未設定` は ``None``）。"""
+        return {
+            face_id: None if spin.value() < 0 else spin.value() for face_id, spin in self.age_inputs.items()
+        }
 
 
 #: 「割り当て済みの顔」の種別の絞り込み。**(表示, `assign_source` に渡す値)**。
@@ -3293,7 +3410,7 @@ class MainWindow(QWidget):
     ) -> int:
         """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。
 
-        ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。
+        ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。辞書なら顔ごとの年齢。
         """
         return db.assign_faces(
             self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age, progress=progress
@@ -3316,6 +3433,21 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if not face_ids:
             QMessageBox.information(self, "選択なし", "割り当てる顔を選択してください。")
+            return
+        # **年齢が揃わなければ、写真ごとの年齢を見せて確かめる**（#18）
+        taken_by_face = db.taken_by_face(self.connection, face_ids)
+        ages = computed_ages(person.get("birth_date"), {face_id: taken_by_face.get(face_id) for face_id in face_ids})
+        if len(set(ages.values())) > 1:
+            dialog = FaceAgesDialog(self, person["name"], self._selected_records(), taken_by_face, ages)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            per_face = dialog.ages()
+            self._run_with_progress(
+                f"{person['name']} に割り当てています",
+                face_ids,
+                lambda progress: self.assign_faces(face_ids, person["id"], per_face, progress=progress),
+                f"完了 — {len(face_ids)} 件を {person['name']} に登録しました",
+            )
             return
         # **まとめて選ぶのは、この割り当てのときがいちばん多い。**
         shooting_dates = db.taken_for_faces(self.connection, face_ids)

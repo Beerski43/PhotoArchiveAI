@@ -37,7 +37,7 @@
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
-| `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
+| `test_assigning_several_faces_of_different_ages_asks_face_by_face` | 年齢が揃わないまとめての割り当ては、写真ごとの年齢を確かめる窓が開く（#18）。`年齢を設定…` の知らせの文も見る |
 | `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces`（いまの `taken_for_faces`）が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
@@ -707,7 +707,7 @@
 | `test_the_suggested_age_needs_every_selected_face_to_agree` | **食い違うなら初期値を出さない**（1回の入力が全件に入る） |
 | `test_the_age_dialog_opens_with_the_calculated_age` | 計算値を初期値に入れ、計算値だと画面に書く |
 | `test_assigning_faces_offers_the_calculated_age_without_saving_it` | **自動保存はしない。** 取り消せば何も入らない |
-| `test_assigning_several_faces_warns_that_one_age_covers_them_all` | まとめて割り当てるときにも、全件に入る旨とまたがりを知らせる |
+| `test_assigning_several_faces_of_different_ages_asks_face_by_face` | 年齢が揃わないまとめての割り当ては、写真ごとの年齢を確かめる窓が開く（#18）。`年齢を設定…` の知らせの文も見る |
 | `test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **「分からない」を「反対しない」にしない。** 日時の無い顔が1件でもあれば初期値を出さない |
 | `test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken` | 壊れた EXIF も「分からない」として扱う |
 | `test_the_selection_notice_says_how_many_dates_are_unknown` | 初期値が入らない理由（不明な件数）を出す |
@@ -1176,6 +1176,19 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_a_range_that_is_not_on_offer_is_refused` | 無い年月は `ValueError` |
 | `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
 | `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
+
+### `test_gui_face_ages.py` — 年齢の揃わない顔をまとめて割り当てる（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_faces_with_different_ages_are_shown_one_by_one_and_registered` | **写真ごとの年齢を出し、その年齢で登録する** |
+| `test_each_row_shows_the_picture_the_date_and_the_age` | 各行に写真・撮影日時・年齢。撮影時期の順で、分からない顔は最後。誕生前と不明は `未設定` |
+| `test_an_age_can_be_corrected_in_the_list` | 欄で直せる。直さない顔は計算した年齢のまま |
+| `test_declining_assigns_nothing` | やめると何も変わらない |
+| `test_undo_takes_back_the_ages_as_well` | 元に戻すと年齢も戻る |
+| `test_one_face_uses_the_usual_dialog` / `test_faces_of_the_same_age_use_the_usual_dialog` | 1件や年齢が揃うときは、いままでの窓 |
+| `test_many_faces_scroll_and_the_wheel_does_not_change_an_age` | **多くてもスクロールで全部見える。** 欄の上のホイールで年齢が変わらない |
+| `test_the_database_takes_an_age_for_each_face` | `db.assign_faces` は顔ごとの年齢を受け取れる |
 
 ### `test_gui_face_scroll.py` — 顔の一覧のスクロールの場所（#18）
 

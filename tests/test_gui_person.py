@@ -938,8 +938,8 @@ def test_assigning_faces_offers_the_calculated_age_without_saving_it(window, mon
     assert db.list_faces(window.connection, with_thumbnail=False)[0]["person_id"] is None
 
 
-def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monkeypatch):
-    """#41 で入れた知らせが、**まとめて選ぶことがいちばん多い場所**にも出る。"""
+def test_assigning_several_faces_of_different_ages_asks_face_by_face(window, monkeypatch):
+    """年齢が揃わないまとめての割り当ては、写真ごとの年齢を見せて確かめる（#18。以前は1つの欄で全件に入れていた）。"""
     connection = window.connection
     older = db.save_media(
         connection,
@@ -964,20 +964,11 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
     connection.commit()
     window.reload_faces()
 
-    opened = {}
-
-    class _FakeAgeDialog:
-        def __init__(self, parent=None, summary="", initial_age=None):
-            opened["summary"] = summary
-            opened["initial_age"] = initial_age
-
-        def exec(self):
-            return QDialog.Rejected
-
-        def age(self):
-            return None
-
-    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
+    opened = []
+    monkeypatch.setattr(
+        photoarchive_gui.FaceAgesDialog, "exec", lambda self: opened.append(self.ages()) or QDialog.Rejected
+    )
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", lambda *a, **k: pytest.fail("1つの欄で開いた"))
     db.update_person(
         connection,
         db.list_persons(connection)[0]["id"],
@@ -988,13 +979,19 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
     )
     window._reload_person_list()
     window.face_list.selectAll()
+    face_ids = window._selected_face_ids()
 
     _assign_to(window)
 
-    assert "2 件すべてに同じ年齢を入れます" in opened["summary"]
-    assert "2012-01-01 〜 2017-12-16 にまたがっています" in opened["summary"]
-    # 年をまたいでいるので、初期値は出さない
-    assert opened["initial_age"] is None
+    # 年をまたいで年齢が揃わないので、写真ごとの年齢を確かめる窓が開く（#18）
+    assert sorted(opened[0].values()) == [31, 37]
+    # 1つの年齢を全件に入れる `年齢を設定…` の窓には、知らせが出る
+    summary = photoarchive_gui.summarize_selection(2, db.taken_for_faces(connection, face_ids))
+    assert "2 件すべてに同じ年齢を入れます" in summary
+    assert "2012-01-01 〜 2017-12-16 にまたがっています" in summary
+    assert (
+        photoarchive_gui.suggested_age("1980-01-02", db.taken_for_faces(connection, face_ids)) is None
+    ), "年をまたいでいるので、初期値は出さない"
 
 
 # ---------------------------------------------------------------------------
