@@ -1172,11 +1172,31 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
 | `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
 
+### `test_gui_face_scroll.py` — 顔の一覧のスクロールの場所（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_an_operation_keeps_the_scroll_position` | **顔を処理しても一覧の場所が動かない** |
+| `test_an_operation_that_removes_faces_keeps_the_scroll_position` | 顔が一覧から消える操作でも保つ |
+| `test_undo_keeps_the_scroll_position` | 元に戻しても保つ |
+| `test_the_position_is_clamped_when_the_list_gets_shorter` | 短くなって届かなければ、いちばん下 |
+| `test_moving_to_another_page_or_view_starts_from_the_top` | ページや並びを変えたら先頭から（ページを送っても下のままだった） |
+
 ### `test_gui_theme.py` — GUI の見た目（#18）
 
 | テスト | 何を確認するか |
 |---|---|
-| `test_every_name_in_the_stylesheet_is_filled_in` | 色の名前の置き換え忘れが無い（Qt は黙ってその行を捨てる） |
+| `test_every_name_in_the_stylesheet_is_filled_in` | 色の名前の置き換え忘れが無い（Qt は黙ってその行を捨てる。両モード） |
+| `test_both_themes_name_the_same_colors` | ライトとダークの色の名前が同じ |
+| `test_the_text_is_readable_in_both_themes` | 文字と地のコントラストが両モードで 4.5 以上 |
+| `test_switching_the_mode_takes_effect_at_once_and_is_remembered` | **再起動なしで切り替わり、設定ファイルに残る**（ほかのキーは残す） |
+| `test_switching_back_and_forth_with_the_windows_open_does_not_crash` | **窓を開いたまま切り替えても落ちない**（QSS のあとの `setStyle` で Qt ごと落ちていた） |
+| `test_the_window_opens_with_the_mode_from_the_settings` | 設定のモードでメニューの印が付く |
+| `test_choosing_the_same_mode_does_not_rewrite_the_settings` | 同じモードなら書かない |
+| `test_a_settings_file_that_cannot_be_written_still_switches_the_mode` | 設定に書けなくても切り替える。壊れた設定は上書きしない |
+| `test_auto_follows_the_operating_system` / `test_when_the_os_changes_only_auto_follows` | `auto` は OS に合わせる（不明なら明るい方）。選んだモードは OS で変えない |
+| `test_the_theme_setting_is_read` / `test_an_unreadable_theme_setting_warns_and_uses_auto` | 設定の `theme`。読めない値は警告して `auto` |
+| `test_each_theme_renders_with_its_own_window_color` | 実際に描いて、窓の地が各モードの色になる |
 | `test_the_arrow_images_exist_and_can_be_read` / `test_the_arrow_images_are_packaged` | 矢印の SVG が読めて、配布物に入る（無いと数値欄と選択欄の矢印が消える） |
 | `test_applying_the_theme_gives_no_stylesheet_warnings` | 画面を出しても QSS の警告が出ない |
 | `test_the_theme_applies_the_palette_and_the_stylesheet` | パレットと QSS がアプリに効く |

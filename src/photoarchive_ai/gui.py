@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Union
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face, gui_theme, matcher, migration, recommend, scoring, selection, undo
+from . import config, db, face, gui_theme, matcher, migration, recommend, scoring, selection, undo
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
@@ -3045,9 +3045,15 @@ class MainWindow(QWidget):
     def _reset_page(self):
         self.page = 0
         self._sync_bulk_controls()
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
-    def reload_faces(self):
+    def reload_faces(self, keep_position: bool = True):
+        """顔の一覧を作り直す。
+
+        **同じ一覧を作り直すときは、スクロールの場所を保つ**（#18・利用者「顔を右クリックで何かしら実行すると、
+        一覧が勝手に中央付近に移動する」）。ページや表示を変えるときは ``keep_position=False`` で先頭から。
+        """
+        position = self.face_list.verticalScrollBar().value() if keep_position else 0
         filters = self._filter_arguments()
         order = self._current_order()
         self.similarity_teachers = None
@@ -3103,6 +3109,9 @@ class MainWindow(QWidget):
             or order in (db.ORDER_SHARPNESS_ASC, db.ORDER_SHARPNESS_DESC),
             points=points if points is not None else selection.face_points(self.connection, records, weights),
         )
+        # 項目の配置は後回しにされるので、先に済ませる（済むまでスクロールの上限が決まらない）
+        self.face_list.doItemsLayout()
+        self.face_list.verticalScrollBar().setValue(position)
         # **桁を区切る。** 実データは万単位（未分類 31,275 件）で、
         # 区切らないと桁が読み取れない。
         text = f"{self.page + 1} / {pages:,} ページ（全 {total:,} 件）"
@@ -3182,11 +3191,11 @@ class MainWindow(QWidget):
 
     def _previous_page(self):
         self.page = max(0, self.page - 1)
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
     def _next_page(self):
         self.page += 1
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
     def _selected_records(self) -> List[dict]:
         return [item.data(Qt.UserRole) for item in self.face_list.selectedItems()]
@@ -3573,12 +3582,14 @@ class AppWindow(QMainWindow):
         source_roots: SourceRoots = None,
         rule_path: Optional[str] = None,
         output_root: Optional[str] = None,
+        theme_mode: str = "auto",
     ):
         super().__init__()
         from .gui_evaluate import EvaluateWindow
         from .gui_scan import AssessWindow, ImportWizard, JobController, JobStatusBar
         from .gui_select import SelectionPanel
 
+        self.theme_mode = theme_mode
         self.assignment = MainWindow(database_path, source_roots=source_roots)
         roots = self.assignment.source_roots
         if isinstance(roots, str):
@@ -3604,6 +3615,7 @@ class AppWindow(QMainWindow):
         self.jobs.finished.connect(self._job_finished)
         self.tabs.currentChanged.connect(lambda _index: self._sync_menus())
         self.tabs.currentChanged.connect(lambda _index: self._refresh_points_if_shown())
+        QApplication.styleHints().colorSchemeChanged.connect(self._color_scheme_changed)
         # 顔の点は「選ぶ」と同じく、写真の選定タブの画面の重みで出す（#18）
         self.assignment.face_weights = self.selection.current_weights
         self.assignment.refresh_points()
@@ -3652,6 +3664,35 @@ class AppWindow(QMainWindow):
         self.settings_action = self.settings_menu.addAction("設定…")
         self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先（config/app_settings.yml）")
         self.settings_action.triggered.connect(self.open_settings)
+        # 表示モード（#18）。押すとすぐ切り替わり、次に起動したときも同じ
+        theme_menu = self.settings_menu.addMenu("表示モード")
+        group = QActionGroup(self)
+        self.theme_actions = {}
+        for mode, label in (("auto", "OS に合わせる"), ("light", "ライト"), ("dark", "ダーク")):
+            action = theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(mode == self.theme_mode)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, chosen=mode: self.set_theme(chosen))
+            self.theme_actions[mode] = action
+
+    def set_theme(self, mode: str) -> None:
+        """表示モードを切り替えて、設定ファイルに残す。**書けなくても切り替えは取り消さない**（知らせるだけ）。"""
+        if mode == self.theme_mode:
+            return
+        self.theme_mode = mode
+        gui_theme.apply(QApplication.instance(), mode)
+        try:
+            config.write_settings(config.settings_write_path(), {"theme": mode})
+        except (OSError, config.SettingsWriteError) as error:
+            QMessageBox.warning(
+                self, "設定に書けません", f"次に起動したときは、前の表示モードに戻ります。\n{error}"
+            )
+
+    def _color_scheme_changed(self, _scheme=None) -> None:
+        """OS の明暗が変わったら追いかける。`OS に合わせる` のときだけ。"""
+        if self.theme_mode == "auto":
+            gui_theme.apply(QApplication.instance(), "auto")
 
     def _refresh_points_if_shown(self) -> None:
         if self.tabs.currentWidget() is self.assignment:
@@ -3834,6 +3875,7 @@ def main() -> None:
         get_output_root,
         get_rule_path,
         get_source_roots,
+        get_theme,
         legacy_settings_stop_message,
         load_settings,
     )
@@ -3859,7 +3901,7 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
-    gui_theme.apply(app)
+    gui_theme.apply(app, get_theme(settings))
     if not ensure_migrated(db_path):
         raise SystemExit("移行していないため、起動できません。")
     try:
@@ -3868,6 +3910,7 @@ def main() -> None:
             source_roots=source_roots,
             rule_path=get_rule_path(settings),
             output_root=get_output_root(settings),
+            theme_mode=get_theme(settings),
         )
     except db.SchemaVersionError as error:
         # `ensure_migrated` を通っても開けないとき（版が新しすぎる、など）。

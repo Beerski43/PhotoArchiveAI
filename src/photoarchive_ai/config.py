@@ -214,6 +214,19 @@ def get_rule_path(settings: Dict[str, Any]) -> Optional[str]:
     return settings.get("rule_path")
 
 
+#: GUI の表示モード（#18）。``auto`` は OS に合わせる。
+THEME_MODES = ("auto", "light", "dark")
+
+
+def get_theme(settings: Dict[str, Any]) -> str:
+    """GUI の表示モード。無いときは ``auto``。**読めない値は警告して ``auto``**（見た目のことで起動を止めない）。"""
+    value = settings.get("theme", "auto")
+    if value in THEME_MODES:
+        return value
+    logger.warning("設定の theme は %s のどれかで書いてください: %r", " / ".join(THEME_MODES), value)
+    return "auto"
+
+
 def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
     """dlib の学習済みモデルを置いたディレクトリ(任意)。"""
     return settings.get("dlib_model_dir")
@@ -223,9 +236,9 @@ def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
 # 書き戻す（GUI の設定の窓・#131）
 # ----------------------------------------------------------------------
 
-#: GUI が直すキー。``rule_path`` は設定の窓ではなく、写真の選定のルールの読み込みと別名の保存が書く（#18）。
+#: GUI が直すキー。``rule_path`` は写真の選定のルールの読み込みと別名の保存が、``theme`` は表示モードのメニューが書く（#18）。
 #: **ほかのキー（``dlib_model_dir`` など）は書き戻すときもそのまま残す。**
-EDITABLE_KEYS = ("database_path", "source_roots", "output_root", "rule_path")
+EDITABLE_KEYS = ("database_path", "source_roots", "output_root", "rule_path", "theme")
 
 
 class SettingsWriteError(ValueError):

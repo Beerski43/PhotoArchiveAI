@@ -330,7 +330,7 @@ def test_moving_the_sharpness_slider_reloads_the_list_once(window, monkeypatch):
     window.blur_check.setChecked(True)
     calls = []
     real = window.reload_faces
-    monkeypatch.setattr(window, "reload_faces", lambda: (calls.append(1), real()))
+    monkeypatch.setattr(window, "reload_faces", lambda **kwargs: (calls.append(1), real(**kwargs)))
 
     window.blur_slider.sliderMoved.emit(40)
     assert calls == [] and window.blur_spin.value() == 40, "動かしている間は数値だけ"
