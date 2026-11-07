@@ -516,6 +516,76 @@ def test_the_layout_on_the_screen_comes_from_the_rule_and_is_saved(database, tmp
     window.close()
 
 
+def _pick(box, value):
+    box.setCurrentIndex(box.findData(value))
+
+
+def test_the_period_is_chosen_with_year_month_and_day_boxes(database, tmp_path):
+    """**撮影時期は年・月・日のコンボボックス**（#18・利用者の指定）。ルールの値が欄に割れて出る。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-03-04\n")
+    assert panel.period_start.parts() == (2018, 3, 4)
+    assert panel.period_end.parts() == (0, 0, 0)
+    assert panel.period_end.year.currentText() == "--"
+    _pick(panel.period_end.year, 2019)
+    _pick(panel.period_end.month, 2)
+    _pick(panel.period_end.day, 28)
+    assert panel._period_values() == ("2018-03-04", "2019-02-28")
+    assert panel.current_rule()["date"] == {"start": "2018-03-04", "end": "2019-02-28"}
+    window.close()
+
+
+def test_a_partly_chosen_period_covers_the_whole_year_or_month(database, tmp_path):
+    """年だけ・年月までも指定できる。**始めは初日から、終わりは末日まで**（うるう年も）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _pick(panel.period_start.year, 2018)
+    _pick(panel.period_end.year, 2020)
+    assert panel._period_values() == ("2018-01-01", "2020-12-31")
+    _pick(panel.period_start.month, 3)
+    _pick(panel.period_end.month, 2)
+    assert panel._period_values() == ("2018-03-01", "2020-02-29")
+    assert selection.period_problem(*panel._period_values()) is None
+    window.close()
+
+
+def test_the_month_and_day_wait_for_the_year_and_month(database, tmp_path):
+    """年が `--` なら月は押せず、月が `--` なら日は押せない。年を `--` に戻すと下も `--` に戻る。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    boxes = panel.period_start
+    assert not boxes.month.isEnabled() and not boxes.day.isEnabled()
+    _pick(boxes.year, 2018)
+    assert boxes.month.isEnabled() and not boxes.day.isEnabled()
+    _pick(boxes.month, 2)
+    assert boxes.day.isEnabled()
+    assert boxes.day.itemData(boxes.day.count() - 1) == 28, "実在する日だけ"
+    _pick(boxes.day, 28)
+    _pick(boxes.year, gui_select.DATE_UNSET)
+    assert boxes.parts() == (0, 0, 0)
+    assert boxes.text() == ""
+    assert not boxes.month.isEnabled() and not boxes.day.isEnabled()
+    window.close()
+
+
+def test_moving_a_period_box_rebuilds_the_year_table(database, tmp_path):
+    """欄を動かしたら年の表が作り直される（以前の入力欄の「確定したら」と同じ）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    panel.refresh_years()
+    assert "2018" in _rows(panel)
+    _pick(panel.period_start.year, 2019)
+    assert "2018" not in _rows(panel)
+    window.close()
+
+
+def test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched(database, tmp_path):
+    """**時刻付きの値を黙って変えない。** 欄には日付を出し、触るまでは元の値のまま。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: '2018-03-04T10:30:00'\n")
+    boxes = panel.period_start
+    assert boxes.parts() == (2018, 3, 4)
+    assert boxes.text() == "2018-03-04T10:30:00"
+    _pick(boxes.day, 5)
+    assert boxes.text() == "2018-03-05"
+    window.close()
+
+
 def test_the_period_comes_from_the_rule_quoted_or_not(database, tmp_path):
     # 引用符の無い日付は YAML が date で読む
     window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-01-01\n  end: '2018-12-31'\n")
@@ -564,6 +634,7 @@ def test_an_unreadable_period_is_shown_and_stops_choosing_and_saving(database, t
     window, panel, path = _rule_panel(database, tmp_path, "count_per_year: 5\n")
     _set_period(panel, start, end)
     assert panel.period_notice.text()
+    assert panel.period_start.text() == start and panel.period_end.text() == end, "読めない値を黙って消さない"
     panel.choose()
     panel.save_rule()
     assert len(warned) == 2 and not panel.selected
@@ -1244,7 +1315,8 @@ def test_the_wheel_never_changes_a_value_in_the_settings_column(window, focused)
         event = _wheel(widget)
         assert _input_value(widget) == before, f"{type(widget).__name__} の値がホイールで動いた"
         # 受けなければ Qt が親へ送り、スクロールになる（テストから送るイベントは親へ伝わらないので、受けないことを見る）
-        assert not event.isAccepted(), f"{type(widget).__name__} がホイールを受けた"
+        # 押せない欄（年が -- のときの月など）には Qt がホイールを渡さず、受けた印も変わらない
+        assert not event.isAccepted() or not widget.isEnabled(), f"{type(widget).__name__} がホイールを受けた"
 
 
 def test_the_sharpness_gauge_still_takes_the_wheel_after_clicking(window):

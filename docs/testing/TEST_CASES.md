@@ -646,6 +646,11 @@
 | `test_each_gauge_marks_its_default_value` | **ゲージの既定値の位置に印**（#18）。取っ手を動かしても印は動かない。右端より大きい既定値は印なし |
 | `test_the_mark_is_at_the_right_place_and_is_drawn` | 印の位置が左端・中央・右端で比例し、実際に描かれる |
 | `test_the_settings_column_fits_without_a_sideways_scroll` | 長い項目名を折り返し、設定欄に横スクロールが出ない（「既定」ボタンが切れない） |
+| `test_the_period_is_chosen_with_year_month_and_day_boxes` | **撮影時期は年・月・日のコンボボックス**（#18）。ルールの値が欄に割れて出る |
+| `test_a_partly_chosen_period_covers_the_whole_year_or_month` | 年だけ・年月までも指定でき、始めは初日から、終わりは末日まで |
+| `test_the_month_and_day_wait_for_the_year_and_month` | 年が `--` なら月は押せず、月が `--` なら日は押せない。日は実在する日だけ |
+| `test_moving_a_period_box_rebuilds_the_year_table` | 欄を動かすと年の表が作り直される |
+| `test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched` | 時刻付きの値は、欄を触るまで変えない |
 | `test_the_wheel_never_changes_a_value_in_the_settings_column` | **設定欄の入力部品はすべて、ホイールで値を変えない**（上を通っただけでも、クリックしたあとでも。年の表の欄も。設定欄をスクロールすると、マウスの下の値が黙って変わっていた。PR #122 のレビュー指摘1・#18）。イベントを受けず親へ渡す（スクロールになる）。部品を全部たどるので、足した欄も見張られる |
 | `test_the_sharpness_gauge_still_takes_the_wheel_after_clicking` | 顔の割り当てタブの鮮明さのゲージは、クリックしたあとならホイールで動く（設定欄とは扱いが違う・#135） |
 

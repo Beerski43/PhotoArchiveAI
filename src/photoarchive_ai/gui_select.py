@@ -25,13 +25,14 @@ CLI の `photoarchive select` は同じルールで同じ結果になる。
 from __future__ import annotations
 
 import shutil
+import calendar
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import yaml
 from PIL import Image, ImageOps
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -45,7 +46,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -113,7 +113,6 @@ LAYOUT_LABELS = {
     selection.OUTPUT_LAYOUT_FLAT: "出力先の直下（平らに）",
 }
 #: 期間の欄の空のときの文字（#134）。
-PERIOD_PLACEHOLDER = "指定なし（YYYY-MM-DD）"
 
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
@@ -392,6 +391,113 @@ class NoWheelComboBox(_NoWheel, QComboBox):
         self._init_wheel_guard()
 
 
+#: 年月日の欄で「指定なし」を表す値（`--` の値）。
+DATE_UNSET = 0
+#: 年の欄のいちばん古い年。
+DATE_FIRST_YEAR = 1900
+#: 年が `--` のときに日の数を決める年（うるう年。2月29日を選べるように）。
+_LEAP_YEAR = 2000
+
+
+class DateBoxes(QWidget):
+    """``[年]年 [月]月 [日]日`` のコンボボックス（#18・利用者の指定）。人物の誕生日と撮影時期で共通。
+
+    年は新しい順。**日の欄には、選んだ年月に実在する日だけ**を並べる。無くなった日は `--` に戻す
+    （末日へ丸めると違う日になる）。ホイールでは変わらない。
+
+    - ``cascade``: 年が `--` なら月を、月が `--` なら日を押せなくする（撮影時期。年だけ・年月までの指定ができる）
+    - ``end``: `text` で足りない部分を埋める向き。False は始め（1月1日）、True は終わり（12月31日・月末）
+    - **`setText` で入れた値は、欄を触るまでそのまま `text` で返す**（ルールの時刻付きの値や、読めない値を黙って
+      変えない。読めない値は欄が `--` のまま `selection.period_problem` が止める）
+    """
+
+    #: 利用者が欄を動かしたとき。`setText` と `set_parts` では出さない。
+    changed = Signal()
+
+    def __init__(self, cascade: bool = False, end: bool = False, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.cascade = cascade
+        self.end = end
+        self._raw: Optional[str] = None
+        self.year, self.month, self.day = NoWheelComboBox(), NoWheelComboBox(), NoWheelComboBox()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for box, unit in ((self.year, "年"), (self.month, "月"), (self.day, "日")):
+            box.setMaxVisibleItems(15)
+            layout.addWidget(box)
+            layout.addWidget(QLabel(unit))
+        layout.addStretch(1)
+        self.set_parts(DATE_UNSET, DATE_UNSET, DATE_UNSET)
+        for box in (self.year, self.month, self.day):
+            box.currentIndexChanged.connect(self._moved)
+
+    @staticmethod
+    def _fill(box: QComboBox, values: Iterable[int], keep: int) -> None:
+        """`--` と ``values`` を並べて ``keep`` を選ぶ。``keep`` が無ければ `--`。"""
+        blocked = box.blockSignals(True)
+        box.clear()
+        box.addItem("--", DATE_UNSET)
+        for value in values:
+            box.addItem(str(value), value)
+        box.setCurrentIndex(max(0, box.findData(keep)))
+        box.blockSignals(blocked)
+
+    def _fill_day(self, keep: int) -> None:
+        year, month = self.year.currentData(), self.month.currentData()
+        last = 31 if not month else calendar.monthrange(year or _LEAP_YEAR, month)[1]
+        self._fill(self.day, range(1, last + 1), keep)
+
+    def _sync_enabled(self) -> None:
+        if self.cascade:
+            self.month.setEnabled(bool(self.year.currentData()))
+            self.day.setEnabled(bool(self.month.currentData()))
+
+    def set_parts(self, year: int, month: int, day: int) -> None:
+        """欄に入れる（`DATE_UNSET` は `--`）。範囲の外の年も選択肢に足す（開いて保存しただけで消えないように）。"""
+        self._raw = None
+        years = set(range(DATE_FIRST_YEAR, date.today().year + 1)) | ({year} - {DATE_UNSET})
+        self._fill(self.year, sorted(years, reverse=True), year)
+        self._fill(self.month, range(1, 13), month)
+        self._fill_day(day)
+        self._sync_enabled()
+
+    def parts(self) -> tuple:
+        return self.year.currentData(), self.month.currentData(), self.day.currentData()
+
+    def setText(self, value: Any) -> None:  # noqa: N802（QLineEdit と同じ名前）
+        """ルールの値を入れる。読めれば欄に出す。**`YYYY-MM-DD` そのものでなければ、値を持っておく。**"""
+        text = "" if value is None else str(value).strip()
+        parsed = selection._parse_date(text) if text else None
+        if parsed is None:
+            self.set_parts(DATE_UNSET, DATE_UNSET, DATE_UNSET)
+        else:
+            self.set_parts(parsed.year, parsed.month, parsed.day)
+        self._raw = text if text and text != self._filled_text() else None
+
+    def text(self) -> str:
+        """ルールに書く値（`YYYY-MM-DD`）。年が `--` なら空。足りない部分は ``end`` の向きで埋める。"""
+        return self._raw if self._raw is not None else self._filled_text()
+
+    def _filled_text(self) -> str:
+        year, month, day = self.parts()
+        if not year:
+            return ""
+        if not month:
+            month, day = (12, 31) if self.end else (1, 1)
+        elif not day:
+            day = calendar.monthrange(year, month)[1] if self.end else 1
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    def _moved(self, *_args) -> None:
+        self._raw = None
+        if self.cascade and not self.year.currentData():
+            self._fill(self.month, range(1, 13), DATE_UNSET)
+        keep = self.day.currentData() if not self.cascade or self.month.currentData() else DATE_UNSET
+        self._fill_day(keep)
+        self._sync_enabled()
+        self.changed.emit()
+
+
 class DefaultMarkSlider(NoWheelSlider):
     """既定値の位置に縦の印を描くゲージ（#18・利用者の要望）。
 
@@ -554,14 +660,14 @@ class SelectionPanel(QWidget):
             weights_form.addRow(name, row)
         layout.addWidget(weights_box)
 
-        period_box = QGroupBox("撮影時期（空欄なら絞り込まない）")
+        period_box = QGroupBox("撮影時期（-- なら絞り込まない）")
         period_form = QFormLayout(period_box)
-        self.period_start = QLineEdit()
-        self.period_end = QLineEdit()
-        for edit in (self.period_start, self.period_end):
-            edit.setPlaceholderText(PERIOD_PLACEHOLDER)
-            edit.editingFinished.connect(self._period_changed)
-        self.period_end.setToolTip("その日の終わりまで含みます")
+        self.period_start = DateBoxes(cascade=True)
+        self.period_end = DateBoxes(cascade=True, end=True)
+        for boxes in (self.period_start, self.period_end):
+            boxes.changed.connect(self._period_changed)
+        self.period_start.setToolTip("日が -- ならその月の初日から、月も -- ならその年の1月1日から")
+        self.period_end.setToolTip("その日の終わりまで含みます。日が -- ならその月の末日まで、月も -- ならその年の12月31日まで")
         period_form.addRow("始め", self.period_start)
         period_form.addRow("終わり", self.period_end)
         self.period_notice = QLabel("")
