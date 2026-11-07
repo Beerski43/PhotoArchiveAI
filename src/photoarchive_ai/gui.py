@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -64,6 +65,8 @@ from .dates import Taken, age_at, as_taken, calculate_age, format_taken, parse_d
 PAGE_SIZE = 200
 #: 年齢を確かめる窓の1行のサムネイルの大きさ。
 AGE_ROW_THUMBNAIL = 64
+#: ツールバーのアイコンの大きさ。
+TOOLBAR_ICON = 20
 THUMBNAIL_SIZE = 120
 
 #: 顔の一覧の1枠の大きさ。**サムネイルの寸法に任せない。**
@@ -1320,7 +1323,7 @@ class FaceAgesDialog(QDialog):
             "\nこの年齢で登録してよければ、そのまま押してください（欄で直せます）。"
         )
         if unknown:
-            text += f"\n{unknown:,} 件は年齢を出せないので `未設定` です。"
+            text += f"\n{unknown:,} 件は年齢を出せないので「未設定」です。"
         summary = QLabel(text)
         summary.setWordWrap(True)
 
@@ -1364,7 +1367,12 @@ class FaceAgesDialog(QDialog):
             spin.setValue(-1 if age is None else age)
             spin.focusInEvent = _make_select_all_on_focus(spin)
             self.age_inputs[face_id] = spin
-            self.table.setCellWidget(row, 2, spin)
+            # セルに直接置くと行の高さいっぱいに伸びるので、包んで上下の中央に置く
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(4, 0, 4, 0)
+            cell_layout.addWidget(spin, 0, Qt.AlignVCenter)
+            self.table.setCellWidget(row, 2, cell)
             self.table.setRowHeight(row, AGE_ROW_THUMBNAIL + 8)
 
         buttons = QDialogButtonBox()
@@ -3700,6 +3708,7 @@ class AppWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
         self.database_path = database_path
         self._build_menus()
+        self._build_toolbars()
         self.jobs.started.connect(self._job_started)
         self.jobs.finished.connect(self._job_finished)
         self.tabs.currentChanged.connect(lambda _index: self._sync_menus())
@@ -3734,6 +3743,10 @@ class AppWindow(QMainWindow):
         self.unassign_action.triggered.connect(self.assignment._run_unassign_auto)
         self.evaluate_action = self.face_menu.addAction("精度を測る（evaluate）…")
         self.evaluate_action.triggered.connect(self.evaluate_window.open_window)
+        # 戻す・やり直す（#18・利用者「メニューからも実行できるように」）。項目は顔の一覧の打鍵と同じもの
+        self.face_menu.addSeparator()
+        self.face_menu.addAction(self.assignment.action_undo)
+        self.face_menu.addAction(self.assignment.action_redo)
 
         # ルールのファイルの操作はメニューから（#18・利用者の指定）。ボタンは置かない
         self.selection_menu = bar.addMenu("写真の選定(&P)")
@@ -3765,12 +3778,58 @@ class AppWindow(QMainWindow):
             action.triggered.connect(lambda _checked=False, chosen=mode: self.set_theme(chosen))
             self.theme_actions[mode] = action
 
+    def _build_toolbars(self) -> None:
+        """よく使う操作のアイコン（#18・利用者「よく使いそうなアイコンもあると嬉しい」）。
+
+        **項目はメニューと同じ `QAction`**（押せる・押せないが一致する）。タブに関係する操作は、そのタブのときだけ
+        バーごと出す（顔の割り当てタブで「選ぶ」を押せても仕方がない）。名前はマウスを載せると出る。
+        """
+        self.choose_action = QAction("写真を選ぶ", self)
+        self.choose_action.triggered.connect(self.selection.choose)
+        self.export_action = QAction("出力する", self)
+        self.export_action.triggered.connect(self.selection.export)
+        #: アイコンの名前（`assets/icons/`）→ 項目。モードを変えたら作り直す。
+        self.toolbar_icons = {
+            "import": self.import_action,
+            "undo": self.assignment.action_undo,
+            "redo": self.assignment.action_redo,
+            "match": self.match_action,
+            "choose": self.choose_action,
+            "export": self.export_action,
+            "open": self.load_rule_action,
+            "save": self.save_rule_action,
+            "settings": self.settings_action,
+        }
+
+        def bar(title: str, *actions: QAction) -> QToolBar:
+            toolbar = self.addToolBar(title)
+            toolbar.setMovable(False)
+            toolbar.setFloatable(False)
+            toolbar.setIconSize(QSize(TOOLBAR_ICON, TOOLBAR_ICON))
+            toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            toolbar.addActions(list(actions))
+            return toolbar
+
+        self.common_toolbar = bar("共通", self.import_action, self.settings_action)
+        self.face_toolbar = bar(
+            "顔の割り当て", self.assignment.action_undo, self.assignment.action_redo, self.match_action
+        )
+        self.selection_toolbar = bar(
+            "写真の選定", self.choose_action, self.export_action, self.load_rule_action, self.save_rule_action
+        )
+        self._refresh_icons()
+
+    def _refresh_icons(self) -> None:
+        for name, action in self.toolbar_icons.items():
+            action.setIcon(gui_theme.icon(name))
+
     def set_theme(self, mode: str) -> None:
         """表示モードを切り替えて、設定ファイルに残す。**書けなくても切り替えは取り消さない**（知らせるだけ）。"""
         if mode == self.theme_mode:
             return
         self.theme_mode = mode
         gui_theme.apply(QApplication.instance(), mode)
+        self._refresh_icons()
         try:
             config.write_settings(config.settings_write_path(), {"theme": mode})
         except (OSError, config.SettingsWriteError) as error:
@@ -3782,6 +3841,7 @@ class AppWindow(QMainWindow):
         """OS の明暗が変わったら追いかける。`OS に合わせる` のときだけ。"""
         if self.theme_mode == "auto":
             gui_theme.apply(QApplication.instance(), "auto")
+            self._refresh_icons()
 
     def _refresh_points_if_shown(self) -> None:
         if self.tabs.currentWidget() is self.assignment:
@@ -3797,6 +3857,8 @@ class AppWindow(QMainWindow):
         self.face_menu.setEnabled(on_faces)
         # 写真の選定の項目も同じく、写真の選定タブのときだけ（#18）
         self.selection_menu.setEnabled(not on_faces)
+        self.face_toolbar.setVisible(on_faces)
+        self.selection_toolbar.setVisible(not on_faces)
         self.match_action.setEnabled(on_faces and not running)
         self.unassign_action.setEnabled(on_faces and not running)
         self.evaluate_action.setEnabled(on_faces)

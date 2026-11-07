@@ -6,7 +6,7 @@ import os
 import numpy as np
 import pytest
 from PIL import Image
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QSpinBox
 
 from photoarchive_ai import db
 from photoarchive_ai import gui as photoarchive_gui
@@ -126,9 +126,10 @@ def test_each_row_shows_the_picture_the_date_and_the_age(setup, monkeypatch):
     assert table.item(1, 1).text().startswith("2017-01-01")
     assert table.item(2, 1).text().startswith("2020-01-01")
     assert "不明" in table.item(3, 1).text()
-    assert table.cellWidget(1, 2).text() == "6 歳"
-    assert table.cellWidget(0, 2).text() == "未設定", "誕生前は未設定"
-    assert table.cellWidget(3, 2).text() == "未設定", "撮影日時が無ければ未設定"
+    age_text = lambda row: table.cellWidget(row, 2).findChild(QSpinBox).text()
+    assert age_text(1) == "6 歳"
+    assert age_text(0) == "未設定", "誕生前は未設定"
+    assert age_text(3) == "未設定", "撮影日時が無ければ未設定"
     assert "2 件は年齢を出せない" in opened[0].findChild(photoarchive_gui.QLabel).text()
 
 

@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 
@@ -125,6 +126,21 @@ def fake_face_models(monkeypatch):
     yield
     face.reset_model_cache()
     scoring.reset_model_cache()
+
+
+@pytest.fixture(autouse=True)
+def face_ages_dialog_does_not_block(monkeypatch):
+    """**年齢の確認の窓を本物のまま開いたら、固まらずに失敗させる。** 押す人がいないので、回帰テストが止まる。
+
+    窓を使うテストは自分で `exec` を差し替える（`tests/test_gui_face_ages.py`）。
+    """
+    gui = sys.modules.get("photoarchive_ai.gui")
+    if gui is not None:
+        monkeypatch.setattr(
+            gui.FaceAgesDialog, "exec",
+            lambda self: pytest.fail("年齢の確認の窓が開いた（年齢の揃わない顔を選んでいる）"),
+        )
+    yield
 
 
 @pytest.fixture(autouse=True)

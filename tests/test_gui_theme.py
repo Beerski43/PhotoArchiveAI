@@ -112,12 +112,25 @@ def test_the_arrow_images_exist_and_can_be_read(name):
         assert not QImageReader(path).read().isNull(), path
 
 
+def test_every_icon_can_be_drawn():
+    for path in (SOURCE / "assets" / "icons").glob("*.svg"):
+        assert not gui_theme.icon(path.stem).pixmap(20, 20).isNull(), path.name
+
+
+def test_the_icons_change_with_the_mode(window, themed):
+    """アイコンの色はモードに合わせる（暗い地に暗いアイコンで見えなくならないように）。"""
+    light = window.settings_action.icon().pixmap(20, 20).toImage()
+    window.set_theme("dark")
+    dark = window.settings_action.icon().pixmap(20, 20).toImage()
+    assert light != dark
+
+
 def test_the_arrow_images_are_packaged():
     """入れ忘れると、`pip install -e .` では動くのに、インストールした先で矢印が消える。"""
     with open(REPOSITORY / "pyproject.toml", "rb") as file:
         data = tomllib.load(file)["tool"]["setuptools"]["package-data"]["photoarchive_ai"]
-    assert "assets/*.svg" in data
-    assert list((SOURCE / "assets").glob("*.svg"))
+    assert "assets/*.svg" in data and "assets/icons/*.svg" in data
+    assert list((SOURCE / "assets").glob("*.svg")) and list((SOURCE / "assets" / "icons").glob("*.svg"))
 
 
 def test_applying_the_theme_gives_no_stylesheet_warnings(themed, tmp_path):

@@ -346,7 +346,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `gui_evaluate.py` | **`evaluate` の窓**（#132）。閾値・マージン・同じ写真の扱いを入れて裏で流し、CLI と同じ文を出す。DB に書かない |
 | `undo.py` | **GUI の顔の操作を元に戻す・やり直す**（#116）。操作の前後で `Face` の割り当ての列（`FACE_COLUMNS`）と `FaceRejection` を控える。**戻す前に、いまが操作の直後のままかを確かめる**（違えば戻さない）。履歴は GUI を開いている間だけ |
 | `gui_settings.py` | **設定の窓**（#131・メニューの `設定…`）。`config/app_settings.yml` の DB の場所・root・出力先を直す（`config.write_settings`・`.bak` を取る・ほかのキーは残す）。**DB の場所以外はすぐ効かせ、DB は次に起動したときから**。root の入れ子と出力先の重なりは保存させない |
-| `gui_theme.py` | **GUI の見た目**（#18）。Fusion・パレット・QSS を `apply` でアプリ全体にかける（ライトとダーク・設定の `theme`）。**色は `LIGHT` / `DARK` にだけ持つ**（画面のコードに書かない。`setProperty("look", ...)` で役目を指す。テストが見張る）。QSS で枠を指定すると標準の矢印が消えるので、矢印と印は `assets/*.svg`（`pyproject.toml` の package-data） |
+| `gui_theme.py` | **GUI の見た目**（#18）。Fusion・パレット・QSS を `apply` でアプリ全体にかける（ライトとダーク・設定の `theme`）。**色は `LIGHT` / `DARK` にだけ持つ**（画面のコードに書かない。`setProperty("look", ...)` で役目を指す。テストが見張る）。QSS で枠を指定すると標準の矢印が消えるので、矢印と印は `assets/*.svg`、ツールバーのアイコンは `assets/icons/*.svg`（`currentColor` を `icon` が置き換える。`pyproject.toml` の package-data） |
 | `gui_period.py` | **撮影時期の範囲を年と月の欄で選ぶ部品**（`YearMonthRange`・#134）。顔の割り当てと写真の選定の両方のタブで使う。古い方を入れると新しい方にはそれ以降だけが並ぶ |
 | `gui_select.py` | **写真の選定タブ**（#104）。`select` の重みを動かして `selection.choose` で並べ直し、結果をサムネイルで見る。ルールの読み込み・保存（控えを取る）・別のファイルへの保存と出力 |
 | `cli.py` | サブコマンド定義 |

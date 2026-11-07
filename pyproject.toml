@@ -34,8 +34,8 @@ packages = ["photoarchive_ai"]
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-# GUI の矢印（gui_theme）。入れないと、インストールした先で数値欄と選択欄の矢印が消える
-photoarchive_ai = ["assets/*.svg"]
+# GUI の矢印とアイコン（gui_theme）。入れないと、インストールした先で消える
+photoarchive_ai = ["assets/*.svg", "assets/icons/*.svg"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]

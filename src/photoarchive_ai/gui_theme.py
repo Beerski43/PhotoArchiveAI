@@ -11,7 +11,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import QApplication
 
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -89,6 +89,18 @@ QMenu::item { padding: 6px 22px 6px 24px; border-radius: 6px; }
 QMenu::item:selected { background: @accent_soft; color: @accent_text; }
 QMenu::item:disabled { color: @disabled; }
 QMenu::separator { height: 1px; background: @border; margin: 4px 8px; }
+
+QToolBar {
+    background: @surface;
+    border: none;
+    border-bottom: 1px solid @border;
+    padding: 3px 6px;
+    spacing: 2px;
+}
+QToolBar::separator { width: 1px; background: @border; margin: 4px 6px; }
+QToolButton { background: transparent; border: none; border-radius: 6px; padding: 5px; }
+QToolButton:hover { background: @accent_soft; }
+QToolButton:pressed { background: @accent_soft_hover; }
 
 QTabWidget::pane { border: none; border-top: 1px solid @border; top: -1px; }
 QTabBar { qproperty-drawBase: 0; }
@@ -294,6 +306,21 @@ QLabel[look="toast"] {
 """
 
 
+#: いまかかっている色の名前（`icon` が見る）。`apply` が書く。
+_current = "light"
+
+
+def icon(name: str) -> QIcon:
+    """`assets/icons/<name>.svg` を、いまのモードの色で作る。**モードを変えたら作り直す**（`gui.AppWindow`）。"""
+    template = (ASSETS / "icons" / f"{name}.svg").read_text(encoding="utf-8")
+    result = QIcon()
+    for key, state in (("text", QIcon.Normal), ("disabled", QIcon.Disabled)):
+        pixmap = QPixmap()
+        pixmap.loadFromData(template.replace("currentColor", THEMES[_current][key]).encode("utf-8"), "SVG")
+        result.addPixmap(pixmap, state)
+    return result
+
+
 def resolve(mode: str, app: QApplication) -> str:
     """設定の値（``auto`` / ``light`` / ``dark``）を、実際にかける色の名前にする。``auto`` は OS に合わせる。"""
     if mode in THEMES:
@@ -345,7 +372,9 @@ def palette(name: str = "light") -> QPalette:
 
 def apply(app: QApplication, mode: str = "auto") -> None:
     """アプリ全体に見た目をかける。**開いている窓にもすぐ効く**（表示モードの切り替えはこれを呼び直す）。"""
+    global _current
     name = resolve(mode, app)
+    _current = name
     # **Fusion の指定は最初の1回だけ。** QSS をかけたあとに窓を開いたまま setStyle を呼ぶと、Qt ごと落ちる（#18）
     if not app.styleSheet():
         app.setStyle("Fusion")

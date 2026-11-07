@@ -354,6 +354,17 @@ def test_the_assign_menu_shows_the_age_and_warns_about_photos_before_birth(seede
     assert "⚠" not in labels[1], "${PERSON_3}は生まれている"
 
 
+def _accept_face_ages(monkeypatch, age):
+    """写真ごとの年齢の窓で、全部を ``age`` にして登録を押す。"""
+
+    def accept(dialog):
+        for spin in dialog.age_inputs.values():
+            spin.setValue(age)
+        return QDialog.Accepted
+
+    monkeypatch.setattr(photoarchive_gui.FaceAgesDialog, "exec", accept)
+
+
 def test_a_face_can_be_assigned_from_the_menu_without_selecting_the_person(
     seeded, monkeypatch
 ):
@@ -364,6 +375,7 @@ def test_a_face_can_be_assigned_from_the_menu_without_selecting_the_person(
     """
     window, faces, persons = seeded
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog(7))
+    _accept_face_ages(monkeypatch, 7)  # 選ぶ2件は年齢が揃わないので、写真ごとの窓が開く（#18）
 
     _select(window, scope=photoarchive_gui.SCOPE_UNASSIGNED)
     assert window._current_person() is None
@@ -390,6 +402,7 @@ def test_the_digit_keys_assign_to_the_persons_in_order(seeded, monkeypatch, qt_a
     """
     window, faces, persons = seeded
     monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _accepting_age_dialog(7))
+    _accept_face_ages(monkeypatch, 7)  # 選ぶ2件は年齢が揃わないので、写真ごとの窓が開く（#18）
     window.show()
     qt_app.processEvents()
 

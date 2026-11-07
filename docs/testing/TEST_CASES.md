@@ -1137,6 +1137,10 @@ editable install のときだけ出すこと（通常のインストールでは
 | テスト | 内容 |
 |---|---|
 | `test_the_menu_bar_has_import_faces_and_settings` | メニューは取り込み・顔の割り当て・設定。タブは2枚で、進み具合はタブの右上のまま |
+| `test_undo_and_redo_run_from_the_menu` | **戻す・進むはメニューからも**（#18） |
+| `test_the_toolbars_follow_the_tab_and_use_the_menu_actions` | タブに関係するアイコンはそのタブのときだけ。項目はメニューと同じ |
+| `test_every_toolbar_action_has_an_icon_and_a_name` | どの項目にもアイコンと名前がある |
+| `test_the_choose_and_export_icons_run_the_panel` | 選ぶ・出力のアイコンが写真の選定の操作を呼ぶ |
 | `test_the_rule_items_work_only_on_the_selection_tab` | ルールの操作はメニューから（#18）。写真の選定タブのときだけ押せる。タブのボタンは無い |
 | `test_each_rule_item_runs_its_operation` | メニューの3項目がそれぞれの操作を呼ぶ |
 | `test_the_face_items_work_only_on_the_assignment_tab` / `test_a_finished_job_on_the_selection_tab_keeps_the_face_items_off` | **顔の割り当ての項目は、顔の割り当てタブのときだけ**（裏の処理が終わっても勝手に戻らない） |
@@ -1216,6 +1220,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_theme_setting_is_read` / `test_an_unreadable_theme_setting_warns_and_uses_auto` | 設定の `theme`。読めない値は警告して `auto` |
 | `test_each_theme_renders_with_its_own_window_color` | 実際に描いて、窓の地が各モードの色になる |
 | `test_the_arrow_images_exist_and_can_be_read` / `test_the_arrow_images_are_packaged` | 矢印の SVG が読めて、配布物に入る（無いと数値欄と選択欄の矢印が消える） |
+| `test_every_icon_can_be_drawn` / `test_the_icons_change_with_the_mode` | アイコンが描けて、色がモードに合う |
 | `test_applying_the_theme_gives_no_stylesheet_warnings` | 画面を出しても QSS の警告が出ない |
 | `test_the_theme_applies_the_palette_and_the_stylesheet` | パレットと QSS がアプリに効く |
 | `test_the_settings_column_still_fits_under_the_theme` | テーマの余白でも、既定の窓の幅で設定欄に横スクロールが出ない |
