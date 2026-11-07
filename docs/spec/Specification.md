@@ -429,6 +429,8 @@ GUI は別の実行ファイル `photoarchive-gui`。
 
 ## 5.10 `photoarchive-gui`
 
+**見た目は `gui_theme` にまとめる**（#18・版 1.32。利用者「全体的な見た目を今どきのモダンなデザインに」）。Fusion の上にパレットと QSS を重ね、OS に左右されない。色は `gui_theme.COLORS` にだけ持ち、画面のコードに書かない。枠や薄い文字は `setProperty("look", ...)` の役目で指す。主な操作のボタンは `look="primary"`（いまは「選ぶ」）。数値欄と選択欄の矢印は同梱の SVG（`assets/`）。
+
 | 引数 | 既定 | 意味 |
 |---|---|---|
 | `--db` | 設定ファイルの `database_path` | データベースのパス |

@@ -578,6 +578,7 @@ PhotoArchiveAI/
       gui_scan.py              取り込みウィザード(convert-heic・scan)と assess の窓
       gui_evaluate.py          evaluate の窓
       gui_settings.py          設定の窓(DB・root・出力先)
+      gui_theme.py             GUI の見た目(色・QSS。矢印は assets/)
       gui_period.py            撮影時期の範囲を年と月の欄で選ぶ部品(両方のタブ)
       jobs.py                  長い処理を裏の別プロセスで流す
   tests/                       テスト(リポジトリ内には書き込まない)

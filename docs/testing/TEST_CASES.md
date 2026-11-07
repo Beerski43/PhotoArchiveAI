@@ -1172,6 +1172,19 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
 | `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
 
+### `test_gui_theme.py` — GUI の見た目（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_every_name_in_the_stylesheet_is_filled_in` | 色の名前の置き換え忘れが無い（Qt は黙ってその行を捨てる） |
+| `test_the_arrow_images_exist_and_can_be_read` / `test_the_arrow_images_are_packaged` | 矢印の SVG が読めて、配布物に入る（無いと数値欄と選択欄の矢印が消える） |
+| `test_applying_the_theme_gives_no_stylesheet_warnings` | 画面を出しても QSS の警告が出ない |
+| `test_the_theme_applies_the_palette_and_the_stylesheet` | パレットと QSS がアプリに効く |
+| `test_the_settings_column_still_fits_under_the_theme` | テーマの余白でも、既定の窓の幅で設定欄に横スクロールが出ない |
+| `test_the_default_mark_stays_in_place_under_the_theme` | テーマの下でもゲージの既定値の印が描かれる |
+| `test_screens_do_not_carry_their_own_colors` | **色は `gui_theme` にだけ**（画面のコードに書かない） |
+| `test_every_look_used_by_the_screens_is_defined` | 画面が使う `look` の名前を QSS が知っている |
+
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
 **リポジトリには本物の設定がある。** 探す場所（環境変数・カレント・リポジトリ直下）を全部 `tmp_path` に向けてから開く。

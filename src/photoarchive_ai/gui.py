@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face, matcher, migration, recommend, scoring, selection, undo
+from . import db, face, gui_theme, matcher, migration, recommend, scoring, selection, undo
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
@@ -786,7 +786,7 @@ class MigrationDialog(QDialog):
         detail = QLabel(summary)
         detail.setWordWrap(True)
         detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        detail.setProperty("look", "panel")
         layout.addWidget(detail)
 
         if backs_up:
@@ -868,7 +868,7 @@ class _AutoAssignDialog(QDialog):
         self.detail = QLabel()
         self.detail.setWordWrap(True)
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        self.detail.setProperty("look", "panel")
         layout.addWidget(self.detail)
 
         source = Path(database_path)
@@ -1677,7 +1677,7 @@ class MainWindow(QWidget):
         self.measure_button.setToolTip(MEASURE_TOOLTIP)
         self.measure_button.clicked.connect(self.measure_requested.emit)
         self.measure_label = QLabel("")
-        self.measure_label.setStyleSheet("color: #555;")
+        self.measure_label.setProperty("look", "muted")
 
         blur_filters = QHBoxLayout()
         blur_filters.addWidget(self.blur_check)
@@ -1753,7 +1753,7 @@ class MainWindow(QWidget):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumWidth(320)
         self.preview_label.setWordWrap(True)
-        self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
+        self.preview_label.setProperty("look", "panel")
 
         # 撮影日時とフォルダ。**年齢を入れるのに要る。**
         # QLabel は画像か文字のどちらかしか持てないので、もう1枚に分ける。
@@ -1766,11 +1766,7 @@ class MainWindow(QWidget):
         # 画像の外に置くと、見ているところ（顔）から目を離さないと気づけない。
         self.preview_status = QLabel("", self.preview_label)
         self.preview_status.setAlignment(Qt.AlignCenter)
-        self.preview_status.setStyleSheet(
-            "padding: 10px 18px; font-size: 16px; font-weight: bold;"
-            " color: #1b5e20; background: rgba(232, 245, 233, 235);"
-            " border: 2px solid #2e7d32; border-radius: 6px;"
-        )
+        self.preview_status.setProperty("look", "toast")
         self.preview_status.hide()
         # `preview_label` の中央に置く。レイアウトに入れると、画像は
         # `QLabel` 自身が描き、子ウィジェットがその上に載る。
@@ -1794,7 +1790,7 @@ class MainWindow(QWidget):
         # いま効く打鍵を1行で出す。
         self.hint_label = QLabel("")
         self.hint_label.setWordWrap(True)
-        self.hint_label.setStyleSheet("color: #555;")
+        self.hint_label.setProperty("look", "muted")
 
         # --- いまの絞り込みに当たる顔をまとめて処理する ----------------
         # **以前は「行事（フォルダ×日）を選ぶ」が要った**（#61）。利用者が使っておらず
@@ -3863,6 +3859,7 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
+    gui_theme.apply(app)
     if not ensure_migrated(db_path):
         raise SystemExit("移行していないため、起動できません。")
     try:

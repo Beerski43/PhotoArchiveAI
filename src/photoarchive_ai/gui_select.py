@@ -422,7 +422,7 @@ class DefaultMarkSlider(NoWheelSlider):
         x = self.mark_x()
         if x is not None:
             painter = QPainter(self)
-            painter.setPen(QPen(self.palette().color(QPalette.WindowText), 2))
+            painter.setPen(QPen(self.palette().color(QPalette.WindowText), 2, Qt.SolidLine, Qt.RoundCap))
             painter.drawLine(x, 0, x, self.height() - 1)
             painter.end()
         super().paintEvent(event)
@@ -446,7 +446,7 @@ class ParameterRow(QWidget):
         self.slider = DefaultMarkSlider(Qt.Horizontal, int(round(default / step)))
         self.slider.setRange(0, int(round(slider_maximum / step)))
         self.slider.setPageStep(max(1, self.slider.maximum() // 10))
-        self.slider.setMinimumWidth(120)
+        self.slider.setMinimumWidth(90)
         self.slider.setToolTip(f"縦の印が既定値（{_number_text(default)}）です")
         self.reset_button = QPushButton(DEFAULT_LABEL)
         self.reset_button.setToolTip(f"既定値（{_number_text(default)}）に戻します")
@@ -628,6 +628,7 @@ class SelectionPanel(QWidget):
             "顔の割り当てが変わっていれば、先に読み直します（初回は数分かかることがあります）。"
         )
         self.choose_button.clicked.connect(self.choose)
+        self.choose_button.setProperty("look", "primary")
         # いま読み書きするルールのファイル。読み込みと別名の保存で変わるので、画面に出す（#18）
         self.rule_file_label = QLabel("")
         self.rule_file_label.setWordWrap(True)
@@ -705,6 +706,7 @@ class SelectionPanel(QWidget):
         self.preview = QLabel(PREVIEW_PROMPT)
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumSize(320, 240)
+        self.preview.setProperty("look", "panel")
         # 画像の大きさで枠が広がらないようにする（枠に合わせて縮めて出す）。
         self.preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         side_layout.addWidget(self.preview, 1)
