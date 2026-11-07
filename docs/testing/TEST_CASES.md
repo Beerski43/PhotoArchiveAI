@@ -632,7 +632,12 @@
 | `test_saving_to_another_file_adds_a_readable_suffix_and_backs_up_an_existing_file` | 拡張子が無ければ `.yml` を足す。既にあるファイルは `.bak` に控える |
 | `test_cancelling_save_as_or_failing_to_write_keeps_the_save_target` | 取り消しと書けない場所では保存先が変わらない（書けなければ知らせる） |
 | `test_saving_without_a_rule_file_asks_where` | `rule_path` が無いときの「ルールを保存」は保存先を聞く |
-| `test_a_loaded_file_survives_saving_the_settings_with_the_same_rule_path` | 設定の窓で `rule_path` を変えていなければ読み込んだファイルのまま。変えたらそちらが効く |
+| `test_loading_a_rule_file_also_rewrites_the_rule_path` | **読み込むと設定の `rule_path` も変わる**（利用者の決定）。ほかのキーは残し、控えを取る |
+| `test_saving_to_another_file_also_rewrites_the_rule_path_but_overwriting_does_not` | 別名の保存でも変わる。上書きの保存では設定に書かない |
+| `test_a_rule_operation_that_did_not_happen_leaves_the_settings_alone` | 断る・取り消す・読めない・書けないときは設定に触らない |
+| `test_choosing_the_file_already_in_the_settings_does_not_rewrite_them` | 同じファイルなら書かない（相対パスで書いてあっても） |
+| `test_a_settings_file_that_cannot_be_written_only_warns` | 設定に書けなくても読み込みは取り消さない。壊れた設定は上書きしない |
+| `test_saving_the_settings_after_a_load_keeps_the_loaded_file` | 読み込みのあとに設定の窓を保存しても読み直さない。ファイルの `rule_path` が別の値ならそちらが効く |
 | `test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing` | 構文の壊れた YAML で起動しても落ちず知らせる（本筋の外で直した） |
 | `test_each_gauge_marks_its_default_value` | **ゲージの既定値の位置に印**（#18）。取っ手を動かしても印は動かない。右端より大きい既定値は印なし |
 | `test_the_mark_is_at_the_right_place_and_is_drawn` | 印の位置が左端・中央・右端で比例し、実際に描かれる |

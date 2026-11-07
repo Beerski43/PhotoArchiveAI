@@ -64,7 +64,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, scoring, selection, similar
+from . import config, db, scoring, selection, similar
 from .gui_period import YearMonthRange
 
 #: 結果の1ページの枚数。**ページャの無い一覧を作らない**（CLAUDE.md §8）。
@@ -474,7 +474,7 @@ class SelectionPanel(QWidget):
         self.connection = connection
         #: いま読み書きするルールのファイル。「ルールを読み込む」と「別のファイルに保存」で変わる（#18）。
         self.rule_path = rule_path
-        #: 設定の `rule_path`。上と違っていてよい。**設定ファイルは書き換えない**ので、次に起動するとこちらに戻る。
+        #: 設定の `rule_path`。読み込みと別名の保存で書き換える（設定に書けなかったときだけ上と違う）。
         self.configured_rule_path = rule_path
         self.output_root = output_root
         self.source_roots = list(source_roots or [])
@@ -711,8 +711,8 @@ class SelectionPanel(QWidget):
 
         - **ルールのパスが変わったら、新しいファイルを読み直して画面に出す**（重みと年の表。
           年の表は入っている値を引き継がず、新しいファイルの枚数から作り直す）。同じパスなら
-          画面で動かした重みはそのまま。**比べる相手は設定の値**で、読み込んだファイルではない
-          （設定の窓でルールを変えていないのに、読み込んだファイルが設定のファイルへ戻らないように）
+          画面で動かした重みはそのまま。**比べる相手は設定の値**で、いま読み書きしているファイルではない
+          （設定に書けなかったとき、設定の窓を保存しただけで前のファイルへ戻らないように）
         - root が変わったら、用意した候補と結果を捨てる（候補は root から元写真を引く）
         """
         roots = list(source_roots or [])
@@ -1128,7 +1128,8 @@ class SelectionPanel(QWidget):
     def load_rule_file(self) -> None:
         """ファイルを選んで画面の設定を置き換える（#18）。**読めないファイルでは画面を変えない。**
 
-        以後の「ルールを保存」はこのファイルへ書く。設定の `rule_path` は書き換えない。
+        以後の「ルールを保存」はこのファイルへ書き、設定の `rule_path` もこのファイルにする
+        （次に起動したときと CLI の `select` もこのファイルを読む・利用者の決定）。
         """
         path, _ = QFileDialog.getOpenFileName(self, "ルールを読み込む", self._rule_folder(), RULE_FILE_FILTER)
         if not path:
@@ -1141,13 +1142,34 @@ class SelectionPanel(QWidget):
         answer = QMessageBox.question(
             self,
             "ルールを読み込む",
-            f"画面の設定を {path} の内容に置き換えます。保存していない変更は消えます。",
+            f"画面の設定を {path} の内容に置き換えます。保存していない変更は消えます。\n"
+            "次に起動したときと CLI の select も、このファイルを読むようになります。",
         )
         if answer != QMessageBox.Yes:
             return
         self.rule_path = path
         self._use_rule(rule)
+        self._remember_rule_path(path)
         self.status.setText(f"ルールを読み込みました: {path}。結果に効かせるには「{CHOOSE_LABEL}」を押してください。")
+
+    def _remember_rule_path(self, path: str) -> None:
+        """設定の `rule_path` をこのファイルにする。**書けなくても、読み込みや保存は取り消さない**（知らせるだけ）。
+
+        同じファイルなら書かない（設定ファイルのコメントが消え、控えも上書きされるだけなので）。
+        """
+        known = self.configured_rule_path
+        if known and Path(known).expanduser().resolve() == Path(path).expanduser().resolve():
+            return
+        try:
+            config.write_settings(config.settings_write_path(), {"rule_path": path})
+        except (OSError, config.SettingsWriteError) as error:
+            QMessageBox.warning(
+                self,
+                "設定に書けません",
+                f"次に起動したときと CLI の select は、前のファイルを読みます。\n{error}",
+            )
+            return
+        self.configured_rule_path = path
 
     def _rule_to_save(self) -> Optional[Dict[str, Any]]:
         """画面の設定から書くルールを作る。読めない値があれば知らせて None。"""
@@ -1162,17 +1184,19 @@ class SelectionPanel(QWidget):
             return None
         return rule
 
-    def _write_rule_to(self, path: str, rule: Dict[str, Any]) -> None:
+    def _write_rule_to(self, path: str, rule: Dict[str, Any]) -> bool:
+        """ルールを書く。書けたら True。"""
         try:
             write_rule(path, rule)
         except OSError as error:
             QMessageBox.warning(self, "保存できません", str(error))
-            return
+            return False
         self.rule_path = path
         self.rule = rule
         self._show_retired_keys()
         self._show_rule_file()
         self.status.setText(f"ルールを保存しました: {path}")
+        return True
 
     def save_rule(self) -> None:
         """いまのファイルに上書きする。**書く前に控え（``.bak``）を取る。** YAML のコメントは消える。"""
@@ -1193,7 +1217,7 @@ class SelectionPanel(QWidget):
         self._write_rule_to(self.rule_path, rule)
 
     def save_rule_as(self) -> None:
-        """保存先を選んで書く（#18）。以後はそのファイルを読み書きする。設定の `rule_path` は書き換えない。
+        """保存先を選んで書く（#18）。以後はそのファイルを読み書きし、設定の `rule_path` もそのファイルにする。
 
         既にあるファイルを選んだときの確認は、ファイルを選ぶ窓が出す。そのときも ``.bak`` は取る。
         """
@@ -1206,7 +1230,8 @@ class SelectionPanel(QWidget):
         # 拡張子を打たなくても、読み込める名前にする
         if Path(path).suffix.lower() not in RULE_FILE_SUFFIXES:
             path += RULE_FILE_SUFFIXES[0]
-        self._write_rule_to(path, rule)
+        if self._write_rule_to(path, rule):
+            self._remember_rule_path(path)
 
     def export(self) -> None:
         """選んだ写真を出力先へコピーする（CLI の `select` と同じ。前の出力は消える）。"""

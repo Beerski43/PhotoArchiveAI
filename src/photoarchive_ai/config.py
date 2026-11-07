@@ -223,8 +223,9 @@ def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
 # 書き戻す（GUI の設定の窓・#131）
 # ----------------------------------------------------------------------
 
-#: GUI の設定の窓が直すキー。**ほかのキー（``dlib_model_dir`` など）は書き戻すときもそのまま残す。**
-EDITABLE_KEYS = ("database_path", "source_roots", "output_root")
+#: GUI が直すキー。``rule_path`` は設定の窓ではなく、写真の選定のルールの読み込みと別名の保存が書く（#18）。
+#: **ほかのキー（``dlib_model_dir`` など）は書き戻すときもそのまま残す。**
+EDITABLE_KEYS = ("database_path", "source_roots", "output_root", "rule_path")
 
 
 class SettingsWriteError(ValueError):

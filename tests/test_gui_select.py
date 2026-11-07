@@ -8,7 +8,7 @@ import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from photoarchive_ai import db, gui, gui_select, scoring, selection
+from photoarchive_ai import config, db, gui, gui_select, scoring, selection
 from tests.helpers import scene, write_photo
 from tests.test_selection import _add, _face
 
@@ -19,6 +19,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def qt_app():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def settings_file(tmp_path, monkeypatch):
+    """**ルールの読み込みと別名の保存は設定ファイルに書く。** カレントごと tmp_path へ移す。
+
+    移さないと、本体の checkout で流したテストが実データの `config/app_settings.yml` を書き換える。
+    返すのは、書かれる先。
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    return work / "config" / "app_settings.yml"
 
 
 @pytest.fixture()
@@ -154,7 +167,7 @@ def _pick_file(monkeypatch, path):
 
 
 def test_loading_a_rule_file_replaces_the_screen_and_becomes_the_save_target(window, rule_path, tmp_path, monkeypatch):
-    """**読み込んだファイルが以後の保存先になる**（#18）。もとのファイルにも設定にも書かない。年の表も新しい枚数から。"""
+    """**読み込んだファイルが以後の保存先になる**（#18）。もとのファイルには書かない。年の表も新しい枚数から。"""
     _yes(monkeypatch)
     panel = window.selection
     panel.refresh_years()
@@ -278,20 +291,135 @@ def test_saving_without_a_rule_file_asks_where(database, tmp_path, monkeypatch):
     window.close()
 
 
-def test_a_loaded_file_survives_saving_the_settings_with_the_same_rule_path(window, rule_path, tmp_path, monkeypatch):
-    """設定の窓の保存は `set_paths` を呼ぶ。設定のルールを変えていなければ、読み込んだファイルを戻さない。"""
+def _settings(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _existing_settings(path):
+    """もとの設定ファイル（ほかのキーが残ることを見る）。"""
+    path.parent.mkdir()
+    path.write_text("# コメント\noutput_root: /keep\ndlib_model_dir: /models\nrule_path: old.yml\n", encoding="utf-8")
+
+
+def test_loading_a_rule_file_also_rewrites_the_rule_path(window, tmp_path, monkeypatch, settings_file):
+    """**読み込むと設定の `rule_path` も変わる**（#18・利用者の決定）。次の起動と CLI もそのファイルを読む。ほかのキーは残し、控えを取る。"""
+    _yes(monkeypatch)
+    _existing_settings(settings_file)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    window.selection.load_rule_file()
+
+    assert _settings(settings_file) == {"output_root": "/keep", "dlib_model_dir": "/models", "rule_path": str(other)}
+    assert "コメント" in Path(str(settings_file) + ".bak").read_text(encoding="utf-8")
+    assert config.get_rule_path(config.load_settings()) == str(other)
+
+
+def test_saving_to_another_file_also_rewrites_the_rule_path_but_overwriting_does_not(
+    window, tmp_path, monkeypatch, settings_file
+):
+    _yes(monkeypatch)
+    _existing_settings(settings_file)
+    target = tmp_path / "movie.yml"
+    _pick_file(monkeypatch, target)
+
+    window.selection.save_rule_as()
+    assert _settings(settings_file)["rule_path"] == str(target)
+
+    written = settings_file.read_text(encoding="utf-8")
+    Path(str(settings_file) + ".bak").unlink()
+    window.selection.save_rule()
+    assert settings_file.read_text(encoding="utf-8") == written
+    assert not Path(str(settings_file) + ".bak").exists(), "上書きの保存では設定に書かない"
+
+
+def test_a_rule_operation_that_did_not_happen_leaves_the_settings_alone(
+    window, tmp_path, monkeypatch, settings_file
+):
+    """断った・取り消した・読めない・書けないときは、設定ファイルに触らない。"""
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    _existing_settings(settings_file)
+    before = settings_file.read_text(encoding="utf-8")
+    panel = window.selection
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    bad = tmp_path / "bad.yml"
+    bad.write_text("weights: [\n", encoding="utf-8")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+    _yes(monkeypatch)
+    _pick_file(monkeypatch, bad)
+    panel.load_rule_file()
+    _pick_file(monkeypatch, "")
+    panel.load_rule_file()
+    panel.save_rule_as()
+    _pick_file(monkeypatch, tmp_path / "no-such-folder" / "rule.yml")
+    panel.save_rule_as()
+
+    assert settings_file.read_text(encoding="utf-8") == before
+    assert not Path(str(settings_file) + ".bak").exists()
+
+
+def test_choosing_the_file_already_in_the_settings_does_not_rewrite_them(
+    database, tmp_path, monkeypatch, settings_file
+):
+    """同じファイルなら書かない（設定のコメントが消えるだけ）。相対パスで書いてあっても同じファイルと分かる。"""
+    _yes(monkeypatch)
+    rule = settings_file.parent.parent / "rule.yml"
+    rule.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    settings_file.parent.mkdir()
+    settings_file.write_text("# コメント\nrule_path: rule.yml\n", encoding="utf-8")
+    before = settings_file.read_text(encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path="rule.yml", output_root=str(tmp_path / "out"))
+    _pick_file(monkeypatch, rule)
+
+    window.selection.load_rule_file()
+
+    assert settings_file.read_text(encoding="utf-8") == before
+    window.close()
+
+
+def test_a_settings_file_that_cannot_be_written_only_warns(window, tmp_path, monkeypatch, settings_file):
+    """**設定に書けなくても、読み込みは取り消さない。** 壊れた設定は上書きしない。設定の窓を保存しても前のファイルへ戻らない。"""
+    _yes(monkeypatch)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    settings_file.parent.mkdir()
+    settings_file.write_text("rule_path: [\n", encoding="utf-8")
+    panel = window.selection
+    configured = panel.configured_rule_path
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    panel.load_rule_file()
+
+    assert len(warnings) == 1 and "前のファイル" in warnings[0]
+    assert settings_file.read_text(encoding="utf-8") == "rule_path: [\n"
+    assert panel.rule_path == str(other)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+    assert not panel.set_paths(configured, str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(other)
+
+
+def test_saving_the_settings_after_a_load_keeps_the_loaded_file(window, tmp_path, monkeypatch):
+    """設定の窓の保存は `set_paths` を呼ぶ。読み込みで `rule_path` も変わっているので、読み直さない。"""
     _yes(monkeypatch)
     panel = window.selection
     other = tmp_path / "other.yml"
     other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
     _pick_file(monkeypatch, other)
     panel.load_rule_file()
+    panel.weight_spins["smile"].setValue(0.4)
 
-    assert not panel.set_paths(str(rule_path), str(tmp_path / "out"), panel.source_roots)
+    assert not panel.set_paths(str(other), str(tmp_path / "out"), panel.source_roots)
     assert panel.rule_path == str(other)
-    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.4)
 
-    # 設定のルールを変えたら、そちらが効く
+    # 設定ファイルの rule_path が別の値になっていたら、そちらが効く
     changed = tmp_path / "changed.yml"
     changed.write_text("weights:\n  smile: 0.1\n", encoding="utf-8")
     assert panel.set_paths(str(changed), str(tmp_path / "out"), panel.source_roots)
