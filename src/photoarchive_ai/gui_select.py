@@ -112,7 +112,6 @@ LAYOUT_LABELS = {
     selection.OUTPUT_LAYOUT_YEAR: "年ごとのフォルダ",
     selection.OUTPUT_LAYOUT_FLAT: "出力先の直下（平らに）",
 }
-#: 期間の欄の空のときの文字（#134）。
 
 #: 真偽値のキーと、画面に出す名前。既定は `selection.RULE_FLAGS`。
 FLAG_FIELDS = (
@@ -477,6 +476,10 @@ class DateBoxes(QWidget):
     def text(self) -> str:
         """ルールに書く値（`YYYY-MM-DD`）。年が `--` なら空。足りない部分は ``end`` の向きで埋める。"""
         return self._raw if self._raw is not None else self._filled_text()
+
+    def holds_rule_value(self) -> bool:
+        """欄に出せないルールの値を、そのまま持っているか（欄を触るまで）。"""
+        return self._raw is not None
 
     def _filled_text(self) -> str:
         year, month, day = self.parts()
@@ -910,8 +913,16 @@ class SelectionPanel(QWidget):
         period = period if isinstance(period, dict) else {}
         self.period_start.setText(_period_text(period.get("start")))
         self.period_end.setText(_period_text(period.get("end")))
-        self.period_notice.setText(selection.period_problem(*self._period_values()) or "")
+        self.period_notice.setText(self._period_problem() or "")
         self.layout_combo.setCurrentIndex(self.layout_combo.findData(selection.output_layout(rule)))
+
+    def _period_problem(self) -> Optional[str]:
+        """期間の問題の説明。**読めない値は `--` を選び直しても変わらない**ので、消し方を添える（PR #143 の指摘3）。"""
+        problem = selection.period_problem(*self._period_values())
+        boxes = (self.period_start, self.period_end)
+        if problem and any(box.holds_rule_value() and selection._parse_date(box.text()) is None for box in boxes):
+            problem += "\n欄では -- に見えますが、ルールにこの値があります。年を選び直すと置き換わります。"
+        return problem
 
     def _period_values(self) -> tuple:
         return self.period_start.text().strip(), self.period_end.text().strip()
@@ -928,7 +939,7 @@ class SelectionPanel(QWidget):
     def _period_changed(self) -> None:
         """期間の欄を変えたら年の表を作り直す（候補の枚数・並ぶ年が変わる）。入っている値は引き継ぐ。"""
         values = self._period_values()
-        problem = selection.period_problem(*values)
+        problem = self._period_problem()
         self.period_notice.setText(problem or "")
         if problem or values == self._applied_period:
             return
@@ -937,7 +948,7 @@ class SelectionPanel(QWidget):
 
     def _period_is_readable(self) -> bool:
         """「選ぶ」と「ルールを保存」の前に。読めなければ知らせて止める。読めれば表にも効かせる。"""
-        problem = selection.period_problem(*self._period_values())
+        problem = self._period_problem()
         if problem:
             QMessageBox.warning(self, "設定を読めません", problem)
             return False

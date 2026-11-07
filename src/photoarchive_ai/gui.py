@@ -2045,6 +2045,7 @@ class MainWindow(QWidget):
         **作り直しているあいだ信号を止める。** 止めないと、項目が増えるたびに
         選択が動いて**顔の一覧を何度も読み直す。**
         """
+        view_before = self._current_view_id()
         if select_person_id is None and select_scope is None:
             person = self._current_person()
             select_person_id = None if person is None else person["id"]
@@ -2085,7 +2086,15 @@ class MainWindow(QWidget):
             self.person_list.blockSignals(blocked)
         self._refresh_counts()
         self._rebuild_assign_actions()
-        self._on_view_selected(self.person_list.currentItem())
+        # **同じ表示のままなら、ページとスクロールの場所を保つ**（PR #143 の指摘2）。ここは裏の処理の終わりや
+        # 人物の編集からも通る。必ず先頭へ戻していたので、`scan` が終わった瞬間に作業中の場所を失っていた。
+        if self._current_view_id() == view_before:
+            self._sync_view_controls()
+            self._refresh_details()
+            self._sync_bulk_controls()
+            self.reload_faces()
+        else:
+            self._on_view_selected(self.person_list.currentItem())
 
     def _select_view(
         self, person_id: Optional[int], scope: Optional[str]
@@ -2156,6 +2165,11 @@ class MainWindow(QWidget):
             # 落とした位置が表示の側に食い込んでいることがあるので、
             # 正しい形（表示 → 区切り → 人物）に作り直す。
             self._reload_person_list()
+
+    def _current_view_id(self) -> tuple:
+        """いま見ている一覧を見分ける値（表示と人物）。"""
+        person = self._current_person()
+        return (self._current_scope(), None if person is None else person["id"])
 
     def _current_scope(self) -> str:
         """いま見ているもの。選択が無ければ「未分類」。"""

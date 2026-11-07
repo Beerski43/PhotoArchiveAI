@@ -650,6 +650,7 @@
 | `test_a_partly_chosen_period_covers_the_whole_year_or_month` | 年だけ・年月までも指定でき、始めは初日から、終わりは末日まで |
 | `test_the_month_and_day_wait_for_the_year_and_month` | 年が `--` なら月は押せず、月が `--` なら日は押せない。日は実在する日だけ |
 | `test_moving_a_period_box_rebuilds_the_year_table` | 欄を動かすと年の表が作り直される |
+| `test_an_unreadable_period_says_how_to_clear_it` / `test_a_period_in_the_wrong_order_does_not_talk_about_choosing_again` | 読めない値には消し方を添える（指摘3）。読めている値の問題には添えない |
 | `test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched` | 時刻付きの値は、欄を触るまで変えない |
 | `test_the_wheel_never_changes_a_value_in_the_settings_column` | **設定欄の入力部品はすべて、ホイールで値を変えない**（上を通っただけでも、クリックしたあとでも。年の表の欄も。設定欄をスクロールすると、マウスの下の値が黙って変わっていた。PR #122 のレビュー指摘1・#18）。イベントを受けず親へ渡す（スクロールになる）。部品を全部たどるので、足した欄も見張られる |
 | `test_the_sharpness_gauge_still_takes_the_wheel_after_clicking` | 顔の割り当てタブの鮮明さのゲージは、クリックしたあとならホイールで動く（設定欄とは扱いが違う・#135） |
@@ -1207,6 +1208,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_an_operation_that_removes_faces_keeps_the_scroll_position` | 顔が一覧から消える操作でも保つ |
 | `test_undo_keeps_the_scroll_position` | 元に戻しても保つ |
 | `test_the_position_is_clamped_when_the_list_gets_shorter` | 短くなって届かなければ、いちばん下 |
+| `test_reloading_the_person_list_keeps_the_place_in_the_same_view` | **裏の処理の終わりや人物の編集でも、同じ一覧ならページと場所を保つ**（指摘2） |
+| `test_choosing_another_person_starts_from_the_top` | 別の人物へ移ったら先頭から |
 | `test_moving_to_another_page_or_view_starts_from_the_top` | ページや並びを変えたら先頭から（ページを送っても下のままだった） |
 
 ### `test_gui_theme.py` — GUI の見た目（#18）
@@ -1225,6 +1228,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_theme_setting_is_read` / `test_an_unreadable_theme_setting_warns_and_uses_auto` | 設定の `theme`。読めない値は警告して `auto` |
 | `test_each_theme_renders_with_its_own_window_color` | 実際に描いて、窓の地が各モードの色になる |
 | `test_the_arrow_images_exist_and_can_be_read` / `test_the_arrow_images_are_packaged` | 矢印の SVG が読めて、配布物に入る（無いと数値欄と選択欄の矢印が消える） |
+| `test_the_year_list_opens_with_at_most_15_rows` | 年の欄の一覧が画面の高さいっぱいに開かない（PR #143 の指摘1） |
+| `test_the_stylesheet_survives_an_apostrophe_in_the_path` | パスに `'` があっても QSS を読める（指摘4） |
 | `test_every_icon_can_be_drawn` / `test_the_icons_change_with_the_mode` | アイコンが描けて、色がモードに合う |
 | `test_applying_the_theme_gives_no_stylesheet_warnings` | 画面を出しても QSS の警告が出ない |
 | `test_the_theme_applies_the_palette_and_the_stylesheet` | パレットと QSS がアプリに効く |

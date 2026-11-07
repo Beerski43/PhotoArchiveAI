@@ -586,6 +586,29 @@ def test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched(database, 
     window.close()
 
 
+def test_an_unreadable_period_says_how_to_clear_it(database, tmp_path):
+    """読めない値の欄は `--` に見えるのに、「選ぶ」と保存が止まる。**`--` を選び直しても変わらない**ので、消し方を書く（PR #143 の指摘3）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: abc\n")
+    assert panel.period_start.parts() == (0, 0, 0)
+    assert panel.period_start.text() == "abc"
+    assert "abc" in panel.period_notice.text()
+    assert "年を選び直す" in panel.period_notice.text()
+
+    _pick(panel.period_start.year, 2019)
+
+    assert panel.period_start.text() == "2019-01-01"
+    assert panel.period_notice.text() == ""
+    window.close()
+
+
+def test_a_period_in_the_wrong_order_does_not_talk_about_choosing_again(database, tmp_path):
+    """始めが終わりより後なのは読めている値。消し方の案内は要らない。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2020-01-01\n  end: 2019-01-01\n")
+    assert "より後" in panel.period_notice.text()
+    assert "選び直す" not in panel.period_notice.text()
+    window.close()
+
+
 def test_the_period_comes_from_the_rule_quoted_or_not(database, tmp_path):
     # 引用符の無い日付は YAML が date で読む
     window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-01-01\n  end: '2018-12-31'\n")

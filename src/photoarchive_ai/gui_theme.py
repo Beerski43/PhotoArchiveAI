@@ -5,6 +5,7 @@
 
 - Fusion スタイルの上に、パレットと QSS を重ねる（OS の見た目に左右されず、Windows でも同じに見える）
 - QSS で枠を指定すると、数値欄と選択欄の標準の矢印が消える。矢印は `assets/` の SVG を使う
+  （**`url()` は引用符で囲む。** パスに `'` があると、QSS がまるごと読めなくなる）
 - ふだんの字の種類と大きさは OS に任せる（環境ごとに日本語の字が読めるものが違う）
 """
 
@@ -154,9 +155,10 @@ QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabl
     color: @disabled;
     border-color: @border;
 }
-QComboBox { padding-right: 20px; }
+/* combobox-popup: 0 が無いと Fusion は setMaxVisibleItems を無視し、年の欄（128 項目）が画面の高さいっぱいに開く */
+QComboBox { padding-right: 20px; combobox-popup: 0; }
 QComboBox::drop-down { border: none; width: 20px; }
-QComboBox::down-arrow { image: url(@asset_down); width: 12px; height: 12px; }
+QComboBox::down-arrow { image: url("@asset_down"); width: 12px; height: 12px; }
 QComboBox QAbstractItemView {
     background: @surface;
     border: 1px solid @border;
@@ -181,8 +183,8 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
 QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover { background: @accent_soft; }
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(@asset_up); width: 10px; height: 10px; }
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(@asset_down); width: 10px; height: 10px; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url("@asset_up"); width: 10px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url("@asset_down"); width: 10px; height: 10px; }
 
 QCheckBox::indicator {
     width: 14px;
@@ -192,7 +194,7 @@ QCheckBox::indicator {
     border-radius: 4px;
 }
 QCheckBox::indicator:hover { border-color: @accent; }
-QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(@asset_check); }
+QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url("@asset_check"); }
 QCheckBox::indicator:disabled { background: @disabled_bg; border-color: @border; }
 QCheckBox::indicator:checked:disabled { background: @border_strong; border-color: @border_strong; }
 QRadioButton::indicator {
@@ -205,7 +207,7 @@ QRadioButton::indicator {
 QRadioButton::indicator:hover { border-color: @accent; }
 QRadioButton::indicator:checked { background: @on_accent; border: 4px solid @accent; width: 8px; height: 8px; }
 QMenu::indicator { width: 14px; height: 14px; left: 6px; }
-QMenu::indicator:checked { image: url(@asset_menu_check); }
+QMenu::indicator:checked { image: url("@asset_menu_check"); }
 
 QSlider::groove:horizontal { height: 4px; background: @track; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: @accent; border-radius: 2px; }

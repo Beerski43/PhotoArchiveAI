@@ -3,6 +3,7 @@
 import gc
 import os
 import re
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -10,9 +11,9 @@ import pytest
 import yaml
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, qInstallMessageHandler
 from PySide6.QtGui import QImageReader, QPalette
-from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea
+from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QSpinBox
 
-from photoarchive_ai import config, db, gui, gui_theme
+from photoarchive_ai import config, db, gui, gui_select, gui_theme
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 SOURCE = Path(gui_theme.__file__).parent
@@ -105,7 +106,7 @@ def test_the_text_is_readable_in_both_themes(name, foreground, background):
 def test_the_arrow_images_exist_and_can_be_read(name):
     """**QSS で枠を指定すると標準の矢印が消える。** 画像が読めないと、数値欄と選択欄の矢印が無くなる。"""
     assert b"svg" in QImageReader.supportedImageFormats()
-    paths = re.findall(r"url\(([^)]+)\)", gui_theme.stylesheet(name))
+    paths = re.findall(r'url\("([^"]+)"\)', gui_theme.stylesheet(name))
     assert paths
     for path in paths:
         assert Path(path).is_file(), path
@@ -123,6 +124,45 @@ def test_the_icons_change_with_the_mode(window, themed):
     window.set_theme("dark")
     dark = window.settings_action.icon().pixmap(20, 20).toImage()
     assert light != dark
+
+
+def test_the_year_list_opens_with_at_most_15_rows(themed):
+    """**年の欄は 128 項目。** Fusion は `setMaxVisibleItems` を無視し、一覧が画面の高さいっぱいに開いていた（PR #143 の指摘1）。"""
+    boxes = gui_select.DateBoxes()
+    boxes.show()
+    box = boxes.year
+    assert box.count() > 100
+    box.showPopup()
+    themed.processEvents()
+    view = box.view()
+    row = view.sizeHintForRow(0)
+    assert row > 0
+    assert view.window().height() <= row * box.maxVisibleItems() + 16
+    box.hidePopup()
+    boxes.close()
+
+
+def test_the_stylesheet_survives_an_apostrophe_in_the_path(themed, tmp_path, monkeypatch):
+    """**パスに `'` があっても QSS を読める**（PR #143 の指摘4）。読めないと、矢印だけでなくテーマ全体が効かない。"""
+    copied = tmp_path / "it's a folder" / "assets"
+    shutil.copytree(gui_theme.ASSETS, copied)
+    monkeypatch.setattr(gui_theme, "ASSETS", copied)
+    messages = []
+    previous = qInstallMessageHandler(lambda _kind, _context, text: messages.append(text))
+    try:
+        gui_theme.apply(themed, "light")
+        widget = QSpinBox()
+        widget.resize(120, 40)
+        widget.show()
+        themed.processEvents()
+        image = widget.grab().toImage()
+        widget.close()
+    finally:
+        qInstallMessageHandler(previous)
+    assert not [text for text in messages if "parse" in text.lower()], messages
+    assert image.width() == 120
+    paths = re.findall(r'url\("([^"]+)"\)', gui_theme.stylesheet("light"))
+    assert paths and all(Path(path).is_file() for path in paths)
 
 
 def test_the_arrow_images_are_packaged():
