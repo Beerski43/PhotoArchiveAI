@@ -613,9 +613,12 @@ class SelectionPanel(QWidget):
         # **撮影時期は年と月の欄で選ぶ**（#113・#134・利用者の指定）。並びは年の古い順で、年不明は最後。
         self.year_range = YearMonthRange()
         self.year_range.changed.connect(self._year_changed)
-        self.unknown_only = QCheckBox(f"{YEAR_UNKNOWN}のみ")
-        self.unknown_only.setToolTip("年の分からない写真は、年の範囲を指定すると出ません。ここで見ます")
-        self.unknown_only.toggled.connect(self._year_changed)
+        self.include_unknown = QCheckBox(f"{YEAR_UNKNOWN}を入れる")
+        self.include_unknown.setChecked(True)
+        self.include_unknown.setToolTip(
+            "年の分からない写真を、範囲と関係なく一覧の最後に並べます。表示だけで、選ぶ写真と出力は変わりません"
+        )
+        self.include_unknown.toggled.connect(self._year_changed)
         self.previous_button = QPushButton("前へ")
         self.previous_button.clicked.connect(lambda: self._turn(-1))
         self.next_button = QPushButton("次へ")
@@ -623,7 +626,7 @@ class SelectionPanel(QWidget):
         self.page_label = QLabel("")
         top.addWidget(QLabel("撮影"))
         top.addWidget(self.year_range)
-        top.addWidget(self.unknown_only)
+        top.addWidget(self.include_unknown)
         top.addStretch(1)
         top.addWidget(self.previous_button)
         top.addWidget(self.page_label)
@@ -823,8 +826,9 @@ class SelectionPanel(QWidget):
     def _fill_year_table(self) -> None:
         """候補の年ごとの枚数を表に出す。**入っている値は引き継ぐ**（PR #108 のレビュー指摘1）。
 
-        行は、候補のある年・**年不明**・**〜年以降**（利用者の決定・PR #108。これから増える年は
-        ここで決める。年は `later_row_year`・期間が届かなければ行が無い・#134）。新しく現れた行の
+        行は、候補のある年・**〜年以降**・**年不明**（利用者の決定・PR #108。これから増える年は
+        ここで決める。年は `later_row_year`・期間が届かなければ行が無い・#134）。**年不明は必ず出し、
+        常に一番下**（#18・利用者の指定）。新しく現れた行の
         初期値はルールファイルから（年ごとの対応なら ``unknown`` / ``2027+`` も）。ファイルに枚数が
         無ければ候補の枚数。
         """
@@ -835,11 +839,11 @@ class SelectionPanel(QWidget):
         counts = selection.year_counts(self.connection, rule)
         limit_of = selection.year_limits(self.rule)
         rows = [(year, year_label(year), counts[year]) for year in sorted(y for y in counts if y is not None)]
-        rows.append((selection.COUNT_UNKNOWN, YEAR_UNKNOWN, counts.get(None, 0)))
         end = selection._rule_end((rule.get("date") or {}).get("end"))
         self.later_year = later_row_year((y for y in counts if y is not None), end.year if end else None)
         if self.later_year is not None:
             rows.append((ROW_LATER, f"{self.later_year} 年以降", None))
+        rows.append((selection.COUNT_UNKNOWN, YEAR_UNKNOWN, counts.get(None, 0)))
         self.year_table.setRowCount(0)
         for key, label, candidates in rows:
             row = self.year_table.rowCount()
@@ -974,16 +978,10 @@ class SelectionPanel(QWidget):
         blocked = self.year_range.blockSignals(True)
         self.year_range.set_range(None, None)
         self.year_range.blockSignals(blocked)
-        blocked = self.unknown_only.blockSignals(True)
-        self.unknown_only.setChecked(False)
-        self.unknown_only.blockSignals(blocked)
-        self.unknown_only.setVisible(None in self.by_year)
-        self.year_range.setEnabled(True)
         self.page = 0
         self._show_page()
 
     def _year_changed(self) -> None:
-        self.year_range.setEnabled(not self.unknown_only.isChecked())
         self.page = 0
         self._show_page()
 
@@ -994,16 +992,14 @@ class SelectionPanel(QWidget):
     def _current_year_media(self) -> List[Dict[str, Any]]:
         """選んだ撮影時期の写真。年の古い順に、年の中は選んだ順。
 
-        **範囲を指定したら年不明は出さない**（`年不明のみ` で見る・顔の割り当てタブと同じ）。
+        **年不明は範囲と関係なく、`年不明を入れる` で決める**（入れるなら最後に並ぶ・#18）。
         月まで分からない写真は、**撮影時期がまるごと範囲に入るときだけ**出す（顔の割り当てタブと同じ）。
         """
-        if self.unknown_only.isChecked():
-            return list(self.by_year.get(None, ()))
         start, end = self.year_range.bounds()
-        everything = [media for year in self._years_in_order() for media in self.by_year[year]]
-        if start is None and end is None:
-            return everything
-        return [media for media in everything if _period_within(selection._media_period(media), start, end)]
+        dated = [media for year in self._years_in_order() if year is not None for media in self.by_year[year]]
+        if start is not None or end is not None:
+            dated = [media for media in dated if _period_within(selection._media_period(media), start, end)]
+        return dated + list(self.by_year.get(None, ())) if self.include_unknown.isChecked() else dated
 
     def _turn(self, step: int) -> None:
         pages = max(1, -(-len(self._current_year_media()) // RESULT_PAGE_SIZE))

@@ -807,7 +807,7 @@ def test_the_year_counts_from_the_database_match_the_prepared_candidates(mixed):
 
 
 def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
-    """結果は年の範囲で絞る（#113・#134）。初めは全部の年で年不明は最後。範囲を指定すると年不明は出ない。"""
+    """結果は年の範囲で絞る（#113・#134）。**年不明は範囲と関係なくチェックで決める**（#18）。既定は入れて最後に並べる。"""
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
     panel.choose()
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
@@ -818,13 +818,36 @@ def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
     assert shown()[-1] == "年不明 undated.jpg"
 
     panel.year_range.set_range("2016", "2017")
-    assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg"]
+    assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg", "年不明 undated.jpg"], "範囲を指定しても入る"
     panel.year_range.set_range("2019", None)
-    assert shown() == ["2019 dated.jpg"], "範囲を指定すると年不明は出ない"
+    assert shown() == ["2019 dated.jpg", "年不明 undated.jpg"]
 
-    panel.unknown_only.setChecked(True)
-    assert shown() == ["年不明 undated.jpg"]
-    assert not panel.year_range.isEnabled(), "範囲とは排他だと見た目で分かる"
+    panel.include_unknown.setChecked(False)
+    assert shown() == ["2019 dated.jpg"]
+    assert panel.year_range.isEnabled(), "範囲と同時に使える"
+    panel.year_range.set_range(None, None)
+    assert len(shown()) == 3 and "年不明 undated.jpg" not in shown(), "範囲が無くても外せる"
+
+    selected = len(panel.selected)
+    panel.choose()
+    assert not panel.include_unknown.isChecked(), "選び直しても外したまま"
+    assert len(panel.selected) == selected, "見せ方だけで、選ぶ写真は変わらない"
+    window.close()
+
+
+@pytest.mark.parametrize(
+    "date",
+    ["", "date:\n  end: 2017-12-31\n"],
+    ids=["with-later-row", "period-without-later-row"],
+)
+def test_the_unknown_row_is_always_the_last_row(mixed, tmp_path, date):
+    """**年の表の「年不明」は必ず出て、常に一番下**（#18・利用者の指定）。「〇年以降」より下。"""
+    window, panel = _panel(mixed, tmp_path, f"family_only: false\n{date}")
+    panel.refresh_years()
+    labels = [panel.year_table.item(r, 0).text() for r in range(panel.year_table.rowCount())]
+    assert labels[-1] == "年不明"
+    assert labels.count("年不明") == 1
+    assert any("年以降" in label for label in labels) == (date == "")
     window.close()
 
 
@@ -833,6 +856,7 @@ def test_the_results_can_be_narrowed_by_month(mixed, tmp_path):
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
     panel.choose()
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+    panel.include_unknown.setChecked(False)
     panel.year_range.set_range("2017-05", "2019")
     assert shown() == ["2017 auto2017.jpg", "2019 dated.jpg"]
     panel.year_range.old_year.setCurrentIndex(panel.year_range.old_year.findData(2019))
