@@ -8,7 +8,7 @@ import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from photoarchive_ai import db, gui, gui_select, scoring, selection
+from photoarchive_ai import config, db, gui, gui_select, scoring, selection
 from tests.helpers import scene, write_photo
 from tests.test_selection import _add, _face
 
@@ -19,6 +19,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def qt_app():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def settings_file(tmp_path, monkeypatch):
+    """**ルールの読み込みと別名の保存は設定ファイルに書く。** カレントごと tmp_path へ移す。
+
+    移さないと、本体の checkout で流したテストが実データの `config/app_settings.yml` を書き換える。
+    返すのは、書かれる先。
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    return work / "config" / "app_settings.yml"
 
 
 @pytest.fixture()
@@ -143,6 +156,289 @@ def test_saving_writes_the_rule_and_keeps_a_backup(window, rule_path, monkeypatc
     assert saved["family_only"] is True
 
 
+def _yes(monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+
+
+def _pick_file(monkeypatch, path):
+    """ファイルを選ぶ窓で ``path`` を選ぶ（空文字は取り消し）。"""
+    for name in ("getOpenFileName", "getSaveFileName"):
+        monkeypatch.setattr(gui_select.QFileDialog, name, lambda *args, **kwargs: (str(path), ""))
+
+
+def test_loading_a_rule_file_replaces_the_screen_and_becomes_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    """**読み込んだファイルが以後の保存先になる**（#18）。もとのファイルには書かない。年の表も新しい枚数から。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    panel.refresh_years()
+    panel.weight_spins["smile"].setValue(0.9)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\ncount_per_year: 3\ndate:\n  start: 2019-01-01\n", encoding="utf-8")
+    original = rule_path.read_text(encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    panel.load_rule_file()
+
+    assert panel.rule_path == str(other)
+    assert other.name in panel.rule_file_label.text()
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+    assert panel.period_start.text() == "2019-01-01"
+    assert panel._year_values()[2019] == 3
+    panel.weight_spins["smile"].setValue(0.5)
+    panel.save_rule()
+    assert selection.load_rule(str(other))["weights"]["smile"] == pytest.approx(0.5)
+    assert rule_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["weights: [\n", "- not-a-mapping\n", "weights:\n  smile: -1\n"],
+    ids=["broken-yaml", "not-a-dict", "bad-weight"],
+)
+def test_an_unreadable_rule_file_leaves_the_screen_as_it_was(window, rule_path, tmp_path, monkeypatch, text):
+    """読めないファイルでは知らせるだけ。**動かした値も保存先もそのまま。** 壊れた YAML で落ちない。"""
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    panel = window.selection
+    panel.weight_spins["smile"].setValue(0.9)
+    bad = tmp_path / "bad.yml"
+    bad.write_text(text, encoding="utf-8")
+    _pick_file(monkeypatch, bad)
+
+    panel.load_rule_file()
+
+    assert len(warnings) == 1
+    assert panel.rule_path == str(rule_path)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.9)
+
+
+def test_declining_or_cancelling_a_load_changes_nothing(window, rule_path, tmp_path, monkeypatch):
+    panel = window.selection
+    panel.weight_spins["smile"].setValue(0.9)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+    _pick_file(monkeypatch, "")
+    panel.load_rule_file()
+
+    assert panel.rule_path == str(rule_path)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.9)
+
+
+def test_saving_to_another_file_leaves_the_original_and_becomes_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    """**別のファイルに保存しても、もとのファイルは変わらない**（#18）。以後の上書きは新しいファイルへ。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    panel.refresh_years()
+    panel.weight_spins["smile"].setValue(0.5)
+    original = rule_path.read_text(encoding="utf-8")
+    target = tmp_path / "movie.yml"
+    _pick_file(monkeypatch, target)
+
+    panel.save_rule_as()
+
+    assert selection.load_rule(str(target))["weights"]["smile"] == pytest.approx(0.5)
+    assert rule_path.read_text(encoding="utf-8") == original
+    assert panel.rule_path == str(target)
+    assert target.name in panel.rule_file_label.text()
+    assert not Path(str(target) + ".bak").exists(), "新しいファイルに控えは要らない"
+
+    panel.weight_spins["smile"].setValue(0.75)
+    panel.save_rule()
+    assert selection.load_rule(str(target))["weights"]["smile"] == pytest.approx(0.75)
+    assert rule_path.read_text(encoding="utf-8") == original
+    assert Path(str(target) + ".bak").exists()
+
+
+def test_saving_to_another_file_adds_a_readable_suffix_and_backs_up_an_existing_file(window, tmp_path, monkeypatch):
+    panel = window.selection
+    _pick_file(monkeypatch, tmp_path / "plain")
+    panel.save_rule_as()
+    assert panel.rule_path == str(tmp_path / "plain.yml")
+    selection.load_rule(panel.rule_path)
+
+    existing = tmp_path / "existing.yaml"
+    existing.write_text("# 残す\n", encoding="utf-8")
+    _pick_file(monkeypatch, existing)
+    panel.save_rule_as()
+    assert panel.rule_path == str(existing)
+    assert "残す" in Path(str(existing) + ".bak").read_text(encoding="utf-8")
+
+
+def test_cancelling_save_as_or_failing_to_write_keeps_the_save_target(window, rule_path, tmp_path, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    panel = window.selection
+    _pick_file(monkeypatch, "")
+    panel.save_rule_as()
+    assert panel.rule_path == str(rule_path) and not warnings
+
+    _pick_file(monkeypatch, tmp_path / "no-such-folder" / "rule.yml")
+    panel.save_rule_as()
+    assert panel.rule_path == str(rule_path)
+    assert len(warnings) == 1
+
+
+def test_saving_without_a_rule_file_asks_where(database, tmp_path, monkeypatch):
+    window = gui.AppWindow(str(database), rule_path=None, output_root=str(tmp_path / "out"))
+    target = tmp_path / "new.yml"
+    _pick_file(monkeypatch, target)
+    window.selection.save_rule()
+    assert window.selection.rule_path == str(target) and target.exists()
+    window.close()
+
+
+def _settings(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _existing_settings(path):
+    """もとの設定ファイル（ほかのキーが残ることを見る）。"""
+    path.parent.mkdir()
+    path.write_text("# コメント\noutput_root: /keep\ndlib_model_dir: /models\nrule_path: old.yml\n", encoding="utf-8")
+
+
+def test_loading_a_rule_file_also_rewrites_the_rule_path(window, tmp_path, monkeypatch, settings_file):
+    """**読み込むと設定の `rule_path` も変わる**（#18・利用者の決定）。次の起動と CLI もそのファイルを読む。ほかのキーは残し、控えを取る。"""
+    _yes(monkeypatch)
+    _existing_settings(settings_file)
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    window.selection.load_rule_file()
+
+    assert _settings(settings_file) == {"output_root": "/keep", "dlib_model_dir": "/models", "rule_path": str(other)}
+    assert "コメント" in Path(str(settings_file) + ".bak").read_text(encoding="utf-8")
+    assert config.get_rule_path(config.load_settings()) == str(other)
+
+
+def test_saving_to_another_file_also_rewrites_the_rule_path_but_overwriting_does_not(
+    window, tmp_path, monkeypatch, settings_file
+):
+    _yes(monkeypatch)
+    _existing_settings(settings_file)
+    target = tmp_path / "movie.yml"
+    _pick_file(monkeypatch, target)
+
+    window.selection.save_rule_as()
+    assert _settings(settings_file)["rule_path"] == str(target)
+
+    written = settings_file.read_text(encoding="utf-8")
+    Path(str(settings_file) + ".bak").unlink()
+    window.selection.save_rule()
+    assert settings_file.read_text(encoding="utf-8") == written
+    assert not Path(str(settings_file) + ".bak").exists(), "上書きの保存では設定に書かない"
+
+
+def test_a_rule_operation_that_did_not_happen_leaves_the_settings_alone(
+    window, tmp_path, monkeypatch, settings_file
+):
+    """断った・取り消した・読めない・書けないときは、設定ファイルに触らない。"""
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    _existing_settings(settings_file)
+    before = settings_file.read_text(encoding="utf-8")
+    panel = window.selection
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    bad = tmp_path / "bad.yml"
+    bad.write_text("weights: [\n", encoding="utf-8")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+    _yes(monkeypatch)
+    _pick_file(monkeypatch, bad)
+    panel.load_rule_file()
+    _pick_file(monkeypatch, "")
+    panel.load_rule_file()
+    panel.save_rule_as()
+    _pick_file(monkeypatch, tmp_path / "no-such-folder" / "rule.yml")
+    panel.save_rule_as()
+
+    assert settings_file.read_text(encoding="utf-8") == before
+    assert not Path(str(settings_file) + ".bak").exists()
+
+
+def test_choosing_the_file_already_in_the_settings_does_not_rewrite_them(
+    database, tmp_path, monkeypatch, settings_file
+):
+    """同じファイルなら書かない（設定のコメントが消えるだけ）。相対パスで書いてあっても同じファイルと分かる。"""
+    _yes(monkeypatch)
+    rule = settings_file.parent.parent / "rule.yml"
+    rule.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    settings_file.parent.mkdir()
+    settings_file.write_text("# コメント\nrule_path: rule.yml\n", encoding="utf-8")
+    before = settings_file.read_text(encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path="rule.yml", output_root=str(tmp_path / "out"))
+    _pick_file(monkeypatch, rule)
+
+    window.selection.load_rule_file()
+
+    assert settings_file.read_text(encoding="utf-8") == before
+    window.close()
+
+
+def test_a_settings_file_that_cannot_be_written_only_warns(window, tmp_path, monkeypatch, settings_file):
+    """**設定に書けなくても、読み込みは取り消さない。** 壊れた設定は上書きしない。設定の窓を保存しても前のファイルへ戻らない。"""
+    _yes(monkeypatch)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    settings_file.parent.mkdir()
+    settings_file.write_text("rule_path: [\n", encoding="utf-8")
+    panel = window.selection
+    configured = panel.configured_rule_path
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+
+    panel.load_rule_file()
+
+    assert len(warnings) == 1 and "前のファイル" in warnings[0]
+    assert settings_file.read_text(encoding="utf-8") == "rule_path: [\n"
+    assert panel.rule_path == str(other)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.25)
+    assert not panel.set_paths(configured, str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(other)
+
+
+def test_saving_the_settings_after_a_load_keeps_the_loaded_file(window, tmp_path, monkeypatch):
+    """設定の窓の保存は `set_paths` を呼ぶ。読み込みで `rule_path` も変わっているので、読み直さない。"""
+    _yes(monkeypatch)
+    panel = window.selection
+    other = tmp_path / "other.yml"
+    other.write_text("weights:\n  smile: 0.25\n", encoding="utf-8")
+    _pick_file(monkeypatch, other)
+    panel.load_rule_file()
+    panel.weight_spins["smile"].setValue(0.4)
+
+    assert not panel.set_paths(str(other), str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(other)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.4)
+
+    # 設定ファイルの rule_path が別の値になっていたら、そちらが効く
+    changed = tmp_path / "changed.yml"
+    changed.write_text("weights:\n  smile: 0.1\n", encoding="utf-8")
+    assert panel.set_paths(str(changed), str(tmp_path / "out"), panel.source_roots)
+    assert panel.rule_path == str(changed)
+    assert panel.weight_spins["smile"].value() == pytest.approx(0.1)
+
+
+def test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing(database, tmp_path, monkeypatch):
+    """本筋の外だが直した。構文の壊れた YAML は ValueError ではないので、起動ごと落ちていた。"""
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+    rule = tmp_path / "broken.yml"
+    rule.write_text("weights: [\n", encoding="utf-8")
+    window = gui.AppWindow(str(database), rule_path=str(rule), output_root=str(tmp_path / "out"))
+    assert len(warnings) == 1
+    assert window.selection.rule == {}
+    window.close()
+
+
 def test_the_breakdown_adds_up_to_the_score(window):
     """点の内訳の合計が、並びに使った点と一致する（なぜその順位かを見せる）。"""
     panel = window.selection
@@ -220,6 +516,99 @@ def test_the_layout_on_the_screen_comes_from_the_rule_and_is_saved(database, tmp
     window.close()
 
 
+def _pick(box, value):
+    box.setCurrentIndex(box.findData(value))
+
+
+def test_the_period_is_chosen_with_year_month_and_day_boxes(database, tmp_path):
+    """**撮影時期は年・月・日のコンボボックス**（#18・利用者の指定）。ルールの値が欄に割れて出る。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-03-04\n")
+    assert panel.period_start.parts() == (2018, 3, 4)
+    assert panel.period_end.parts() == (0, 0, 0)
+    assert panel.period_end.year.currentText() == "--"
+    _pick(panel.period_end.year, 2019)
+    _pick(panel.period_end.month, 2)
+    _pick(panel.period_end.day, 28)
+    assert panel._period_values() == ("2018-03-04", "2019-02-28")
+    assert panel.current_rule()["date"] == {"start": "2018-03-04", "end": "2019-02-28"}
+    window.close()
+
+
+def test_a_partly_chosen_period_covers_the_whole_year_or_month(database, tmp_path):
+    """年だけ・年月までも指定できる。**始めは初日から、終わりは末日まで**（うるう年も）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    _pick(panel.period_start.year, 2018)
+    _pick(panel.period_end.year, 2020)
+    assert panel._period_values() == ("2018-01-01", "2020-12-31")
+    _pick(panel.period_start.month, 3)
+    _pick(panel.period_end.month, 2)
+    assert panel._period_values() == ("2018-03-01", "2020-02-29")
+    assert selection.period_problem(*panel._period_values()) is None
+    window.close()
+
+
+def test_the_month_and_day_wait_for_the_year_and_month(database, tmp_path):
+    """年が `--` なら月は押せず、月が `--` なら日は押せない。年を `--` に戻すと下も `--` に戻る。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    boxes = panel.period_start
+    assert not boxes.month.isEnabled() and not boxes.day.isEnabled()
+    _pick(boxes.year, 2018)
+    assert boxes.month.isEnabled() and not boxes.day.isEnabled()
+    _pick(boxes.month, 2)
+    assert boxes.day.isEnabled()
+    assert boxes.day.itemData(boxes.day.count() - 1) == 28, "実在する日だけ"
+    _pick(boxes.day, 28)
+    _pick(boxes.year, gui_select.DATE_UNSET)
+    assert boxes.parts() == (0, 0, 0)
+    assert boxes.text() == ""
+    assert not boxes.month.isEnabled() and not boxes.day.isEnabled()
+    window.close()
+
+
+def test_moving_a_period_box_rebuilds_the_year_table(database, tmp_path):
+    """欄を動かしたら年の表が作り直される（以前の入力欄の「確定したら」と同じ）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "count_per_year: 5\n")
+    panel.refresh_years()
+    assert "2018" in _rows(panel)
+    _pick(panel.period_start.year, 2019)
+    assert "2018" not in _rows(panel)
+    window.close()
+
+
+def test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched(database, tmp_path):
+    """**時刻付きの値を黙って変えない。** 欄には日付を出し、触るまでは元の値のまま。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: '2018-03-04T10:30:00'\n")
+    boxes = panel.period_start
+    assert boxes.parts() == (2018, 3, 4)
+    assert boxes.text() == "2018-03-04T10:30:00"
+    _pick(boxes.day, 5)
+    assert boxes.text() == "2018-03-05"
+    window.close()
+
+
+def test_an_unreadable_period_says_how_to_clear_it(database, tmp_path):
+    """読めない値の欄は `--` に見えるのに、「選ぶ」と保存が止まる。**`--` を選び直しても変わらない**ので、消し方を書く（PR #143 の指摘3）。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: abc\n")
+    assert panel.period_start.parts() == (0, 0, 0)
+    assert panel.period_start.text() == "abc"
+    assert "abc" in panel.period_notice.text()
+    assert "年を選び直す" in panel.period_notice.text()
+
+    _pick(panel.period_start.year, 2019)
+
+    assert panel.period_start.text() == "2019-01-01"
+    assert panel.period_notice.text() == ""
+    window.close()
+
+
+def test_a_period_in_the_wrong_order_does_not_talk_about_choosing_again(database, tmp_path):
+    """始めが終わりより後なのは読めている値。消し方の案内は要らない。"""
+    window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2020-01-01\n  end: 2019-01-01\n")
+    assert "より後" in panel.period_notice.text()
+    assert "選び直す" not in panel.period_notice.text()
+    window.close()
+
+
 def test_the_period_comes_from_the_rule_quoted_or_not(database, tmp_path):
     # 引用符の無い日付は YAML が date で読む
     window, panel, _ = _rule_panel(database, tmp_path, "date:\n  start: 2018-01-01\n  end: '2018-12-31'\n")
@@ -268,6 +657,7 @@ def test_an_unreadable_period_is_shown_and_stops_choosing_and_saving(database, t
     window, panel, path = _rule_panel(database, tmp_path, "count_per_year: 5\n")
     _set_period(panel, start, end)
     assert panel.period_notice.text()
+    assert panel.period_start.text() == start and panel.period_end.text() == end, "読めない値を黙って消さない"
     panel.choose()
     panel.save_rule()
     assert len(warned) == 2 and not panel.selected
@@ -639,7 +1029,7 @@ def test_the_year_counts_from_the_database_match_the_prepared_candidates(mixed):
 
 
 def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
-    """結果は年の範囲で絞る（#113・#134）。初めは全部の年で年不明は最後。範囲を指定すると年不明は出ない。"""
+    """結果は年の範囲で絞る（#113・#134）。**年不明は範囲と関係なくチェックで決める**（#18）。既定は入れて最後に並べる。"""
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
     panel.choose()
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
@@ -650,13 +1040,102 @@ def test_the_results_can_be_narrowed_to_a_range_of_years(mixed, tmp_path):
     assert shown()[-1] == "年不明 undated.jpg"
 
     panel.year_range.set_range("2016", "2017")
-    assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg"]
+    assert shown() == ["2016 nofamily2016.jpg", "2017 auto2017.jpg", "年不明 undated.jpg"], "範囲を指定しても入る"
     panel.year_range.set_range("2019", None)
-    assert shown() == ["2019 dated.jpg"], "範囲を指定すると年不明は出ない"
+    assert shown() == ["2019 dated.jpg", "年不明 undated.jpg"]
 
-    panel.unknown_only.setChecked(True)
-    assert shown() == ["年不明 undated.jpg"]
-    assert not panel.year_range.isEnabled(), "範囲とは排他だと見た目で分かる"
+    panel.include_unknown.setChecked(False)
+    assert shown() == ["2019 dated.jpg"]
+    assert panel.year_range.isEnabled(), "範囲と同時に使える"
+    panel.year_range.set_range(None, None)
+    assert len(shown()) == 3 and "年不明 undated.jpg" not in shown(), "範囲が無くても外せる"
+
+    selected = len(panel.selected)
+    panel.choose()
+    assert not panel.include_unknown.isChecked(), "選び直しても外したまま"
+    assert len(panel.selected) == selected, "見せ方だけで、選ぶ写真は変わらない"
+    window.close()
+
+
+@pytest.mark.parametrize(
+    "date",
+    ["", "date:\n  end: 2017-12-31\n"],
+    ids=["with-later-row", "period-without-later-row"],
+)
+def test_the_unknown_row_is_always_the_last_row(mixed, tmp_path, date):
+    """**年の表の「年不明」は必ず出て、常に一番下**（#18・利用者の指定）。「〇年以降」より下。"""
+    window, panel = _panel(mixed, tmp_path, f"family_only: false\n{date}")
+    panel.refresh_years()
+    labels = [panel.year_table.item(r, 0).text() for r in range(panel.year_table.rowCount())]
+    assert labels[-1] == "年不明"
+    assert labels.count("年不明") == 1
+    assert any("年以降" in label for label in labels) == (date == "")
+    window.close()
+
+
+def _set_result_order(panel, value):
+    panel.order_box.setCurrentIndex(panel.order_box.findData(value))
+
+
+def _shown_results(panel):
+    return [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+
+
+def test_the_results_can_be_ordered_by_date_and_points(mixed, tmp_path):
+    """**結果にも `並び` がある**（#18・利用者の要望）。既定はいままでの順。年不明は日時の順では最後、点の順では点のとおり。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    assert panel.order_box.currentData() == gui_select.ORDER_YEAR
+    assert _shown_results(panel) == [
+        "2016 nofamily2016.jpg", "2017 auto2017.jpg", "2019 dated.jpg", "年不明 undated.jpg"
+    ]
+
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert _shown_results(panel) == [
+        "2019 dated.jpg", "2017 auto2017.jpg", "2016 nofamily2016.jpg", "年不明 undated.jpg"
+    ]
+    _set_result_order(panel, gui_select.ORDER_TAKEN_OLD)
+    assert _shown_results(panel)[0] == "2016 nofamily2016.jpg"
+    assert _shown_results(panel)[-1] == "年不明 undated.jpg"
+
+    scores = {"dated.jpg": 10.0, "auto2017.jpg": 40.0, "nofamily2016.jpg": 20.0, "undated.jpg": 30.0}
+    for media in panel.selected:
+        media["family_score"] = scores[Path(media["path"]).name]
+    _set_result_order(panel, gui_select.ORDER_POINTS_HIGH)
+    assert _shown_results(panel) == [
+        "2017 auto2017.jpg 40点", "年不明 undated.jpg 30点", "2016 nofamily2016.jpg 20点", "2019 dated.jpg 10点"
+    ]
+    _set_result_order(panel, gui_select.ORDER_POINTS_LOW)
+    assert _shown_results(panel)[0] == "2019 dated.jpg 10点"
+    window.close()
+
+
+def test_the_result_order_changes_only_the_view(mixed, tmp_path):
+    """**見せ方だけ。** 選んだ写真の順（出力の順位）は変えない。絞り込みと併せて効き、選び直しても保つ。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    chosen = [media["id"] for media in panel.selected]
+    panel.page = 0
+
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert [media["id"] for media in panel.selected] == chosen
+    panel.include_unknown.setChecked(False)
+    panel.year_range.set_range("2016", "2017")
+    assert _shown_results(panel) == ["2017 auto2017.jpg", "2016 nofamily2016.jpg"]
+
+    panel.choose()
+    assert panel.order_box.currentData() == gui_select.ORDER_TAKEN_NEW
+    window.close()
+
+
+def test_a_new_result_order_goes_back_to_the_first_page(mixed, tmp_path, monkeypatch):
+    monkeypatch.setattr(gui_select, "RESULT_PAGE_SIZE", 2)
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    panel._turn(1)
+    assert panel.page == 1
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert panel.page == 0
     window.close()
 
 
@@ -665,6 +1144,7 @@ def test_the_results_can_be_narrowed_by_month(mixed, tmp_path):
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
     panel.choose()
     shown = lambda: [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+    panel.include_unknown.setChecked(False)
     panel.year_range.set_range("2017-05", "2019")
     assert shown() == ["2017 auto2017.jpg", "2019 dated.jpg"]
     panel.year_range.old_year.setCurrentIndex(panel.year_range.old_year.findData(2019))
@@ -712,6 +1192,64 @@ def test_a_value_off_the_gauge_is_kept_as_typed(window):
     assert panel.current_rule()["similar_seconds"] == 600
 
 
+def test_the_settings_column_fits_without_a_sideways_scroll(window):
+    """長い項目名は折り返す。**押し広げると「既定」ボタンが切れて、横スクロールが出ていた**（#18 で見つけた）。"""
+    from PySide6.QtWidgets import QScrollArea
+
+    panel = window.selection
+    window.resize(1240, 820)
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    assert panel.findChild(QScrollArea).horizontalScrollBar().maximum() == 0
+
+
+def test_each_gauge_marks_its_default_value(window):
+    """**ゲージの既定値の位置に印が出る**（#18）。値を動かしても印は動かない。"""
+    panel = window.selection
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    rows = list(panel.weight_rows.values()) + list(panel.number_rows.values())
+    assert rows
+    for row in rows:
+        slider = row.slider
+        assert slider.mark == round(row.default / row.step)
+        if slider.mark > slider.maximum():
+            assert slider.mark_x() is None
+            continue
+        x = slider.mark_x()
+        assert 0 <= x < slider.width()
+        slider.setValue(slider.maximum() if slider.mark < slider.maximum() / 2 else 0)
+        QApplication.processEvents()
+        assert slider.mark_x() == x, "取っ手を動かしても印は動かない"
+
+
+def test_the_mark_is_at_the_right_place_and_is_drawn(window):
+    panel = window.selection
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    slider = panel.weight_rows["technical"].slider
+    slider.setValue(slider.maximum())  # 取っ手を印から離す
+    QApplication.processEvents()
+
+    slider.mark = 0
+    left = slider.mark_x()
+    slider.mark = slider.maximum()
+    right = slider.mark_x()
+    slider.mark = slider.maximum() // 2
+    middle = slider.mark_x()
+    assert left < middle < right
+    assert abs(middle - (left + right) / 2) <= 1
+
+    drawn = slider.grab().toImage()
+    slider.mark = slider.maximum() + 1  # 印を消す
+    bare = slider.grab().toImage()
+    assert slider.mark_x() is None
+    assert drawn.pixelColor(middle, 1) != bare.pixelColor(middle, 1), "描いた位置の色が変わる"
+
+
 def test_the_default_button_puts_back_only_its_own_value(window):
     """**項目ごとに1クリックで既定へ戻す**（#120）。既定のときは押せない。ほかの項目には触らない。"""
     panel = window.selection
@@ -749,34 +1287,79 @@ def _wheel(widget, notches=-1):
                         QPoint(0, 120 * notches), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
                         False)
     QApplication.sendEvent(widget, event)
+    return event
 
 
-def test_a_gauge_ignores_the_wheel_unless_focused(window):
-    """**設定欄をホイールでスクロールしても、マウスの下の重みが変わらない**（PR #122 のレビュー指摘1）。
+def _settings_inputs(panel):
+    """設定欄にある、ホイールで値の動く部品すべて（年の表の欄も）。"""
+    from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox, QComboBox, QScrollArea
 
-    ゲージと入力欄はフォーカスが無ければホイールを受けない。クリックかタブで選んだときだけ動く。
+    inner = panel.findChild(QScrollArea).widget()
+    found = []
+    for kind in (QAbstractSpinBox, QAbstractSlider, QComboBox):
+        # 表やスクロール領域が持つスクロールバーも QAbstractSlider だが、値の入力欄ではない
+        found += [w for w in inner.findChildren(kind) if type(w).__name__ != "QScrollBar"]
+    return found
+
+
+def _input_value(widget):
+    return widget.currentIndex() if hasattr(widget, "currentIndex") else widget.value()
+
+
+@pytest.mark.parametrize("focused", [False, True], ids=["pointer-only", "after-clicking"])
+def test_the_wheel_never_changes_a_value_in_the_settings_column(window, focused):
+    """**設定欄をスクロールしても、マウスの下の値が変わらない**（#18・PR #122 のレビュー指摘1）。
+
+    利用者「スクロールしていると、たまたまポインタが、どこかしらの入力欄に重なって、その値が
+    スクロールされたものと認識されて変わってしまう」。年の表の欄は素の `QSpinBox` のままで、
+    それ以外もクリックしたあとはホイールで動いていた。**全部の部品を見るので、足した欄も見張られる。**
     """
     panel = window.selection
     window.tabs.setCurrentWidget(panel)
     window.show()
+    panel.refresh_years()
     QApplication.processEvents()
-    panel.weight_rows["smile"].reset_button.setFocus()
-    before = panel.current_rule()["weights"]
-    for key in ("technical", "aesthetic"):
-        row = panel.weight_rows[key]
-        assert not row.slider.hasFocus() and not row.spin.hasFocus()
-        _wheel(row.slider)
-        _wheel(row.spin)
-    _wheel(panel.number_rows["similar_distance"].slider)
-    _wheel(panel.number_spins["similar_distance"])
-    assert panel.current_rule()["weights"] == before
-    assert panel.number_spins["similar_distance"].value() == selection.RULE_NUMBERS["similar_distance"]
+    inputs = _settings_inputs(panel)
+    assert panel.year_table.rowCount() > 0
+    assert panel.year_table.cellWidget(0, 2) in inputs
+    assert panel.fill_spin in inputs and panel.layout_combo in inputs
 
-    technical = panel.weight_rows["technical"]
-    technical.slider.setFocus()
+    for widget in inputs:
+        # 真ん中の値に置く（端の値だと、向きによっては元から動かず、テストが素通りする）
+        if hasattr(widget, "currentIndex"):
+            widget.setCurrentIndex(0)
+        else:
+            widget.setValue(type(widget.value())((widget.minimum() + widget.maximum()) / 2))
+    for widget in inputs:
+        if focused:
+            widget.setFocus()
+            QApplication.processEvents()
+        before = _input_value(widget)
+        event = _wheel(widget)
+        assert _input_value(widget) == before, f"{type(widget).__name__} の値がホイールで動いた"
+        # 受けなければ Qt が親へ送り、スクロールになる（テストから送るイベントは親へ伝わらないので、受けないことを見る）
+        # 押せない欄（年が -- のときの月など）には Qt がホイールを渡さず、受けた印も変わらない
+        assert not event.isAccepted() or not widget.isEnabled(), f"{type(widget).__name__} がホイールを受けた"
+
+
+def test_the_sharpness_gauge_still_takes_the_wheel_after_clicking(window):
+    """顔の割り当てタブの鮮明さは**スクロール領域の外**で、絞り込みをホイールで調整できる（#135）。設定欄とは扱いが違う。"""
+    faces = window.assignment
+    window.tabs.setCurrentWidget(faces)
+    window.show()
+    faces.blur_check.setChecked(True)
+    faces.blur_spin.setValue(30)
+    faces.blur_check.setFocus()
     QApplication.processEvents()
-    _wheel(technical.slider)
-    assert panel.weight_spins["technical"].value() != pytest.approx(before["technical"]), "選んだゲージは動く"
+
+    _wheel(faces.blur_slider)
+    assert faces.blur_spin.value() == 30, "上を通っただけでは動かない"
+
+    faces.blur_slider.setFocus()
+    QApplication.processEvents()
+    assert faces.blur_slider.hasFocus()
+    _wheel(faces.blur_slider)
+    assert faces.blur_spin.value() != 30, "選んだゲージは動く"
 
 
 def test_the_panel_says_which_old_weight_keys_were_skipped(database, tmp_path, monkeypatch):

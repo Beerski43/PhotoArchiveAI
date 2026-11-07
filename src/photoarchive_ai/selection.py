@@ -7,7 +7,7 @@ from functools import lru_cache
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import (
-    Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple, Union,
+    Any, Callable, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union,
 )
 
 import yaml
@@ -474,6 +474,60 @@ def explain(candidates: "Candidates", rule: Dict[str, Any], media_id: int) -> Di
         candidates.quality.get(media_id),
         candidates.largest.get(media_id),
     )
+
+
+#: 顔の割り当ての一覧を顔の点で並べる（#18）。SQL では並べられない（`rank_by_points`）。
+ORDER_POINTS_DESC = "points_desc"
+ORDER_POINTS_ASC = "points_asc"
+ORDER_POINTS = (ORDER_POINTS_DESC, ORDER_POINTS_ASC)
+
+#: 顔の点のうち、後から測る値。すべて無ければ点を出さず、一部が無ければ `FacePoint.partial`。
+_MEASURED_FACE_COLUMNS = ("sharpness", "aligned", "eye_blink", "mouth_smile")
+#: これより多い写真の値は、写真を指定せず全部読む（指定すると 500 件ごとに問い合わせる）。
+_READ_ALL_PHOTOS_OVER = 500
+
+
+class FacePoint(NamedTuple):
+    """一覧に出す顔の点（#18）。``score`` は `select` と同じ `scoring.face_score`。"""
+
+    #: 0〜100。後から測る値が1つも無ければ None（未計測）。
+    score: Optional[float]
+    #: 測っていない項目があり、中間の値（`scoring.UNKNOWN`）で計算した。
+    partial: bool
+
+
+def face_points(
+    connection, faces: Sequence[Dict[str, Any]], weights: Optional["scoring.Weights"] = None
+) -> Dict[int, FacePoint]:
+    """顔の点（id → `FacePoint`）。``faces`` は `db.list_faces` の行。**`select` と同じ式・同じ物差し。**
+
+    点は重みと写真によって変わる値なので、保存しない。
+    """
+    media_ids = {face["media_id"] for face in faces}
+    only = None if len(media_ids) > _READ_ALL_PHOTOS_OVER else media_ids
+    quality = db.photo_quality(connection, QUALITY_VERSION, only)
+    largest = db.largest_face_sizes(connection, only)
+    points: Dict[int, FacePoint] = {}
+    for face in faces:
+        measured = [face.get(column) is not None for column in _MEASURED_FACE_COLUMNS]
+        media_id = face["media_id"]
+        score = (
+            scoring.face_score(face, weights, largest.get(media_id), quality.get(media_id))
+            if any(measured) else None
+        )
+        points[int(face["id"])] = FacePoint(score, any(measured) and not all(measured))
+    return points
+
+
+def rank_by_points(points: Dict[int, FacePoint], descending: bool = True) -> List[int]:
+    """顔の id を点の順に。**未計測の顔はどちらの向きでも最後**。同じ点は id 順（ページをまたいで重複・欠落させない）。"""
+    sign = -1.0 if descending else 1.0
+
+    def key(face_id: int) -> tuple:
+        score = points[face_id].score
+        return (True, 0.0, face_id) if score is None else (False, sign * score, face_id)
+
+    return sorted(points, key=key)
 
 
 def _filtered(

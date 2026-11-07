@@ -7,5 +7,7 @@ source_roots:
   - /path/to/media
 output_root: /path/to/output
 rule_path: config/rule.yml
+# GUI の表示モード。auto（OS に合わせる）/ light / dark
+theme: auto
 # dlib の学習済みモデルを手置きしたディレクトリ（任意）
 dlib_model_dir: null

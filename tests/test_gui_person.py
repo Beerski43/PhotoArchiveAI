@@ -765,8 +765,8 @@ def test_the_person_dialog_round_trips_a_birth_date(qt_app):
         name="${PERSON_2}", relation="daughter", memo="メモ", birth_date="2011-05-03"
     )
 
-    assert (dialog.birth_year.value(), dialog.birth_month.value()) == (2011, 5)
-    assert dialog.birth_day.value() == 3
+    assert (dialog.birth_year.currentText(), dialog.birth_month.currentText()) == ("2011", "5")
+    assert dialog.birth_day.currentText() == "3"
     assert dialog.values() == ("${PERSON_2}", "daughter", "メモ", (2011, 5, 3))
 
     # 未設定の人物は3つとも空で開く
@@ -776,11 +776,55 @@ def test_the_person_dialog_round_trips_a_birth_date(qt_app):
     empty.close()
 
 
-def test_typing_a_birth_date_straight_from_the_keyboard(qt_app):
-    """「--」の文字が入った欄でも、打鍵で置き換わること。
+def _pick(box, value):
+    box.setCurrentIndex(box.findData(value))
 
-    年齢の入力と同じ作り。全選択しておかないと ▲ を押すしかなくなる。
-    """
+
+def test_the_birth_date_boxes_offer_only_days_that_exist(qt_app):
+    """**日の欄には、選んだ年月に実在する日だけ**（#18）。うるう年も見る。"""
+    dialog = photoarchive_gui.PersonDialog(name="父")
+    days = lambda: dialog.birth_day.itemData(dialog.birth_day.count() - 1)
+
+    assert dialog.birth_year.itemText(0) == dialog.birth_month.itemText(0) == dialog.birth_day.itemText(0) == "--"
+    assert days() == 31, "年月が決まるまでは 31 日まで"
+    _pick(dialog.birth_month, 2)
+    assert days() == 29, "年が決まるまでは 2 月 29 日も選べる"
+    _pick(dialog.birth_year, 2011)
+    assert days() == 28
+    _pick(dialog.birth_year, 2012)
+    assert days() == 29
+    _pick(dialog.birth_month, 4)
+    assert days() == 30
+    dialog.close()
+
+
+def test_a_day_that_no_longer_exists_goes_back_to_unset(qt_app):
+    """**末日へ黙って丸めない**（違う誕生日が保存される）。`--` に戻れば保存のときに知らせが出る。あれば保つ。"""
+    dialog = photoarchive_gui.PersonDialog(name="父", birth_date="2011-05-31")
+    _pick(dialog.birth_month, 7)
+    assert dialog.values()[3] == (2011, 7, 31), "7 月にも 31 日があるので保つ"
+    _pick(dialog.birth_month, 2)
+    assert dialog.values()[3] == (2011, 2, 0)
+    with pytest.raises(ValueError):
+        photoarchive_gui.build_birth_date(*dialog.values()[3])
+    dialog.close()
+
+
+def test_the_birth_year_box_is_newest_first_and_keeps_an_old_saved_year(qt_app):
+    dialog = photoarchive_gui.PersonDialog(name="父")
+    years = [dialog.birth_year.itemData(i) for i in range(1, dialog.birth_year.count())]
+    assert years == sorted(years, reverse=True)
+    assert years[-1] == photoarchive_gui.BIRTH_YEAR_FIRST
+    assert years[0] == photoarchive_gui.date.today().year
+    dialog.close()
+
+    old = photoarchive_gui.PersonDialog(name="曽祖父", birth_date="1888-03-04")
+    assert old.values()[3] == (1888, 3, 4), "範囲の外の年でも、開いて保存しただけで消えない"
+    old.close()
+
+
+def test_typing_a_birth_date_straight_from_the_keyboard(qt_app):
+    """コンボボックスでも打鍵で選べること（マウスで長い年の一覧を送らなくてよい）。"""
     from PySide6.QtTest import QTest
 
     dialog = photoarchive_gui.PersonDialog(name="${PERSON_2}")
@@ -894,8 +938,8 @@ def test_assigning_faces_offers_the_calculated_age_without_saving_it(window, mon
     assert db.list_faces(window.connection, with_thumbnail=False)[0]["person_id"] is None
 
 
-def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monkeypatch):
-    """#41 で入れた知らせが、**まとめて選ぶことがいちばん多い場所**にも出る。"""
+def test_assigning_several_faces_of_different_ages_asks_face_by_face(window, monkeypatch):
+    """年齢が揃わないまとめての割り当ては、写真ごとの年齢を見せて確かめる（#18。以前は1つの欄で全件に入れていた）。"""
     connection = window.connection
     older = db.save_media(
         connection,
@@ -920,20 +964,11 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
     connection.commit()
     window.reload_faces()
 
-    opened = {}
-
-    class _FakeAgeDialog:
-        def __init__(self, parent=None, summary="", initial_age=None):
-            opened["summary"] = summary
-            opened["initial_age"] = initial_age
-
-        def exec(self):
-            return QDialog.Rejected
-
-        def age(self):
-            return None
-
-    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", _FakeAgeDialog)
+    opened = []
+    monkeypatch.setattr(
+        photoarchive_gui.FaceAgesDialog, "exec", lambda self: opened.append(self.ages()) or QDialog.Rejected
+    )
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", lambda *a, **k: pytest.fail("1つの欄で開いた"))
     db.update_person(
         connection,
         db.list_persons(connection)[0]["id"],
@@ -944,13 +979,19 @@ def test_assigning_several_faces_warns_that_one_age_covers_them_all(window, monk
     )
     window._reload_person_list()
     window.face_list.selectAll()
+    face_ids = window._selected_face_ids()
 
     _assign_to(window)
 
-    assert "2 件すべてに同じ年齢を入れます" in opened["summary"]
-    assert "2012-01-01 〜 2017-12-16 にまたがっています" in opened["summary"]
-    # 年をまたいでいるので、初期値は出さない
-    assert opened["initial_age"] is None
+    # 年をまたいで年齢が揃わないので、写真ごとの年齢を確かめる窓が開く（#18）
+    assert sorted(opened[0].values()) == [31, 37]
+    # 1つの年齢を全件に入れる `年齢を設定…` の窓には、知らせが出る
+    summary = photoarchive_gui.summarize_selection(2, db.taken_for_faces(connection, face_ids))
+    assert "2 件すべてに同じ年齢を入れます" in summary
+    assert "2012-01-01 〜 2017-12-16 にまたがっています" in summary
+    assert (
+        photoarchive_gui.suggested_age("1980-01-02", db.taken_for_faces(connection, face_ids)) is None
+    ), "年をまたいでいるので、初期値は出さない"
 
 
 # ---------------------------------------------------------------------------

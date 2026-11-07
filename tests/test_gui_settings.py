@@ -160,6 +160,21 @@ def test_a_missing_root_asks_instead_of_refusing(tmp_path):
 # ----------------------------------------------------------------------
 
 
+def test_the_dialog_has_no_rule_field_and_keeps_the_rule_path_in_the_file(window, tmp_path, isolated_config, answers):
+    """**ルールの欄は無くした**（#18・利用者の指定）。**設定ファイルの `rule_path` は消さない**（CLI の `select` が読む）。"""
+    _write(isolated_config, {"database_path": window.database_path, "rule_path": "config/rule.yml"})
+    dialog = _dialog(window)
+    assert not hasattr(dialog, "rule_edit")
+    assert "rule_path" not in dialog.values()
+    dialog.output_edit.setText(str(tmp_path / "out"))
+
+    assert dialog.save()
+
+    saved = yaml.safe_load(isolated_config.read_text(encoding="utf-8"))
+    assert saved["rule_path"] == "config/rule.yml"
+    assert saved["output_root"] == str(tmp_path / "out")
+
+
 def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path, isolated_config, answers):
     assert window.import_wizard.roots == [] and window.assess_window.roots == []
     media = _media(tmp_path, "media")
@@ -167,12 +182,12 @@ def test_saving_applies_roots_output_and_rule_to_the_open_tabs(window, tmp_path,
     _write(rule, {"weights": {"sharpness": 0.5}})
     output = tmp_path / "out"
     output.mkdir()
+    # ルールのパスは設定の窓では変えない。ファイルで変えてあれば、保存したときに読み直す
+    _write(isolated_config, {"rule_path": str(rule)})
 
     dialog = _dialog(window)
-    assert not isolated_config.exists()
     dialog.add_root(str(media))
     dialog.output_edit.setText(str(output))
-    dialog.rule_edit.setText(str(rule))
     assert dialog.save()
     window.apply_settings(dialog.saved)
 

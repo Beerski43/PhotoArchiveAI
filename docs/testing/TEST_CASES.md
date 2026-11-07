@@ -37,7 +37,7 @@
 | `test_gui_assignment.py::test_the_age_can_be_typed_straight_from_the_keyboard` | **年齢をキーボードから入力できず、▲を押すしかなかった。** 「未設定」の文字が入った欄に数字を打つと検証に落ちて無反応だった |
 | `test_gui_assignment.py::test_an_age_can_be_cleared_back_to_unset` | 一度入れた年齢を未設定へ戻せなかった |
 | `test_gui_assignment.py::test_the_person_view_pages_through_every_assigned_face` | 割り当て済み一覧にページャが無く、201件目以降に到達できなかった |
-| `test_gui_person.py::test_assigning_several_faces_warns_that_one_age_covers_them_all` | **まとめて割り当てるときに「N件すべてに同じ年齢を入れます」が出ていなかった。** #41 で入れた知らせが、あとから直す画面にしか繋がっていなかった |
+| `test_assigning_several_faces_of_different_ages_asks_face_by_face` | 年齢が揃わないまとめての割り当ては、写真ごとの年齢を確かめる窓が開く（#18）。`年齢を設定…` の知らせの文も見る |
 | `test_gui_person.py::test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **撮影日時の無い顔に、別の写真から計算した年齢が黙って保存された。** `shooting_dates_for_faces`（いまの `taken_for_faces`）が日時の無い顔を落とし、`suggested_age` が残った `None` も捨てていたため、10件中9件が EXIF 無しでも残る1件の年齢が全件の初期値になった（実データの 15.8% が該当） |
 | `test_db.py::test_updating_a_person_without_a_birth_date_keeps_it` | **`update_person` を省いて呼ぶと誕生日が消えた**（`KEEP_AGE` と同じ罠） |
 | `test_gui_person.py::test_the_age_appears_right_after_the_birth_date_is_registered` | 誕生日を登録しても年齢の行がその場で出ず、**機能が効いていないように見えた** |
@@ -564,7 +564,8 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 | `test_matching_only_the_selected_person_from_the_window` | **左で選んだ人物だけを付け直せる**。ほかの人物の顔には触らず、1位がほかの人物だった件数を結果に出す（#123） |
-| `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
+| `test_the_dialog_defaults_to_the_selected_person_and_can_switch_to_everyone` | 確認の窓は人物を選んでいれば既定がその人物だけ（#18）。全員にも切り替えられ、文も追従する |
+| `test_the_unassign_dialog_still_defaults_to_everyone` | 取り消しの窓の既定は全員のまま |
 | `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
 ### `test_gui_select.py` — 写真の選定タブ（53件。#104・#106・#113・#120・#134）
@@ -592,7 +593,11 @@
 | `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
 | `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
 | `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
-| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は年の範囲で絞る。初めは全部の年で年不明は最後。範囲を指定すると年不明は出ず、`年不明のみ` で見る（#113・#134） |
+| `test_the_results_can_be_ordered_by_date_and_points` | **結果にも `並び`**（#18）。既定はいままでの順。年不明は日時の順では最後、点の順では点のとおり |
+| `test_the_result_order_changes_only_the_view` | 見せ方だけで、選んだ写真の順は変えない。絞り込みと併せて効き、選び直しても保つ |
+| `test_a_new_result_order_goes_back_to_the_first_page` | 並びを変えると1ページ目へ戻る |
+| `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は年の範囲で絞る。年不明は範囲と関係なく `年不明を入れる` で決める。既定は入れて最後に並ぶ。選び直しても保ち、選ぶ写真は変えない（#113・#134・#18） |
+| `test_the_unknown_row_is_always_the_last_row` | **年の表の「年不明」は必ず出て、常に一番下**（「〇年以降」より下・#18） |
 | `test_the_results_can_be_narrowed_by_month` | 年と月を別の欄で選び、欄を動かすと一覧が追いつく（#134） |
 | `test_a_photo_known_only_by_year_stays_out_of_a_narrower_month_range` | 月まで分からない写真は撮影時期がまるごと入るときだけ（顔の割り当てタブと同じ・#134） |
 | `test_exporting_uses_the_layout_on_the_screen_without_choosing_again` | 出力の形は選び直さなくても「出力する」に効く（#134） |
@@ -624,7 +629,31 @@
 | `test_a_value_off_the_gauge_is_kept_as_typed` | ゲージは値の上限でも目盛りでもない。右端より大きい値・目盛りに合わない値を丸めずにルールへ（#120・PR #108 の指摘3） |
 | `test_the_default_button_puts_back_only_its_own_value` | **`既定` でその項目だけ既定値に戻る**。既定のときは押せない（#120） |
 | `test_the_quality_weights_name_their_models` | 画質は MUSIQ、美しさは NIMA と画面に出す（#120） |
-| `test_a_gauge_ignores_the_wheel_unless_focused` | **フォーカスの無いゲージと入力欄はホイールで値を変えない**（設定欄をスクロールすると、マウスの下の重みが黙って変わっていた。PR #122 のレビュー指摘1）。選んだゲージは動く |
+| `test_loading_a_rule_file_replaces_the_screen_and_becomes_the_save_target` | **読み込むと画面と年の表が置き換わり、以後の上書きはそのファイルへ**（#18）。もとのファイルには書かない |
+| `test_an_unreadable_rule_file_leaves_the_screen_as_it_was` | 構文の壊れた YAML・辞書でない・読めない重みでは知らせるだけで、動かした値も保存先もそのまま |
+| `test_declining_or_cancelling_a_load_changes_nothing` | 確認で断る・選ぶ窓を取り消すと何も変わらない |
+| `test_saving_to_another_file_leaves_the_original_and_becomes_the_save_target` | **別のファイルに保存しても、もとのファイルは変わらない**（#18）。以後の上書きは新しいファイルへ |
+| `test_saving_to_another_file_adds_a_readable_suffix_and_backs_up_an_existing_file` | 拡張子が無ければ `.yml` を足す。既にあるファイルは `.bak` に控える |
+| `test_cancelling_save_as_or_failing_to_write_keeps_the_save_target` | 取り消しと書けない場所では保存先が変わらない（書けなければ知らせる） |
+| `test_saving_without_a_rule_file_asks_where` | `rule_path` が無いときの「ルールを保存」は保存先を聞く |
+| `test_loading_a_rule_file_also_rewrites_the_rule_path` | **読み込むと設定の `rule_path` も変わる**（利用者の決定）。ほかのキーは残し、控えを取る |
+| `test_saving_to_another_file_also_rewrites_the_rule_path_but_overwriting_does_not` | 別名の保存でも変わる。上書きの保存では設定に書かない |
+| `test_a_rule_operation_that_did_not_happen_leaves_the_settings_alone` | 断る・取り消す・読めない・書けないときは設定に触らない |
+| `test_choosing_the_file_already_in_the_settings_does_not_rewrite_them` | 同じファイルなら書かない（相対パスで書いてあっても） |
+| `test_a_settings_file_that_cannot_be_written_only_warns` | 設定に書けなくても読み込みは取り消さない。壊れた設定は上書きしない |
+| `test_saving_the_settings_after_a_load_keeps_the_loaded_file` | 読み込みのあとに設定の窓を保存しても読み直さない。ファイルの `rule_path` が別の値ならそちらが効く |
+| `test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing` | 構文の壊れた YAML で起動しても落ちず知らせる（本筋の外で直した） |
+| `test_each_gauge_marks_its_default_value` | **ゲージの既定値の位置に印**（#18）。取っ手を動かしても印は動かない。右端より大きい既定値は印なし |
+| `test_the_mark_is_at_the_right_place_and_is_drawn` | 印の位置が左端・中央・右端で比例し、実際に描かれる |
+| `test_the_settings_column_fits_without_a_sideways_scroll` | 長い項目名を折り返し、設定欄に横スクロールが出ない（「既定」ボタンが切れない） |
+| `test_the_period_is_chosen_with_year_month_and_day_boxes` | **撮影時期は年・月・日のコンボボックス**（#18）。ルールの値が欄に割れて出る |
+| `test_a_partly_chosen_period_covers_the_whole_year_or_month` | 年だけ・年月までも指定でき、始めは初日から、終わりは末日まで |
+| `test_the_month_and_day_wait_for_the_year_and_month` | 年が `--` なら月は押せず、月が `--` なら日は押せない。日は実在する日だけ |
+| `test_moving_a_period_box_rebuilds_the_year_table` | 欄を動かすと年の表が作り直される |
+| `test_an_unreadable_period_says_how_to_clear_it` / `test_a_period_in_the_wrong_order_does_not_talk_about_choosing_again` | 読めない値には消し方を添える（指摘3）。読めている値の問題には添えない |
+| `test_a_rule_value_with_a_time_is_kept_until_the_boxes_are_touched` | 時刻付きの値は、欄を触るまで変えない |
+| `test_the_wheel_never_changes_a_value_in_the_settings_column` | **設定欄の入力部品はすべて、ホイールで値を変えない**（上を通っただけでも、クリックしたあとでも。年の表の欄も。設定欄をスクロールすると、マウスの下の値が黙って変わっていた。PR #122 のレビュー指摘1・#18）。イベントを受けず親へ渡す（スクロールになる）。部品を全部たどるので、足した欄も見張られる |
+| `test_the_sharpness_gauge_still_takes_the_wheel_after_clicking` | 顔の割り当てタブの鮮明さのゲージは、クリックしたあとならホイールで動く（設定欄とは扱いが違う・#135） |
 
 ### `test_gui_person.py` — 人物編集とプレビュー（66件）
 
@@ -669,14 +698,17 @@
 | `test_a_birth_date_can_be_registered_and_cleared` | 誕生日の登録と、空欄での未設定へ戻し |
 | `test_a_partly_filled_birth_date_is_rejected` | **年月日まで必須。** 一部だけの入力と、暦に無い日とで言うことを変える |
 | `test_the_birth_date_is_built_from_three_numbers` | 年・月・日の3つから組み立て、保存済みの値を3つに割る |
-| `test_typing_a_birth_date_straight_from_the_keyboard` | `--` の入った欄でも打鍵で置き換わる |
+| `test_typing_a_birth_date_straight_from_the_keyboard` | コンボボックスでも打鍵で選べる |
+| `test_the_birth_date_boxes_offer_only_days_that_exist` | 日の欄には、選んだ年月に実在する日だけ（うるう年も・#18） |
+| `test_a_day_that_no_longer_exists_goes_back_to_unset` | 無くなった日は `--` に戻す（末日へ丸めない）。あれば保つ |
+| `test_the_birth_year_box_is_newest_first_and_keeps_an_old_saved_year` | 年は新しい順。範囲の外の保存済みの年も消さない |
 | `test_the_edit_dialog_opens_with_the_stored_birth_date` | 編集ダイアログが今の誕生日で開く |
 | `test_the_person_dialog_round_trips_a_birth_date` | 実物のダイアログが誕生日を持ち帰る |
 | `test_the_person_details_show_the_birth_date` | 人物詳細に誕生日が出る（年齢が出ない理由が分かる） |
 | `test_the_suggested_age_needs_every_selected_face_to_agree` | **食い違うなら初期値を出さない**（1回の入力が全件に入る） |
 | `test_the_age_dialog_opens_with_the_calculated_age` | 計算値を初期値に入れ、計算値だと画面に書く |
 | `test_assigning_faces_offers_the_calculated_age_without_saving_it` | **自動保存はしない。** 取り消せば何も入らない |
-| `test_assigning_several_faces_warns_that_one_age_covers_them_all` | まとめて割り当てるときにも、全件に入る旨とまたがりを知らせる |
+| `test_assigning_several_faces_of_different_ages_asks_face_by_face` | 年齢が揃わないまとめての割り当ては、写真ごとの年齢を確かめる窓が開く（#18）。`年齢を設定…` の知らせの文も見る |
 | `test_the_suggested_age_is_withheld_when_a_face_has_no_shooting_date` | **「分からない」を「反対しない」にしない。** 日時の無い顔が1件でもあれば初期値を出さない |
 | `test_the_suggested_age_is_withheld_when_a_shooting_date_is_broken` | 壊れた EXIF も「分からない」として扱う |
 | `test_the_selection_notice_says_how_many_dates_are_unknown` | 初期値が入らない理由（不明な件数）を出す |
@@ -1106,6 +1138,12 @@ editable install のときだけ出すこと（通常のインストールでは
 | テスト | 内容 |
 |---|---|
 | `test_the_menu_bar_has_import_faces_and_settings` | メニューは取り込み・顔の割り当て・設定。タブは2枚で、進み具合はタブの右上のまま |
+| `test_undo_and_redo_run_from_the_menu` | **戻す・進むはメニューからも**（#18） |
+| `test_the_toolbars_follow_the_tab_and_use_the_menu_actions` | タブに関係するアイコンはそのタブのときだけ。項目はメニューと同じ |
+| `test_every_toolbar_action_has_an_icon_and_a_name` | どの項目にもアイコンと名前がある |
+| `test_the_choose_and_export_icons_run_the_panel` | 選ぶ・出力のアイコンが写真の選定の操作を呼ぶ |
+| `test_the_rule_items_work_only_on_the_selection_tab` | ルールの操作はメニューから（#18）。写真の選定タブのときだけ押せる。タブのボタンは無い |
+| `test_each_rule_item_runs_its_operation` | メニューの3項目がそれぞれの操作を呼ぶ |
 | `test_the_face_items_work_only_on_the_assignment_tab` / `test_a_finished_job_on_the_selection_tab_keeps_the_face_items_off` | **顔の割り当ての項目は、顔の割り当てタブのときだけ**（裏の処理が終わっても勝手に戻らない） |
 | `test_match_and_unassign_are_blocked_while_a_job_runs` | 実行中は `match` と取り消しを押せない。`evaluate` の窓は開ける（測るボタンは止まる） |
 | `test_the_match_action_runs_match` | メニューから `match` の確認の窓が開く |
@@ -1144,6 +1182,62 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_changed_fires_once_per_move_and_not_on_a_refill` | 動かすと1回だけ知らせる。選択肢の入れ替えでは知らせない |
 | `test_a_year_without_a_known_month_is_still_listed` | 月の分からない写真の年も年の欄に並ぶ |
 
+### `test_gui_face_ages.py` — 年齢の揃わない顔をまとめて割り当てる（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_faces_with_different_ages_are_shown_one_by_one_and_registered` | **写真ごとの年齢を出し、その年齢で登録する** |
+| `test_each_row_shows_the_picture_the_date_and_the_age` | 各行に写真・撮影日時・年齢。撮影時期の順で、分からない顔は最後。誕生前と不明は `未設定` |
+| `test_an_age_can_be_corrected_in_the_list` | 欄で直せる。直さない顔は計算した年齢のまま |
+| `test_declining_assigns_nothing` | やめると何も変わらない |
+| `test_undo_takes_back_the_ages_as_well` | 元に戻すと年齢も戻る |
+| `test_one_face_uses_the_usual_dialog` / `test_faces_of_the_same_age_use_the_usual_dialog` | 1件や年齢が揃うときは、いままでの窓 |
+| `test_many_faces_scroll_and_the_wheel_does_not_change_an_age` | **多くてもスクロールで全部見える。** 欄の上のホイールで年齢が変わらない |
+| `test_the_database_takes_an_age_for_each_face` | `db.assign_faces` と `db.set_faces_age` は顔ごとの年齢を受け取れる |
+| `test_setting_ages_opens_the_same_list_with_stored_ages_first` | **`年齢を設定…` も同じ窓**。初期値は登録済みの年齢、無ければ計算した年齢 |
+| `test_setting_ages_can_be_corrected_and_undone` | 欄で直して設定でき、元に戻せる |
+| `test_setting_the_age_of_one_face_starts_from_its_stored_age` / `test_setting_the_age_of_one_face_without_a_stored_age_starts_from_the_computed_age` | 1件は1つの欄で、初期値の決まりは同じ |
+| `test_same_stored_ages_use_the_usual_dialog` | 登録済みの年齢が揃えば1つの欄 |
+| `test_assigning_keeps_the_computed_age_as_the_initial_value` | 割り当ての初期値は計算した年齢のまま（前の人物の年齢を出さない） |
+
+### `test_gui_face_scroll.py` — 顔の一覧のスクロールの場所（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_an_operation_keeps_the_scroll_position` | **顔を処理しても一覧の場所が動かない** |
+| `test_an_operation_that_removes_faces_keeps_the_scroll_position` | 顔が一覧から消える操作でも保つ |
+| `test_undo_keeps_the_scroll_position` | 元に戻しても保つ |
+| `test_the_position_is_clamped_when_the_list_gets_shorter` | 短くなって届かなければ、いちばん下 |
+| `test_reloading_the_person_list_keeps_the_place_in_the_same_view` | **裏の処理の終わりや人物の編集でも、同じ一覧ならページと場所を保つ**（指摘2） |
+| `test_choosing_another_person_starts_from_the_top` | 別の人物へ移ったら先頭から |
+| `test_moving_to_another_page_or_view_starts_from_the_top` | ページや並びを変えたら先頭から（ページを送っても下のままだった） |
+
+### `test_gui_theme.py` — GUI の見た目（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_every_name_in_the_stylesheet_is_filled_in` | 色の名前の置き換え忘れが無い（Qt は黙ってその行を捨てる。両モード） |
+| `test_both_themes_name_the_same_colors` | ライトとダークの色の名前が同じ |
+| `test_the_text_is_readable_in_both_themes` | 文字と地のコントラストが両モードで 4.5 以上 |
+| `test_switching_the_mode_takes_effect_at_once_and_is_remembered` | **再起動なしで切り替わり、設定ファイルに残る**（ほかのキーは残す） |
+| `test_switching_back_and_forth_with_the_windows_open_does_not_crash` | **窓を開いたまま切り替えても落ちない**（QSS のあとの `setStyle` で Qt ごと落ちていた） |
+| `test_the_window_opens_with_the_mode_from_the_settings` | 設定のモードでメニューの印が付く |
+| `test_choosing_the_same_mode_does_not_rewrite_the_settings` | 同じモードなら書かない |
+| `test_a_settings_file_that_cannot_be_written_still_switches_the_mode` | 設定に書けなくても切り替える。壊れた設定は上書きしない |
+| `test_auto_follows_the_operating_system` / `test_when_the_os_changes_only_auto_follows` | `auto` は OS に合わせる（不明なら明るい方）。選んだモードは OS で変えない |
+| `test_the_theme_setting_is_read` / `test_an_unreadable_theme_setting_warns_and_uses_auto` | 設定の `theme`。読めない値は警告して `auto` |
+| `test_each_theme_renders_with_its_own_window_color` | 実際に描いて、窓の地が各モードの色になる |
+| `test_the_arrow_images_exist_and_can_be_read` / `test_the_arrow_images_are_packaged` | 矢印の SVG が読めて、配布物に入る（無いと数値欄と選択欄の矢印が消える） |
+| `test_the_year_list_opens_with_at_most_15_rows` | 年の欄の一覧が画面の高さいっぱいに開かない（PR #143 の指摘1） |
+| `test_the_stylesheet_survives_an_apostrophe_in_the_path` | パスに `'` があっても QSS を読める（指摘4） |
+| `test_every_icon_can_be_drawn` / `test_the_icons_change_with_the_mode` | アイコンが描けて、色がモードに合う |
+| `test_applying_the_theme_gives_no_stylesheet_warnings` | 画面を出しても QSS の警告が出ない |
+| `test_the_theme_applies_the_palette_and_the_stylesheet` | パレットと QSS がアプリに効く |
+| `test_the_settings_column_still_fits_under_the_theme` | テーマの余白でも、既定の窓の幅で設定欄に横スクロールが出ない |
+| `test_the_default_mark_stays_in_place_under_the_theme` | テーマの下でもゲージの既定値の印が描かれる |
+| `test_screens_do_not_carry_their_own_colors` | **色は `gui_theme` にだけ**（画面のコードに書かない） |
+| `test_every_look_used_by_the_screens_is_defined` | 画面が使う `look` の名前を QSS が知っている |
+
 ### `test_gui_settings.py` — GUI の設定の窓（16件。#131）
 
 **リポジトリには本物の設定がある。** 探す場所（環境変数・カレント・リポジトリ直下）を全部 `tmp_path` に向けてから開く。
@@ -1157,6 +1251,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_nested_roots_and_an_output_overlapping_a_root_are_refused` | root の入れ子と、**出力先が root と重なる（同じ・内側・外側）**のは止める。まだ無い出力先は聞くだけ |
 | `test_a_missing_root_asks_instead_of_refusing` | 見つからない root は止めずに聞く（NFS が外れているだけのことがある） |
 | `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く |
+| `test_the_dialog_has_no_rule_field_and_keeps_the_rule_path_in_the_file` | **ルールの欄は無い**（#18）。設定ファイルの `rule_path` は保存しても消えない |
 | `test_the_same_rule_path_keeps_the_weights_moved_on_screen` | ルールのパスが同じなら、画面で動かした重みは読み直さない |
 | `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
 | `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |
@@ -1165,6 +1260,19 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_an_empty_database_path_is_not_saved` | **DB の欄が空なら保存させない**（次に `--db` なしで起動できなくなる・指摘2・利用者の決定） |
 | `test_the_restart_notice_only_follows_a_changed_database_path` | 「次に起動したときから」は DB の欄を変えたときだけ（`--db` で起動していても・指摘3） |
 | `test_the_menu_opens_saves_and_applies` | メニューの `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
+
+### `test_gui_face_points.py` — 顔の割り当ての一覧に顔の点を出し、点の順で並べる（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_the_points_are_the_ones_select_uses` | **`select` と同じ式・同じ物差し**（写真でいちばん大きい顔・写真の縦横） |
+| `test_the_points_say_what_was_not_measured` | 測っていない項目があれば `partial`、何も測っていなければ点を出さない |
+| `test_the_face_label_shows_the_points` | `72点`・`約72点`・`点 未計測` |
+| `test_the_faces_can_be_ordered_by_points_with_unmeasured_last` | 点の高い順・低い順。**未計測の顔はどちらでも最後** |
+| `test_the_order_by_points_covers_every_page` | **全件を並べてからページに分ける**（重複・欠落なし） |
+| `test_the_points_appear_in_other_orders_too` | ほかの並びでも点が出る |
+| `test_the_points_follow_the_weights_on_the_selection_tab` | 写真の選定タブの重みで出す。タブを戻すと出し直す。**重みが同じなら読み直さず、選択が残る** |
+| `test_photo_quality_can_read_only_some_photos` | `db.photo_quality` は写真を指定して読める（ページごとに全件を読まない） |
 
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 

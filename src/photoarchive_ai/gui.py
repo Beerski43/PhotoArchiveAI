@@ -13,11 +13,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -39,16 +41,19 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from . import db, face, matcher, migration, recommend, scoring, undo
+from . import config, db, face, gui_theme, matcher, migration, recommend, scoring, selection, undo
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
-from .gui_select import WheelSafeSlider, WheelSafeSpinBox
+from .gui_select import DATE_FIRST_YEAR, DATE_UNSET, DateBoxes, NoWheelSpinBox, WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -58,6 +63,10 @@ from .config import find_settings_path
 from .dates import Taken, age_at, as_taken, calculate_age, format_taken, parse_date, taken_at  # noqa: F401
 
 PAGE_SIZE = 200
+#: 年齢を確かめる窓の1行のサムネイルの大きさ。
+AGE_ROW_THUMBNAIL = 64
+#: ツールバーのアイコンの大きさ。
+TOOLBAR_ICON = 20
 THUMBNAIL_SIZE = 120
 
 #: 顔の一覧の1枠の大きさ。**サムネイルの寸法に任せない。**
@@ -69,10 +78,10 @@ THUMBNAIL_SIZE = 120
 #: 報告。実データの未分類1ページ目は先頭が 101px・残りが 160px だった）。
 #:
 #: **枠を固定すれば、どの顔が先頭に来ても同じ見た目になる。**
-#: 高さは「サムネイル＋文字2行」ぶん（人物の表示の自動割当は
-#: `13391 (自動 55) (0歳)` のように長い）。
+#: 高さは「サムネイル＋文字3行」ぶん（1行目の `13391 (自動 55) (0歳)` は番号や印が長いと折り返し、
+#: 次の行に `約72点 鮮明さ 120` が続く）。
 ITEM_WIDTH = THUMBNAIL_SIZE + 44
-ITEM_HEIGHT = THUMBNAIL_SIZE + 48
+ITEM_HEIGHT = THUMBNAIL_SIZE + 66
 
 #: 撮影日時が読めない顔だけを見るときの表示。
 #:
@@ -144,6 +153,8 @@ ORDER_CHOICES = (
     ("画質の低い順", db.ORDER_QUALITY_ASC),
     ("ボケている順", db.ORDER_SHARPNESS_ASC),
     ("くっきりした順", db.ORDER_SHARPNESS_DESC),
+    ("点の高い順", selection.ORDER_POINTS_DESC),
+    ("点の低い順", selection.ORDER_POINTS_ASC),
     ("この人物に似た順", recommend.ORDER_SIMILAR),
     ("この人物に似ていない順", recommend.ORDER_DISSIMILAR),
 )
@@ -284,8 +295,10 @@ def _taken_age(birth_date: Optional[str], taken: Optional[Taken]) -> Optional[st
     return format_age(age_at(birth_date, taken), bool(taken and taken.inferred))
 
 
-#: 年・月・日の入力欄で「未入力」を表す値。`QSpinBox` の最小値に置く。
-BIRTH_DATE_UNSET = 0
+#: 年・月・日の入力欄で「未入力」を表す値（コンボボックスの `--` の値）。
+BIRTH_DATE_UNSET = DATE_UNSET
+#: 誕生日の年の欄の、いちばん古い年。
+BIRTH_YEAR_FIRST = DATE_FIRST_YEAR
 
 
 def build_birth_date(year: int, month: int, day: int) -> Optional[str]:
@@ -779,7 +792,7 @@ class MigrationDialog(QDialog):
         detail = QLabel(summary)
         detail.setWordWrap(True)
         detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        detail.setProperty("look", "panel")
         layout.addWidget(detail)
 
         if backs_up:
@@ -837,6 +850,7 @@ class _AutoAssignDialog(QDialog):
         everyone_label: str,
         person_label: str,
         note: str = "",
+        person_by_default: bool = False,
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -848,6 +862,8 @@ class _AutoAssignDialog(QDialog):
         self.everyone_button = QRadioButton(everyone_label, self)
         self.person_button = QRadioButton(person_label, self)
         self.everyone_button.setChecked(True)
+        if person is not None and person_by_default:
+            self.person_button.setChecked(True)
         if person is not None:
             layout.addWidget(self.everyone_button)
             layout.addWidget(self.person_button)
@@ -858,7 +874,7 @@ class _AutoAssignDialog(QDialog):
         self.detail = QLabel()
         self.detail.setWordWrap(True)
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.detail.setStyleSheet("padding: 8px; border: 1px solid #999;")
+        self.detail.setProperty("look", "panel")
         layout.addWidget(self.detail)
 
         source = Path(database_path)
@@ -921,7 +937,7 @@ class MatchDialog(_AutoAssignDialog):
     できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
 
     **左で人物を選んでいれば、その人物だけを付け直すこともできる**（#123。
-    `photoarchive match --person` と同じ）。既定は全員（いままでどおり）。
+    `photoarchive match --person` と同じ）。**人物を選んでいれば、既定はその人物だけ**（#18・利用者の指定）。
     """
 
     def __init__(
@@ -942,6 +958,7 @@ class MatchDialog(_AutoAssignDialog):
             "全員を付け直す",
             f"{person['name']} だけを付け直す（ほかの人物の自動割当には触らない）" if person else "",
             note="途中で止めることはできません（半分だけ付け直した状態になるため）。",
+            person_by_default=True,
         )
 
     def _update_detail(self, *_args) -> None:
@@ -1128,43 +1145,19 @@ class PersonDialog(QDialog):
         self.setLayout(form)
 
     def _build_birth_date_row(self, birth_date) -> QWidget:
-        """`[2011]年 [5]月 [3]日` の入力欄。
+        """`[2011]年 [5]月 [3]日` のコンボボックス（`gui_select.DateBoxes`・#18）。
 
         1つの欄に `YYYY-MM-DD` と打たせると、区切りの書き方（`/` か `-` か）を
         間違えただけで弾かれる。**年・月・日に分ければ、書式を間違えようがない。**
 
-        `QDateEdit` は「未設定」を表せないので使わない。3つとも空（`0`）が未設定。
+        `QDateEdit` は「未設定」を表せないので使わない。3つとも `--`（`0`）が未設定。
         """
-        year, month, day = split_birth_date(birth_date)
-        self.birth_year = QSpinBox()
-        self.birth_year.setRange(BIRTH_DATE_UNSET, 2200)
-        self.birth_year.setValue(year)
-        self.birth_month = QSpinBox()
-        self.birth_month.setRange(BIRTH_DATE_UNSET, 12)
-        self.birth_month.setValue(month)
-        self.birth_day = QSpinBox()
-        self.birth_day.setRange(BIRTH_DATE_UNSET, 31)
-        self.birth_day.setValue(day)
-
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        for spin, unit, width in (
-            (self.birth_year, "年", 80),
-            (self.birth_month, "月", 60),
-            (self.birth_day, "日", 60),
-        ):
-            # 未入力であることが分かるようにする。0 のままだと「0年0月0日」を
-            # 入れたように見える。
-            spin.setSpecialValueText("--")
-            spin.setFixedWidth(width)
-            # 「--」の文字が入った欄は、全選択しておかないと打鍵で置き換わらない
-            # （年齢の入力と同じ。▲を押すしかなくなる）。
-            spin.focusInEvent = _make_select_all_on_focus(spin)
-            layout.addWidget(spin)
-            layout.addWidget(QLabel(unit))
-        layout.addStretch(1)
-        return row
+        self.birth_boxes = DateBoxes()
+        self.birth_boxes.set_parts(*split_birth_date(birth_date))
+        self.birth_year = self.birth_boxes.year
+        self.birth_month = self.birth_boxes.month
+        self.birth_day = self.birth_boxes.day
+        return self.birth_boxes
 
     def values(self):
         """入力された 名前 / 続柄 / メモ / 誕生日 `(年, 月, 日)`。
@@ -1176,7 +1169,7 @@ class PersonDialog(QDialog):
             self.name_input.text().strip(),
             self.relation_input.text().strip(),
             self.memo_input.toPlainText().strip(),
-            (self.birth_year.value(), self.birth_month.value(), self.birth_day.value()),
+            self.birth_boxes.parts(),
         )
 
     def scoring_values(self):
@@ -1237,7 +1230,13 @@ class FaceAgeDialog(QDialog):
     利用者が OK を押して初めて `Face.age` に入る（Issue #48 の判断2）。
     """
 
-    def __init__(self, parent=None, summary: str = "", initial_age: Optional[int] = None):
+    def __init__(
+        self,
+        parent=None,
+        summary: str = "",
+        initial_age: Optional[int] = None,
+        initial_note: str = "誕生日から計算した年齢を入れてあります。",
+    ):
         super().__init__(parent)
         self.setWindowTitle("撮影時の年齢")
         self.age_input = QSpinBox()
@@ -1250,7 +1249,7 @@ class FaceAgeDialog(QDialog):
             # **機械が入れた値だと分かるようにする。** 黙って数字が入っていると、
             # 利用者が確かめた年齢なのか計算値なのか、あとから区別できない。
             summary = "\n".join(
-                part for part in (summary, "誕生日から計算した年齢を入れてあります。") if part
+                part for part in (summary, initial_note) if part
             )
         else:
             self.age_input.setValue(-1)
@@ -1283,6 +1282,130 @@ class FaceAgeDialog(QDialog):
     def age(self) -> Optional[int]:
         value = self.age_input.value()
         return None if value < 0 else value
+
+
+def computed_ages(
+    birth_date: Optional[str], taken_by_face: Dict[int, Optional[Taken]]
+) -> Dict[int, Optional[int]]:
+    """顔ごとに、誕生日と撮影時期から計算した年齢。**出せない顔と誕生前の顔は ``None``**（`suggested_age` と同じ）。"""
+    ages: Dict[int, Optional[int]] = {}
+    for face_id, taken in taken_by_face.items():
+        age = age_at(birth_date, as_taken(taken))
+        ages[face_id] = None if age is None or age < 0 else age
+    return ages
+
+
+def format_taken_cell(taken: Optional[Taken]) -> str:
+    """一覧の1行に出す撮影時期。フォルダ名から推測した時期はそう分かる形で。"""
+    if taken is None:
+        return "撮影日時 不明"
+    return format_taken(taken) or taken.earliest.strftime("%Y-%m-%d %H:%M")
+
+
+class FaceAgesDialog(QDialog):
+    """**年齢の揃わない顔をまとめて割り当てるときの確認**（#18）。
+
+    利用者「各写真の年齢を表示させて、その年齢で登録してよいかを問う形にしてほしい。写真が多すぎるときでも
+    スクロールで見える形にして」。以前は `未設定` の欄1つで開き、入れた年齢が全件に入った。
+
+    **計算した年齢は初期値で、押して初めて入る**（`FaceAgeDialog` と同じ・Issue #48 の判断2）。欄で直せる。
+    **欄はホイールで変わらない**（一覧をスクロールするだけで年齢が変わらないように）。
+    サムネイルはレコードの持っている分だけ使う（1ページ分しか選べないので多くても `PAGE_SIZE`）。
+    """
+
+    def __init__(
+        self,
+        parent,
+        person_name: str,
+        records: Sequence[dict],
+        taken_by_face: Dict[int, Optional[Taken]],
+        ages: Dict[int, Optional[int]],
+        uses_stored_ages: bool = False,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("写真ごとの年齢を確かめる")
+        unknown = sum(age is None for age in ages.values())
+        # 同じ窓を「年齢を設定…」でも使う（#18）。そちらの初期値は登録済みの年齢が先
+        source = (
+            f"登録済みの年齢があればその値、無ければ {person_name} の誕生日と撮影日時から計算した年齢です。"
+            if uses_stored_ages
+            else f"{person_name} の誕生日と撮影日時から計算した年齢です。"
+        )
+        verb = "設定" if uses_stored_ages else "登録"
+        text = (
+            f"選んだ {len(records):,} 件は年齢が揃っていません。{source}"
+            f"\nこの年齢で{verb}してよければ、そのまま押してください（欄で直せます）。"
+        )
+        if unknown:
+            text += f"\n{unknown:,} 件は年齢を出せないので「未設定」です。"
+        summary = QLabel(text)
+        summary.setWordWrap(True)
+
+        self.table = QTableWidget(len(records), 3)
+        self.table.setHorizontalHeaderLabels(["写真", "撮影日時", "年齢"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setIconSize(QSize(AGE_ROW_THUMBNAIL, AGE_ROW_THUMBNAIL))
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.age_inputs: Dict[int, QSpinBox] = {}
+        # 撮影時期の順に並べる。分からない顔は最後（直す顔がまとまる）
+        ordered = sorted(
+            records,
+            key=lambda record: (
+                taken_by_face.get(record["id"]) is None,
+                taken_by_face[record["id"]].earliest if taken_by_face.get(record["id"]) else None,
+                record["id"],
+            ) if taken_by_face.get(record["id"]) else (True, 0, record["id"]),
+        )
+        for row, record in enumerate(ordered):
+            face_id = record["id"]
+            picture = QTableWidgetItem()
+            pixmap = QPixmap()
+            pixmap.loadFromData(record.get("thumbnail") or b"")
+            if not pixmap.isNull():
+                picture.setIcon(pixmap)
+            self.table.setItem(row, 0, picture)
+            self.table.setItem(row, 1, QTableWidgetItem(format_taken_cell(taken_by_face.get(face_id))))
+            spin = NoWheelSpinBox()
+            # 最小値を「未設定」に当てる（`FaceAgeDialog` と同じ。0歳と区別する）
+            spin.setRange(-1, 150)
+            spin.setSpecialValueText("未設定")
+            spin.setSuffix(" 歳")
+            age = ages.get(face_id)
+            spin.setValue(-1 if age is None else age)
+            spin.focusInEvent = _make_select_all_on_focus(spin)
+            self.age_inputs[face_id] = spin
+            # セルに直接置くと行の高さいっぱいに伸びるので、包んで上下の中央に置く
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(4, 0, 4, 0)
+            cell_layout.addWidget(spin, 0, Qt.AlignVCenter)
+            self.table.setCellWidget(row, 2, cell)
+            self.table.setRowHeight(row, AGE_ROW_THUMBNAIL + 8)
+
+        buttons = QDialogButtonBox()
+        self.register_button = buttons.addButton(f"この年齢で{verb}", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.register_button.setProperty("look", "primary")
+        self.cancel_button = buttons.addButton("やめる", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(summary)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(buttons)
+        self.resize(560, 640)
+
+    def ages(self) -> Dict[int, Optional[int]]:
+        """顔 id → 年齢（`未設定` は ``None``）。"""
+        return {
+            face_id: None if spin.value() < 0 else spin.value() for face_id, spin in self.age_inputs.items()
+        }
 
 
 #: 「割り当て済みの顔」の種別の絞り込み。**(表示, `assign_source` に渡す値)**。
@@ -1368,11 +1491,19 @@ def format_sharpness(value: Optional[float]) -> str:
     return "鮮明さ 未計測" if value is None else f"鮮明さ {value:.0f}"
 
 
+def format_points(point: "selection.FacePoint") -> str:
+    """一覧に出す顔の点（#18）。測っていない項目があれば「約」、何も測っていなければ「点 未計測」。"""
+    if point.score is None:
+        return "点 未計測"
+    return f"{'約' if point.partial else ''}{point.score:.0f}点"
+
+
 def _fill_face_list(
     widget: QListWidget,
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
     show_sharpness: bool = False,
+    points: Optional[Dict[int, "selection.FacePoint"]] = None,
 ) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
@@ -1386,7 +1517,7 @@ def _fill_face_list(
     """
     blocked = widget.blockSignals(True)
     try:
-        _repopulate_face_list(widget, records, age_labels, show_sharpness)
+        _repopulate_face_list(widget, records, age_labels, show_sharpness, points)
     finally:
         widget.blockSignals(blocked)
 
@@ -1396,6 +1527,7 @@ def _repopulate_face_list(
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
     show_sharpness: bool = False,
+    points: Optional[Dict[int, "selection.FacePoint"]] = None,
 ) -> None:
     widget.clear()
     for record in records:
@@ -1419,6 +1551,9 @@ def _repopulate_face_list(
             age_text = None
         if age_text:
             label = f"{label} {age_text}"
+        # **点は2行目の先頭に置く**（続けて書くと、番号が長いときに「約81」と「点」の間で折り返される）
+        if points is not None and record["id"] in points:
+            label = f"{label}\n{format_points(points[record['id']])}"
         # **鮮明さで絞る・並べるときだけ顔の下に出す**（#135。枠が狭いので常には出さない）。
         # 閾値を決める手がかりなので、境目の顔の値が読めるようにする。
         if show_sharpness:
@@ -1475,6 +1610,10 @@ class MainWindow(QWidget):
         #: 「この人物に似た順」の距離。**ページ送りのあいだ持ち続ける**（#69）。
         #: 人物を選び直したら作り直す（`_similarity_for`）。
         self.similarity: Optional[recommend.PersonSimilarity] = None
+        #: 顔の点に使う重みを返すもの。`AppWindow` が写真の選定タブの重みへつなぐ（#18）。
+        self.face_weights: Callable[[], scoring.Weights] = scoring.Weights.default
+        #: いま一覧に出ている点を計算した重み。
+        self._points_weights: Optional[scoring.Weights] = None
         #: 直前に並べたとき、根拠にした手本の件数。0 なら似た順に並べられていない。
         self.similarity_teachers: Optional[int] = None
         #: 顔の操作を元に戻す・やり直す履歴（#116）。**開いている間だけ持つ**（利用者の決定）。
@@ -1565,7 +1704,9 @@ class MainWindow(QWidget):
             "（未分類は撮影日時の新しい順、"
             "人物は年齢の若い順、人物の未分類はこの人物に似た順）。\n"
             "「この人物に似た順」は、その人物の手本との距離で並べる"
-            "（5点整列ができなかった手本は使わない）。"
+            "（5点整列ができなかった手本は使わない）。\n"
+            "「点」は写真の選定タブの重みで出した顔の点（0〜100）。「約」は測っていない項目を中間の値で"
+            "計算した点。何も測っていない顔は最後に並ぶ。"
         )
         self.order_box.currentIndexChanged.connect(self._reset_page)
 
@@ -1632,7 +1773,7 @@ class MainWindow(QWidget):
         self.measure_button.setToolTip(MEASURE_TOOLTIP)
         self.measure_button.clicked.connect(self.measure_requested.emit)
         self.measure_label = QLabel("")
-        self.measure_label.setStyleSheet("color: #555;")
+        self.measure_label.setProperty("look", "muted")
 
         blur_filters = QHBoxLayout()
         blur_filters.addWidget(self.blur_check)
@@ -1708,7 +1849,7 @@ class MainWindow(QWidget):
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumWidth(320)
         self.preview_label.setWordWrap(True)
-        self.preview_label.setStyleSheet("border: 1px solid #999; padding: 8px;")
+        self.preview_label.setProperty("look", "panel")
 
         # 撮影日時とフォルダ。**年齢を入れるのに要る。**
         # QLabel は画像か文字のどちらかしか持てないので、もう1枚に分ける。
@@ -1721,11 +1862,7 @@ class MainWindow(QWidget):
         # 画像の外に置くと、見ているところ（顔）から目を離さないと気づけない。
         self.preview_status = QLabel("", self.preview_label)
         self.preview_status.setAlignment(Qt.AlignCenter)
-        self.preview_status.setStyleSheet(
-            "padding: 10px 18px; font-size: 16px; font-weight: bold;"
-            " color: #1b5e20; background: rgba(232, 245, 233, 235);"
-            " border: 2px solid #2e7d32; border-radius: 6px;"
-        )
+        self.preview_status.setProperty("look", "toast")
         self.preview_status.hide()
         # `preview_label` の中央に置く。レイアウトに入れると、画像は
         # `QLabel` 自身が描き、子ウィジェットがその上に載る。
@@ -1749,7 +1886,7 @@ class MainWindow(QWidget):
         # いま効く打鍵を1行で出す。
         self.hint_label = QLabel("")
         self.hint_label.setWordWrap(True)
-        self.hint_label.setStyleSheet("color: #555;")
+        self.hint_label.setProperty("look", "muted")
 
         # --- いまの絞り込みに当たる顔をまとめて処理する ----------------
         # **以前は「行事（フォルダ×日）を選ぶ」が要った**（#61）。利用者が使っておらず
@@ -1908,6 +2045,7 @@ class MainWindow(QWidget):
         **作り直しているあいだ信号を止める。** 止めないと、項目が増えるたびに
         選択が動いて**顔の一覧を何度も読み直す。**
         """
+        view_before = self._current_view_id()
         if select_person_id is None and select_scope is None:
             person = self._current_person()
             select_person_id = None if person is None else person["id"]
@@ -1948,7 +2086,15 @@ class MainWindow(QWidget):
             self.person_list.blockSignals(blocked)
         self._refresh_counts()
         self._rebuild_assign_actions()
-        self._on_view_selected(self.person_list.currentItem())
+        # **同じ表示のままなら、ページとスクロールの場所を保つ**（PR #143 の指摘2）。ここは裏の処理の終わりや
+        # 人物の編集からも通る。必ず先頭へ戻していたので、`scan` が終わった瞬間に作業中の場所を失っていた。
+        if self._current_view_id() == view_before:
+            self._sync_view_controls()
+            self._refresh_details()
+            self._sync_bulk_controls()
+            self.reload_faces()
+        else:
+            self._on_view_selected(self.person_list.currentItem())
 
     def _select_view(
         self, person_id: Optional[int], scope: Optional[str]
@@ -2019,6 +2165,11 @@ class MainWindow(QWidget):
             # 落とした位置が表示の側に食い込んでいることがあるので、
             # 正しい形（表示 → 区切り → 人物）に作り直す。
             self._reload_person_list()
+
+    def _current_view_id(self) -> tuple:
+        """いま見ている一覧を見分ける値（表示と人物）。"""
+        person = self._current_person()
+        return (self._current_scope(), None if person is None else person["id"])
 
     def _current_scope(self) -> str:
         """いま見ているもの。選択が無ければ「未分類」。"""
@@ -3004,13 +3155,37 @@ class MainWindow(QWidget):
     def _reset_page(self):
         self.page = 0
         self._sync_bulk_controls()
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
-    def reload_faces(self):
+    def reload_faces(self, keep_position: bool = True):
+        """顔の一覧を作り直す。
+
+        **同じ一覧を作り直すときは、スクロールの場所を保つ**（#18・利用者「顔を右クリックで何かしら実行すると、
+        一覧が勝手に中央付近に移動する」）。ページや表示を変えるときは ``keep_position=False`` で先頭から。
+        """
+        position = self.face_list.verticalScrollBar().value() if keep_position else 0
         filters = self._filter_arguments()
         order = self._current_order()
         self.similarity_teachers = None
-        if order in recommend.ORDERS and self._current_person() is not None:
+        weights = self.face_weights()
+        self._points_weights = weights
+        points = None
+        if order in selection.ORDER_POINTS:
+            # **点の順も SQL で並べられない**（重みと写真で変わる値）。サムネイル抜きで全件読んで点を出す
+            # （実データの最大の人物 6,514 件で約 0.4 秒）。
+            with busy_cursor():
+                points = selection.face_points(
+                    self.connection, db.list_faces(self.connection, **filters), weights
+                )
+            ordered = selection.rank_by_points(points, descending=order == selection.ORDER_POINTS_DESC)
+            total = len(ordered)
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            self.page = max(0, min(self.page, pages - 1))
+            start = self.page * PAGE_SIZE
+            records = db.faces_by_ids(
+                self.connection, ordered[start : start + PAGE_SIZE], with_thumbnail=True
+            )
+        elif order in recommend.ORDERS and self._current_person() is not None:
             # **似た順は SQL で並べられない。** 条件に当たる id を全件取り
             # （サムネイル抜き）、手本との距離で並べてから1ページ分だけ読む。
             ordered = self._ids_by_similarity(
@@ -3042,7 +3217,11 @@ class MainWindow(QWidget):
             self._age_labels(records),
             show_sharpness=self._blur_filtering()
             or order in (db.ORDER_SHARPNESS_ASC, db.ORDER_SHARPNESS_DESC),
+            points=points if points is not None else selection.face_points(self.connection, records, weights),
         )
+        # 項目の配置は後回しにされるので、先に済ませる（済むまでスクロールの上限が決まらない）
+        self.face_list.doItemsLayout()
+        self.face_list.verticalScrollBar().setValue(position)
         # **桁を区切る。** 実データは万単位（未分類 31,275 件）で、
         # 区切らないと桁が読み取れない。
         text = f"{self.page + 1} / {pages:,} ページ（全 {total:,} 件）"
@@ -3055,6 +3234,14 @@ class MainWindow(QWidget):
         # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
         # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで合わせる。
         self._update_face_actions()
+
+    def refresh_points(self) -> None:
+        """写真の選定タブで重みが変わっていたら、顔の点を出し直す（#18）。
+
+        変わっていなければ読み直さない（読み直すと、選んでいる顔の選択が外れる）。
+        """
+        if self.face_weights() != self._points_weights:
+            self.reload_faces()
 
     def _similarity_for(self, person_id: int) -> "recommend.PersonSimilarity":
         """選んでいる人物の距離の控え。**人物が変わったら作り直す。**"""
@@ -3114,11 +3301,11 @@ class MainWindow(QWidget):
 
     def _previous_page(self):
         self.page = max(0, self.page - 1)
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
     def _next_page(self):
         self.page += 1
-        self.reload_faces()
+        self.reload_faces(keep_position=False)
 
     def _selected_records(self) -> List[dict]:
         return [item.data(Qt.UserRole) for item in self.face_list.selectedItems()]
@@ -3259,7 +3446,7 @@ class MainWindow(QWidget):
     ) -> int:
         """選択した顔を人物へ手動で割り当てる。テストからも直接呼ぶ。
 
-        ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。
+        ``age`` を省くと年齢は触らない。``None`` は「未設定」の指示。辞書なら顔ごとの年齢。
         """
         return db.assign_faces(
             self.connection, face_ids, person_id, db.ASSIGN_MANUAL, age=age, progress=progress
@@ -3282,6 +3469,21 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if not face_ids:
             QMessageBox.information(self, "選択なし", "割り当てる顔を選択してください。")
+            return
+        # **年齢が揃わなければ、写真ごとの年齢を見せて確かめる**（#18）
+        taken_by_face = db.taken_by_face(self.connection, face_ids)
+        ages = computed_ages(person.get("birth_date"), {face_id: taken_by_face.get(face_id) for face_id in face_ids})
+        if len(set(ages.values())) > 1:
+            dialog = FaceAgesDialog(self, person["name"], self._selected_records(), taken_by_face, ages)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            per_face = dialog.ages()
+            self._run_with_progress(
+                f"{person['name']} に割り当てています",
+                face_ids,
+                lambda progress: self.assign_faces(face_ids, person["id"], per_face, progress=progress),
+                f"完了 — {len(face_ids)} 件を {person['name']} に登録しました",
+            )
             return
         # **まとめて選ぶのは、この割り当てのときがいちばん多い。**
         shooting_dates = db.taken_for_faces(self.connection, face_ids)
@@ -3456,15 +3658,32 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if person is None or not face_ids:
             return
-        shooting_dates = db.taken_for_faces(self.connection, face_ids)
-        dialog = FaceAgeDialog(
-            self,
-            summary=summarize_selection(len(face_ids), shooting_dates),
-            initial_age=suggested_age(person.get("birth_date"), shooting_dates),
-        )
-        if dialog.exec() != QDialog.Accepted:
-            return
-        age = dialog.age()
+        records = self._selected_records()
+        taken_by_face = db.taken_by_face(self.connection, face_ids)
+        # **初期値は登録済みの年齢。無ければ計算した年齢**（#18・利用者「初期値は既に設定されている値を入れて」）
+        computed = computed_ages(person.get("birth_date"), {face_id: taken_by_face.get(face_id) for face_id in face_ids})
+        stored = {record["id"]: record.get("age") for record in records}
+        ages = {face_id: computed[face_id] if stored.get(face_id) is None else stored[face_id] for face_id in face_ids}
+        if len(set(ages.values())) > 1:
+            # 揃わなければ、割り当てと同じ窓で写真ごとに確かめる
+            dialog = FaceAgesDialog(self, person["name"], records, taken_by_face, ages, uses_stored_ages=True)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            age = dialog.ages()
+        else:
+            shooting_dates = db.taken_for_faces(self.connection, face_ids)
+            options = {"initial_note": "登録済みの年齢を入れてあります。"} if any(
+                value is not None for value in stored.values()
+            ) else {}
+            dialog = FaceAgeDialog(
+                self,
+                summary=summarize_selection(len(face_ids), shooting_dates),
+                initial_age=next(iter(ages.values())),
+                **options,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+            age = dialog.age()
         self._run_with_progress(
             "年齢を設定しています",
             face_ids,
@@ -3505,12 +3724,14 @@ class AppWindow(QMainWindow):
         source_roots: SourceRoots = None,
         rule_path: Optional[str] = None,
         output_root: Optional[str] = None,
+        theme_mode: str = "auto",
     ):
         super().__init__()
         from .gui_evaluate import EvaluateWindow
         from .gui_scan import AssessWindow, ImportWizard, JobController, JobStatusBar
         from .gui_select import SelectionPanel
 
+        self.theme_mode = theme_mode
         self.assignment = MainWindow(database_path, source_roots=source_roots)
         roots = self.assignment.source_roots
         if isinstance(roots, str):
@@ -3532,9 +3753,15 @@ class AppWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
         self.database_path = database_path
         self._build_menus()
+        self._build_toolbars()
         self.jobs.started.connect(self._job_started)
         self.jobs.finished.connect(self._job_finished)
         self.tabs.currentChanged.connect(lambda _index: self._sync_menus())
+        self.tabs.currentChanged.connect(lambda _index: self._refresh_points_if_shown())
+        QApplication.styleHints().colorSchemeChanged.connect(self._color_scheme_changed)
+        # 顔の点は「選ぶ」と同じく、写真の選定タブの画面の重みで出す（#18）
+        self.assignment.face_weights = self.selection.current_weights
+        self.assignment.refresh_points()
         self.assignment.measure_requested.connect(self.start_measure)
         #: 子プロセスの入口で呼ぶもの（テストがフェイクを入れる）
         self.measure_initializer = None
@@ -3561,12 +3788,109 @@ class AppWindow(QMainWindow):
         self.unassign_action.triggered.connect(self.assignment._run_unassign_auto)
         self.evaluate_action = self.face_menu.addAction("精度を測る（evaluate）…")
         self.evaluate_action.triggered.connect(self.evaluate_window.open_window)
+        # 戻す・やり直す（#18・利用者「メニューからも実行できるように」）。項目は顔の一覧の打鍵と同じもの
+        self.face_menu.addSeparator()
+        self.face_menu.addAction(self.assignment.action_undo)
+        self.face_menu.addAction(self.assignment.action_redo)
+
+        # ルールのファイルの操作はメニューから（#18・利用者の指定）。ボタンは置かない
+        self.selection_menu = bar.addMenu("写真の選定(&P)")
+        self.selection_menu.setToolTipsVisible(True)
+        self.load_rule_action = self.selection_menu.addAction("ルールを読み込む…")
+        self.load_rule_action.setToolTip("ファイルを選んで、画面の設定をその内容に置き換えます")
+        self.load_rule_action.triggered.connect(self.selection.load_rule_file)
+        self.save_rule_action = self.selection_menu.addAction("ルールを保存")
+        self.save_rule_action.setToolTip("いま読み込んでいるルールのファイルに上書きします")
+        self.save_rule_action.triggered.connect(self.selection.save_rule)
+        self.save_rule_as_action = self.selection_menu.addAction("別のファイルに保存…")
+        self.save_rule_as_action.setToolTip("保存先を選んで書きます。以後はそのファイルを読み書きします")
+        self.save_rule_as_action.triggered.connect(self.selection.save_rule_as)
 
         self.settings_menu = bar.addMenu("設定(&S)")
         self.settings_menu.setToolTipsVisible(True)
         self.settings_action = self.settings_menu.addAction("設定…")
-        self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
+        self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先（config/app_settings.yml）")
         self.settings_action.triggered.connect(self.open_settings)
+        # 表示モード（#18）。押すとすぐ切り替わり、次に起動したときも同じ
+        theme_menu = self.settings_menu.addMenu("表示モード")
+        group = QActionGroup(self)
+        self.theme_actions = {}
+        for mode, label in (("auto", "OS に合わせる"), ("light", "ライト"), ("dark", "ダーク")):
+            action = theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(mode == self.theme_mode)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, chosen=mode: self.set_theme(chosen))
+            self.theme_actions[mode] = action
+
+    def _build_toolbars(self) -> None:
+        """よく使う操作のアイコン（#18・利用者「よく使いそうなアイコンもあると嬉しい」）。
+
+        **項目はメニューと同じ `QAction`**（押せる・押せないが一致する）。タブに関係する操作は、そのタブのときだけ
+        バーごと出す（顔の割り当てタブで「選ぶ」を押せても仕方がない）。名前はマウスを載せると出る。
+        """
+        self.choose_action = QAction("写真を選ぶ", self)
+        self.choose_action.triggered.connect(self.selection.choose)
+        self.export_action = QAction("出力する", self)
+        self.export_action.triggered.connect(self.selection.export)
+        #: アイコンの名前（`assets/icons/`）→ 項目。モードを変えたら作り直す。
+        self.toolbar_icons = {
+            "import": self.import_action,
+            "undo": self.assignment.action_undo,
+            "redo": self.assignment.action_redo,
+            "match": self.match_action,
+            "choose": self.choose_action,
+            "export": self.export_action,
+            "open": self.load_rule_action,
+            "save": self.save_rule_action,
+            "settings": self.settings_action,
+        }
+
+        def bar(title: str, *actions: QAction) -> QToolBar:
+            toolbar = self.addToolBar(title)
+            toolbar.setMovable(False)
+            toolbar.setFloatable(False)
+            toolbar.setIconSize(QSize(TOOLBAR_ICON, TOOLBAR_ICON))
+            toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            toolbar.addActions(list(actions))
+            return toolbar
+
+        self.common_toolbar = bar("共通", self.import_action, self.settings_action)
+        self.face_toolbar = bar(
+            "顔の割り当て", self.assignment.action_undo, self.assignment.action_redo, self.match_action
+        )
+        self.selection_toolbar = bar(
+            "写真の選定", self.choose_action, self.export_action, self.load_rule_action, self.save_rule_action
+        )
+        self._refresh_icons()
+
+    def _refresh_icons(self) -> None:
+        for name, action in self.toolbar_icons.items():
+            action.setIcon(gui_theme.icon(name))
+
+    def set_theme(self, mode: str) -> None:
+        """表示モードを切り替えて、設定ファイルに残す。**書けなくても切り替えは取り消さない**（知らせるだけ）。"""
+        if mode == self.theme_mode:
+            return
+        self.theme_mode = mode
+        gui_theme.apply(QApplication.instance(), mode)
+        self._refresh_icons()
+        try:
+            config.write_settings(config.settings_write_path(), {"theme": mode})
+        except (OSError, config.SettingsWriteError) as error:
+            QMessageBox.warning(
+                self, "設定に書けません", f"次に起動したときは、前の表示モードに戻ります。\n{error}"
+            )
+
+    def _color_scheme_changed(self, _scheme=None) -> None:
+        """OS の明暗が変わったら追いかける。`OS に合わせる` のときだけ。"""
+        if self.theme_mode == "auto":
+            gui_theme.apply(QApplication.instance(), "auto")
+            self._refresh_icons()
+
+    def _refresh_points_if_shown(self) -> None:
+        if self.tabs.currentWidget() is self.assignment:
+            self.assignment.refresh_points()
 
     def _sync_menus(self) -> None:
         """**顔の割り当ての項目は、顔の割り当てタブのときだけ。** `match` と取り消しは裏の処理の実行中も押せない。
@@ -3576,6 +3900,10 @@ class AppWindow(QMainWindow):
         on_faces = self.tabs.currentWidget() is self.assignment
         running = self.jobs.is_running()
         self.face_menu.setEnabled(on_faces)
+        # 写真の選定の項目も同じく、写真の選定タブのときだけ（#18）
+        self.selection_menu.setEnabled(not on_faces)
+        self.face_toolbar.setVisible(on_faces)
+        self.selection_toolbar.setVisible(not on_faces)
         self.match_action.setEnabled(on_faces and not running)
         self.unassign_action.setEnabled(on_faces and not running)
         self.evaluate_action.setEnabled(on_faces)
@@ -3625,6 +3953,7 @@ class AppWindow(QMainWindow):
         shown = self.assignment.source_roots
         shown = [shown] if isinstance(shown, str) else list(shown or [])
         self.selection.set_paths(get_rule_path(settings), get_output_root(settings), shown)
+        self._refresh_points_if_shown()
         for window in (self.import_wizard, self.assess_window):
             window.settings_roots = roots
             window.reload_roots()
@@ -3742,6 +4071,7 @@ def main() -> None:
         get_output_root,
         get_rule_path,
         get_source_roots,
+        get_theme,
         legacy_settings_stop_message,
         load_settings,
     )
@@ -3767,6 +4097,7 @@ def main() -> None:
         QLibraryInfo.LibraryPath.PluginsPath
     )
     app = QApplication([])
+    gui_theme.apply(app, get_theme(settings))
     if not ensure_migrated(db_path):
         raise SystemExit("移行していないため、起動できません。")
     try:
@@ -3775,6 +4106,7 @@ def main() -> None:
             source_roots=source_roots,
             rule_path=get_rule_path(settings),
             output_root=get_output_root(settings),
+            theme_mode=get_theme(settings),
         )
     except db.SchemaVersionError as error:
         # `ensure_migrated` を通っても開けないとき（版が新しすぎる、など）。

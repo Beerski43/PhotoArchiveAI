@@ -345,9 +345,10 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
 | `gui_scan.py` | **取り込みウィザード**（`ImportWizard`・#132。root の確認 → `convert-heic` → `scan` → 次にやること）と **`assess` の窓**（`AssessWindow`）、どのタブからも見える進み具合と「止める」。`jobs` で裏で流す。**`convert-heic` は裏で聞き返せないので、読めない HEIC は飛ばし、JPEG が書けなければ止める**。**主窓は流したまま閉じない**（止まるのを待つ）が、**ウィザードと別の窓は閉じても処理を止めない**。実行中は `match` を押せない |
 | `gui_evaluate.py` | **`evaluate` の窓**（#132）。閾値・マージン・同じ写真の扱いを入れて裏で流し、CLI と同じ文を出す。DB に書かない |
 | `undo.py` | **GUI の顔の操作を元に戻す・やり直す**（#116）。操作の前後で `Face` の割り当ての列（`FACE_COLUMNS`）と `FaceRejection` を控える。**戻す前に、いまが操作の直後のままかを確かめる**（違えば戻さない）。履歴は GUI を開いている間だけ |
-| `gui_settings.py` | **設定の窓**（#131・メニューの `設定…`）。`config/app_settings.yml` の DB の場所・root・出力先・ルールのパスを直す（`config.write_settings`・`.bak` を取る・ほかのキーは残す）。**DB の場所以外はすぐ効かせ、DB は次に起動したときから**。root の入れ子と出力先の重なりは保存させない |
+| `gui_settings.py` | **設定の窓**（#131・メニューの `設定…`）。`config/app_settings.yml` の DB の場所・root・出力先を直す（`config.write_settings`・`.bak` を取る・ほかのキーは残す）。**DB の場所以外はすぐ効かせ、DB は次に起動したときから**。root の入れ子と出力先の重なりは保存させない |
+| `gui_theme.py` | **GUI の見た目**（#18）。Fusion・パレット・QSS を `apply` でアプリ全体にかける（ライトとダーク・設定の `theme`）。**色は `LIGHT` / `DARK` にだけ持つ**（画面のコードに書かない。`setProperty("look", ...)` で役目を指す。テストが見張る）。QSS で枠を指定すると標準の矢印が消えるので、矢印と印は `assets/*.svg`、ツールバーのアイコンは `assets/icons/*.svg`（`currentColor` を `icon` が置き換える。`pyproject.toml` の package-data） |
 | `gui_period.py` | **撮影時期の範囲を年と月の欄で選ぶ部品**（`YearMonthRange`・#134）。顔の割り当てと写真の選定の両方のタブで使う。古い方を入れると新しい方にはそれ以降だけが並ぶ |
-| `gui_select.py` | **写真の選定タブ**（#104）。`select` の重みを動かして `selection.choose` で並べ直し、結果をサムネイルで見る。ルールの保存（控えを取る）と出力 |
+| `gui_select.py` | **写真の選定タブ**（#104）。`select` の重みを動かして `selection.choose` で並べ直し、結果をサムネイルで見る。ルールの読み込み・保存（控えを取る）・別のファイルへの保存と出力 |
 | `cli.py` | サブコマンド定義 |
 | `selection.py` | ルールに基づく抽出とコピー。**「候補を用意する」（`prepare`・測定と DB・重い）と「選ぶ」（`choose`・重みで点を出し並べ束ね年ごとに取る・何度呼んでもよい）に分けてある**（#103。GUI で重みを動かすたびに `choose` だけを呼ぶ） |
 | `similar.py` | **連写・似た写真を束ねる**（#86・#93・#98）。同じ行事（フォルダ×日）で候補を絞り、見た目（dHash）で確かめる（並びの順に見て、残した写真と比べる。連結にしない。家族は1人でも重なればよい）。**見た目は EXIF のサムネイル（先頭だけ）から測る。** フォルダをまたぐ写しは `select` が年ごとに選ぶところで `COPY_DISTANCE` で外す |
@@ -479,6 +480,7 @@ reembed       （保守）特徴量モデルを替えたときだけ。サムネ
   ログファイルに1行も残らない（`scanner._start_worker` が
   `logging_setup.setup_logging` を呼ぶ）。テストはフェイクを `worker_initializer`
   で子へ入れる (`tests/fakes.py`)。
+- **QSS をかけたあとに、窓を開いたまま `setStyle` を呼ぶと Qt ごと落ちる**（`gui_theme.apply` は最初の1回だけ Fusion を指定する）。**`set_theme` と `load_rule_file`・`save_rule_as` は設定ファイルに書く**ので、テストと描画の確かめではカレントを `tmp_path` へ移す（移さないと、本体の checkout では実データの設定を書き換える）
 - **`QWizard` は閉じると最初の段へ戻す。**何時間も流す取り込みウィザードは、閉じて開き直しても同じ段に戻すので `reject` を上書きして隠すだけにしてある。**別の窓は `AppWindow` を親に持たせる**（`WorkProgress` の `WindowModal` が `match` の最中に塞ぐ。外すとその最中に裏の処理を始められる）。**別の窓を足したら `AppWindow.closeEvent` でも閉じる**（残るとアプリが終わらない）
 - **`PRAGMA user_version` を、移行していないDBに刻まない。** スキーマは
   `CREATE TABLE IF NOT EXISTS` なので既存のテーブルを変えない。それなのに版だけ

@@ -304,7 +304,8 @@ def test_matching_only_the_selected_person_from_the_window(two_people, monkeypat
     assert "1位がほかの人物だった顔 1 件" in text
 
 
-def test_the_dialog_offers_the_selected_person_but_defaults_to_everyone(two_people):
+def test_the_dialog_defaults_to_the_selected_person_and_can_switch_to_everyone(two_people):
+    """**人物を選んでいれば、既定はその人物だけ**（#18・利用者の指定）。全員にも切り替えられ、文も追従する。"""
     window, database, first, _second, _faces = two_people
     person = next(p for p in db.list_persons(window.connection) if int(p["id"]) == first)
 
@@ -312,12 +313,25 @@ def test_the_dialog_offers_the_selected_person_but_defaults_to_everyone(two_peop
         window, db.face_counts(window.connection), str(database), person=person, person_auto=3
     )
 
-    assert dialog.chosen_person_id() is None, "既定は全員（いままでどおり）"
-    assert "全員の手本を対抗馬として" not in dialog.detail.text()
-    dialog.person_button.setChecked(True)
+    assert dialog.person_button.isChecked() and not dialog.everyone_button.isChecked()
     assert dialog.chosen_person_id() == first
-    assert "自動割当 3 件" in dialog.detail.text()
+    assert "自動割当 3 件" in dialog.detail.text(), "開いた時点で文が既定に合っている"
     assert "全員の手本を対抗馬として" in dialog.detail.text()
+    dialog.everyone_button.setChecked(True)
+    assert dialog.chosen_person_id() is None
+    assert "全員の手本を対抗馬として" not in dialog.detail.text()
+
+
+def test_the_unassign_dialog_still_defaults_to_everyone(two_people):
+    """`match` の既定を変えても、取り消しの窓は変えない（#18 の依頼は自動割り当てだけ）。"""
+    window, database, first, _second, _faces = two_people
+    person = next(p for p in db.list_persons(window.connection) if int(p["id"]) == first)
+
+    dialog = photoarchive_gui.UnassignAutoDialog(
+        window, db.face_counts(window.connection), str(database), person=person, person_auto=3
+    )
+
+    assert dialog.chosen_person_id() is None
 
 
 def test_without_a_selected_person_the_choice_is_not_offered(two_people):

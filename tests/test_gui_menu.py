@@ -14,7 +14,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from photoarchive_ai import db, evaluation, gui, jobs
-from photoarchive_ai import gui_evaluate
+from photoarchive_ai import gui_evaluate, gui_select
 from tests.fakes import install_fake_backends
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -123,7 +123,12 @@ def _rows(connection):
 
 def test_the_menu_bar_has_import_faces_and_settings(window):
     titles = [action.text() for action in window.menuBar().actions()]
-    assert titles == ["取り込み(&I)", "顔の割り当て(&F)", "設定(&S)"]
+    assert titles == ["取り込み(&I)", "顔の割り当て(&F)", "写真の選定(&P)", "設定(&S)"]
+    assert [action.text() for action in window.selection_menu.actions()] == [
+        "ルールを読み込む…",
+        "ルールを保存",
+        "別のファイルに保存…",
+    ]
     assert [action.text() for action in window.import_menu.actions()] == [
         "取り込みウィザード…",
         "写真の良し悪しを測る（assess）…",
@@ -132,6 +137,9 @@ def test_the_menu_bar_has_import_faces_and_settings(window):
         "自動割り当て（match）…",
         "自動割り当てを取り消す（unassign-auto）…",
         "精度を測る（evaluate）…",
+        "",
+        gui.ACTION_UNDO,
+        gui.ACTION_REDO,
     ]
     assert window.tabs.count() == 2
     assert window.tabs.cornerWidget() is window.job_status, "進み具合はタブの右上のまま"
@@ -149,6 +157,84 @@ def test_the_face_items_work_only_on_the_assignment_tab(window):
 
     window.tabs.setCurrentWidget(window.assignment)
     assert window.face_menu.isEnabled() and all(item.isEnabled() for item in face_items)
+
+
+def test_the_rule_items_work_only_on_the_selection_tab(window):
+    """**ルールの操作はメニューから**（#18・利用者の指定）。タブのボタンは無い。"""
+    assert not window.selection_menu.isEnabled()
+    window.tabs.setCurrentWidget(window.selection)
+    assert window.selection_menu.isEnabled()
+    window.tabs.setCurrentWidget(window.assignment)
+    assert not window.selection_menu.isEnabled()
+    assert not any(hasattr(window.selection, name) for name in ("load_rule_button", "save_button", "save_as_button"))
+
+
+@pytest.mark.parametrize(
+    "action, method",
+    [("load_rule_action", "load_rule_file"), ("save_rule_action", "save_rule"), ("save_rule_as_action", "save_rule_as")],
+)
+def test_each_rule_item_runs_its_operation(tmp_path, monkeypatch, action, method):
+    called = []
+    monkeypatch.setattr(gui_select.SelectionPanel, method, lambda self: called.append(method))
+    database = tmp_path / "menu.db"
+    db.ensure_database(str(database)).close()
+    window = gui.AppWindow(str(database), output_root=str(tmp_path / "out"))
+    window.tabs.setCurrentWidget(window.selection)
+    getattr(window, action).trigger()
+    assert called == [method]
+    window.close()
+
+
+def test_undo_and_redo_run_from_the_menu(window):
+    """**戻す・進むはメニューからも**（#18・利用者の指定）。顔の一覧の打鍵と同じ項目なので、押せる・押せないも同じ。"""
+    menu = window.face_menu.actions()
+    assert window.assignment.action_undo in menu and window.assignment.action_redo in menu
+    assert not window.assignment.action_undo.isEnabled(), "戻すものが無ければ押せない"
+
+    calls = []
+    window.assignment._undo_or_redo = lambda redo: calls.append(redo)
+    window.assignment.action_undo.setEnabled(True)
+    window.assignment.action_redo.setEnabled(True)
+    # 打鍵の経路と同じ triggered を通す（作ったときの lambda が self の属性を引く）
+    window.assignment.action_undo.trigger()
+    window.assignment.action_redo.trigger()
+    assert calls == [False, True]
+
+
+def test_the_toolbars_follow_the_tab_and_use_the_menu_actions(window, qt_app):
+    """**タブに関係するアイコンは、そのタブのときだけ。** 項目はメニューと同じなので、押せる・押せないも一致する。"""
+    window.show()
+    qt_app.processEvents()
+    assert window.common_toolbar.isVisible()
+    assert window.face_toolbar.isVisible() and not window.selection_toolbar.isVisible()
+    assert window.match_action in window.face_toolbar.actions()
+    assert window.settings_action in window.common_toolbar.actions()
+
+    window.tabs.setCurrentWidget(window.selection)
+    qt_app.processEvents()
+    assert window.common_toolbar.isVisible()
+    assert window.selection_toolbar.isVisible() and not window.face_toolbar.isVisible()
+    assert window.save_rule_action in window.selection_toolbar.actions()
+
+
+def test_every_toolbar_action_has_an_icon_and_a_name(window):
+    for toolbar in (window.common_toolbar, window.face_toolbar, window.selection_toolbar):
+        for action in toolbar.actions():
+            assert not action.icon().isNull(), action.text()
+            assert action.toolTip(), "アイコンだけなので、マウスを載せたら名前が出る"
+
+
+def test_the_choose_and_export_icons_run_the_panel(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(gui_select.SelectionPanel, "choose", lambda self: called.append("choose"))
+    monkeypatch.setattr(gui_select.SelectionPanel, "export", lambda self: called.append("export"))
+    database = tmp_path / "menu.db"
+    db.ensure_database(str(database)).close()
+    window = gui.AppWindow(str(database), output_root=str(tmp_path / "out"))
+    window.choose_action.trigger()
+    window.export_action.trigger()
+    assert called == ["choose", "export"]
+    window.close()
 
 
 def test_match_and_unassign_are_blocked_while_a_job_runs(window):

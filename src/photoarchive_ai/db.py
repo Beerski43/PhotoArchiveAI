@@ -722,13 +722,26 @@ def save_photo_quality(
     return len(values)
 
 
-def photo_quality(connection: sqlite3.Connection, model_version: str) -> Dict[int, Dict[str, Any]]:
+def photo_quality(
+    connection: sqlite3.Connection, model_version: str, media_ids: Optional[Iterable[int]] = None
+) -> Dict[int, Dict[str, Any]]:
     """``model_version`` で測れた写真の良し悪し（media_id → 列）。**読めなかった行・別の版は返さない。**"""
-    rows = connection.execute(
+    query = (
         f"SELECT media_id, {','.join(PHOTO_QUALITY_COLUMNS)} FROM PhotoQuality"
-        " WHERE model_version = ? AND readable = 1",
-        (model_version,),
+        " WHERE model_version = ? AND readable = 1"
     )
+    if media_ids is None:
+        rows = connection.execute(query, (model_version,)).fetchall()
+    else:
+        # 顔の一覧は1ページごとに読むので、全件（実データで約 1.6 万行）を読まない（#18）
+        rows = []
+        ids = list(media_ids)
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(connection.execute(
+                f"{query} AND media_id IN ({placeholders})", (model_version, *chunk)
+            ).fetchall())
     return {row[0]: dict(zip(PHOTO_QUALITY_COLUMNS, row[1:])) for row in rows}
 
 
@@ -1044,6 +1057,15 @@ FACE_LIST_COLUMNS = (
     "penalize",
     # 鮮明さ（#135）。一覧の顔の下に出し、閾値を決める手がかりにする
     "sharpness",
+    # 顔の点（`selection.face_points`・#18）の材料。一覧の顔の下に点を出す
+    "bbox_top",
+    "bbox_right",
+    "bbox_bottom",
+    "bbox_left",
+    "aligned",
+    "yaw",
+    "eye_blink",
+    "mouth_smile",
 )
 
 
@@ -2073,6 +2095,7 @@ def assign_faces(
     """顔を人物へ割り当てる。
 
     ``age`` を省くと年齢は触らない。``None`` を明示すると未設定へ戻す。
+    **辞書（顔 id → 年齢）を渡すと、顔ごとに別の年齢を入れる**（#18。辞書に無い顔は未設定）。
     ``progress`` を渡すと ``(終わった件数, 全体の件数)`` を知らせる。
     """
     if not face_ids:
@@ -2090,8 +2113,10 @@ def assign_faces(
             "UPDATE Face SET person_id = ?, assign_source = ?, assign_score = ?,"
             " assign_rule = NULL, penalize = NULL, assigned_at = ?, age = ? WHERE id = ?"
         )
+        age_of = age.get if isinstance(age, dict) else (lambda _face_id: age)
         rows = [
-            (person_id, assign_source, assign_score, now, age, face_id) for face_id in face_ids
+            (person_id, assign_source, assign_score, now, age_of(face_id), face_id)
+            for face_id in face_ids
         ]
     affected = _executemany_with_progress(cursor, statement, rows, progress)
     connection.commit()
@@ -2233,10 +2258,12 @@ def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int
 def set_faces_age(
     connection: sqlite3.Connection,
     face_ids: Sequence[int],
-    age: Optional[int],
+    age: Any,
     progress: ProgressCallback = None,
 ) -> int:
     """選んだ顔にまとめて年齢を入れる。``None`` は未設定へ戻す指示。
+
+    **辞書（顔 id → 年齢）を渡すと、顔ごとに別の年齢を入れる**（#18。辞書に無い顔は未設定）。
 
     **1件ずつ `set_face_age` を呼ばない。** 呼ぶたびにコミットするので、
     200件なら 200 回の書き込み確定になる。ここは1回で確定する。
@@ -2244,10 +2271,11 @@ def set_faces_age(
     if not face_ids:
         return 0
     cursor = connection.cursor()
+    age_of = age.get if isinstance(age, dict) else (lambda _face_id: age)
     affected = _executemany_with_progress(
         cursor,
         "UPDATE Face SET age = ? WHERE id = ?",
-        [(age, face_id) for face_id in face_ids],
+        [(age_of(face_id), face_id) for face_id in face_ids],
         progress,
     )
     connection.commit()
