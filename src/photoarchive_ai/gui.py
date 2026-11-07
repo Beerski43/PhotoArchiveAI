@@ -1230,7 +1230,13 @@ class FaceAgeDialog(QDialog):
     利用者が OK を押して初めて `Face.age` に入る（Issue #48 の判断2）。
     """
 
-    def __init__(self, parent=None, summary: str = "", initial_age: Optional[int] = None):
+    def __init__(
+        self,
+        parent=None,
+        summary: str = "",
+        initial_age: Optional[int] = None,
+        initial_note: str = "誕生日から計算した年齢を入れてあります。",
+    ):
         super().__init__(parent)
         self.setWindowTitle("撮影時の年齢")
         self.age_input = QSpinBox()
@@ -1243,7 +1249,7 @@ class FaceAgeDialog(QDialog):
             # **機械が入れた値だと分かるようにする。** 黙って数字が入っていると、
             # 利用者が確かめた年齢なのか計算値なのか、あとから区別できない。
             summary = "\n".join(
-                part for part in (summary, "誕生日から計算した年齢を入れてあります。") if part
+                part for part in (summary, initial_note) if part
             )
         else:
             self.age_input.setValue(-1)
@@ -1314,13 +1320,21 @@ class FaceAgesDialog(QDialog):
         records: Sequence[dict],
         taken_by_face: Dict[int, Optional[Taken]],
         ages: Dict[int, Optional[int]],
+        uses_stored_ages: bool = False,
     ):
         super().__init__(parent)
         self.setWindowTitle("写真ごとの年齢を確かめる")
         unknown = sum(age is None for age in ages.values())
+        # 同じ窓を「年齢を設定…」でも使う（#18）。そちらの初期値は登録済みの年齢が先
+        source = (
+            f"登録済みの年齢があればその値、無ければ {person_name} の誕生日と撮影日時から計算した年齢です。"
+            if uses_stored_ages
+            else f"{person_name} の誕生日と撮影日時から計算した年齢です。"
+        )
+        verb = "設定" if uses_stored_ages else "登録"
         text = (
-            f"選んだ {len(records):,} 件は年齢が揃っていません。{person_name} の誕生日と撮影日時から計算した年齢です。"
-            "\nこの年齢で登録してよければ、そのまま押してください（欄で直せます）。"
+            f"選んだ {len(records):,} 件は年齢が揃っていません。{source}"
+            f"\nこの年齢で{verb}してよければ、そのまま押してください（欄で直せます）。"
         )
         if unknown:
             text += f"\n{unknown:,} 件は年齢を出せないので「未設定」です。"
@@ -1376,7 +1390,7 @@ class FaceAgesDialog(QDialog):
             self.table.setRowHeight(row, AGE_ROW_THUMBNAIL + 8)
 
         buttons = QDialogButtonBox()
-        self.register_button = buttons.addButton("この年齢で登録", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.register_button = buttons.addButton(f"この年齢で{verb}", QDialogButtonBox.ButtonRole.AcceptRole)
         self.register_button.setProperty("look", "primary")
         self.cancel_button = buttons.addButton("やめる", QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self.accept)
@@ -3630,15 +3644,32 @@ class MainWindow(QWidget):
         face_ids = self._selected_face_ids()
         if person is None or not face_ids:
             return
-        shooting_dates = db.taken_for_faces(self.connection, face_ids)
-        dialog = FaceAgeDialog(
-            self,
-            summary=summarize_selection(len(face_ids), shooting_dates),
-            initial_age=suggested_age(person.get("birth_date"), shooting_dates),
-        )
-        if dialog.exec() != QDialog.Accepted:
-            return
-        age = dialog.age()
+        records = self._selected_records()
+        taken_by_face = db.taken_by_face(self.connection, face_ids)
+        # **初期値は登録済みの年齢。無ければ計算した年齢**（#18・利用者「初期値は既に設定されている値を入れて」）
+        computed = computed_ages(person.get("birth_date"), {face_id: taken_by_face.get(face_id) for face_id in face_ids})
+        stored = {record["id"]: record.get("age") for record in records}
+        ages = {face_id: computed[face_id] if stored.get(face_id) is None else stored[face_id] for face_id in face_ids}
+        if len(set(ages.values())) > 1:
+            # 揃わなければ、割り当てと同じ窓で写真ごとに確かめる
+            dialog = FaceAgesDialog(self, person["name"], records, taken_by_face, ages, uses_stored_ages=True)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            age = dialog.ages()
+        else:
+            shooting_dates = db.taken_for_faces(self.connection, face_ids)
+            options = {"initial_note": "登録済みの年齢を入れてあります。"} if any(
+                value is not None for value in stored.values()
+            ) else {}
+            dialog = FaceAgeDialog(
+                self,
+                summary=summarize_selection(len(face_ids), shooting_dates),
+                initial_age=next(iter(ages.values())),
+                **options,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+            age = dialog.age()
         self._run_with_progress(
             "年齢を設定しています",
             face_ids,

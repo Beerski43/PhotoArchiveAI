@@ -1192,7 +1192,12 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_undo_takes_back_the_ages_as_well` | 元に戻すと年齢も戻る |
 | `test_one_face_uses_the_usual_dialog` / `test_faces_of_the_same_age_use_the_usual_dialog` | 1件や年齢が揃うときは、いままでの窓 |
 | `test_many_faces_scroll_and_the_wheel_does_not_change_an_age` | **多くてもスクロールで全部見える。** 欄の上のホイールで年齢が変わらない |
-| `test_the_database_takes_an_age_for_each_face` | `db.assign_faces` は顔ごとの年齢を受け取れる |
+| `test_the_database_takes_an_age_for_each_face` | `db.assign_faces` と `db.set_faces_age` は顔ごとの年齢を受け取れる |
+| `test_setting_ages_opens_the_same_list_with_stored_ages_first` | **`年齢を設定…` も同じ窓**。初期値は登録済みの年齢、無ければ計算した年齢 |
+| `test_setting_ages_can_be_corrected_and_undone` | 欄で直して設定でき、元に戻せる |
+| `test_setting_the_age_of_one_face_starts_from_its_stored_age` / `test_setting_the_age_of_one_face_without_a_stored_age_starts_from_the_computed_age` | 1件は1つの欄で、初期値の決まりは同じ |
+| `test_same_stored_ages_use_the_usual_dialog` | 登録済みの年齢が揃えば1つの欄 |
+| `test_assigning_keeps_the_computed_age_as_the_initial_value` | 割り当ての初期値は計算した年齢のまま（前の人物の年齢を出さない） |
 
 ### `test_gui_face_scroll.py` — 顔の一覧のスクロールの場所（#18）
 

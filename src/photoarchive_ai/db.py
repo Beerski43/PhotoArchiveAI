@@ -2258,10 +2258,12 @@ def set_face_age(connection: sqlite3.Connection, face_id: int, age: Optional[int
 def set_faces_age(
     connection: sqlite3.Connection,
     face_ids: Sequence[int],
-    age: Optional[int],
+    age: Any,
     progress: ProgressCallback = None,
 ) -> int:
     """選んだ顔にまとめて年齢を入れる。``None`` は未設定へ戻す指示。
+
+    **辞書（顔 id → 年齢）を渡すと、顔ごとに別の年齢を入れる**（#18。辞書に無い顔は未設定）。
 
     **1件ずつ `set_face_age` を呼ばない。** 呼ぶたびにコミットするので、
     200件なら 200 回の書き込み確定になる。ここは1回で確定する。
@@ -2269,10 +2271,11 @@ def set_faces_age(
     if not face_ids:
         return 0
     cursor = connection.cursor()
+    age_of = age.get if isinstance(age, dict) else (lambda _face_id: age)
     affected = _executemany_with_progress(
         cursor,
         "UPDATE Face SET age = ? WHERE id = ?",
-        [(age, face_id) for face_id in face_ids],
+        [(age_of(face_id), face_id) for face_id in face_ids],
         progress,
     )
     connection.commit()

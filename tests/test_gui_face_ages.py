@@ -227,3 +227,113 @@ def test_the_database_takes_an_age_for_each_face(setup):
     rows = {row["id"]: row for row in db.list_faces(window.connection)}
     assert rows[faces["six"]]["age"] == 6
     assert rows[faces["nine"]]["age"] is None, "辞書に無い顔は未設定"
+
+    db.set_faces_age(window.connection, [faces["six"], faces["nine"]], {faces["nine"]: 8})
+    rows = {row["id"]: row for row in db.list_faces(window.connection)}
+    assert rows[faces["nine"]]["age"] == 8
+    assert rows[faces["six"]]["age"] is None
+
+
+def _assigned(window, person, faces, stored):
+    """顔を人物へ割り当て、``stored``（名前 → 年齢）の年齢を入れて、人物の一覧を見せる。"""
+    db.assign_faces(window.connection, list(faces.values()), person["id"], db.ASSIGN_MANUAL)
+    for name, age in stored.items():
+        db.set_face_age(window.connection, faces[name], age)
+    for row in range(window.person_list.count()):
+        data = window.person_list.item(row).data(photoarchive_gui.Qt.UserRole)
+        if data is not None and data["id"] == person["id"]:
+            window.person_list.setCurrentRow(row)
+    window.reload_faces()
+
+
+def test_setting_ages_opens_the_same_list_with_stored_ages_first(setup, monkeypatch):
+    """**`年齢を設定…` も同じ窓。初期値は登録済みの年齢、無ければ計算した年齢**（#18・利用者の指定）。"""
+    window, person, faces = setup
+    _assigned(window, person, faces, {"six": 40})
+    monkeypatch.setattr(photoarchive_gui, "FaceAgeDialog", lambda *a, **k: pytest.fail("1つの欄で開いた"))
+    opened = _capture_dialog(monkeypatch, QDialog.Rejected)
+    _select(window, [faces["six"], faces["nine"], faces["unknown"]])
+
+    window._set_age_selected()
+
+    assert opened[0].ages() == {faces["six"]: 40, faces["nine"]: 9, faces["unknown"]: None}
+    assert opened[0].register_button.text() == "この年齢で設定"
+    assert "登録済みの年齢" in opened[0].findChild(photoarchive_gui.QLabel).text()
+
+
+def test_setting_ages_can_be_corrected_and_undone(setup, monkeypatch):
+    window, person, faces = setup
+    _assigned(window, person, faces, {"six": 40})
+    _capture_dialog(monkeypatch, edit=lambda dialog: dialog.age_inputs[faces["nine"]].setValue(10))
+    _select(window, [faces["six"], faces["nine"]])
+
+    window._set_age_selected()
+
+    rows = {row["id"]: row for row in db.list_faces(window.connection)}
+    assert rows[faces["six"]]["age"] == 40, "直さなければ登録済みのまま"
+    assert rows[faces["nine"]]["age"] == 10
+
+    window.action_undo.trigger()
+    rows = {row["id"]: row for row in db.list_faces(window.connection)}
+    assert rows[faces["six"]]["age"] == 40
+    assert rows[faces["nine"]]["age"] is None
+
+
+def _capture_single_dialog(monkeypatch):
+    """1つの欄の窓が開いた初期値と文を控えて、閉じる。"""
+    opened = []
+
+    def run(dialog):
+        opened.append((dialog.age(), dialog.summary))
+        return QDialog.Rejected
+
+    monkeypatch.setattr(photoarchive_gui.FaceAgeDialog, "exec", run)
+    return opened
+
+
+def test_setting_the_age_of_one_face_starts_from_its_stored_age(setup, monkeypatch):
+    window, person, faces = setup
+    _assigned(window, person, faces, {"six": 40})
+    opened = _capture_single_dialog(monkeypatch)
+    _select(window, [faces["six"]])
+
+    window._set_age_selected()
+
+    assert opened[0][0] == 40, "計算すれば 6 歳だが、登録済みの値を出す"
+    assert "登録済みの年齢" in opened[0][1]
+
+
+def test_setting_the_age_of_one_face_without_a_stored_age_starts_from_the_computed_age(setup, monkeypatch):
+    window, person, faces = setup
+    _assigned(window, person, faces, {})
+    opened = _capture_single_dialog(monkeypatch)
+    _select(window, [faces["six"]])
+
+    window._set_age_selected()
+
+    assert opened[0][0] == 6
+    assert "計算した年齢" in opened[0][1]
+
+
+def test_same_stored_ages_use_the_usual_dialog(setup, monkeypatch):
+    """登録済みの年齢が揃っていれば1つの欄（計算すれば別の年齢でも）。"""
+    window, person, faces = setup
+    _assigned(window, person, faces, {"six": 40, "nine": 40})
+    opened = _capture_single_dialog(monkeypatch)
+    _select(window, [faces["six"], faces["nine"]])
+
+    window._set_age_selected()
+
+    assert opened[0][0] == 40
+
+
+def test_assigning_keeps_the_computed_age_as_the_initial_value(setup, monkeypatch):
+    """割り当ての初期値は計算した年齢のまま。**別の人物へ移すときに前の人物の年齢を出さない。**"""
+    window, person, faces = setup
+    _assigned(window, person, faces, {"six": 40})
+    opened = _capture_single_dialog(monkeypatch)
+    _select(window, [faces["six"]])
+
+    window._assign_selected(person)
+
+    assert opened[0][0] == 6
