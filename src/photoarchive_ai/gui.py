@@ -13,7 +13,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QPainter, QPixmap
@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import db, face, matcher, migration, recommend, scoring, undo
+from . import db, face, matcher, migration, recommend, scoring, selection, undo
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
@@ -69,10 +69,10 @@ THUMBNAIL_SIZE = 120
 #: 報告。実データの未分類1ページ目は先頭が 101px・残りが 160px だった）。
 #:
 #: **枠を固定すれば、どの顔が先頭に来ても同じ見た目になる。**
-#: 高さは「サムネイル＋文字2行」ぶん（人物の表示の自動割当は
-#: `13391 (自動 55) (0歳)` のように長い）。
+#: 高さは「サムネイル＋文字3行」ぶん（1行目の `13391 (自動 55) (0歳)` は番号や印が長いと折り返し、
+#: 次の行に `約72点 鮮明さ 120` が続く）。
 ITEM_WIDTH = THUMBNAIL_SIZE + 44
-ITEM_HEIGHT = THUMBNAIL_SIZE + 48
+ITEM_HEIGHT = THUMBNAIL_SIZE + 66
 
 #: 撮影日時が読めない顔だけを見るときの表示。
 #:
@@ -144,6 +144,8 @@ ORDER_CHOICES = (
     ("画質の低い順", db.ORDER_QUALITY_ASC),
     ("ボケている順", db.ORDER_SHARPNESS_ASC),
     ("くっきりした順", db.ORDER_SHARPNESS_DESC),
+    ("点の高い順", selection.ORDER_POINTS_DESC),
+    ("点の低い順", selection.ORDER_POINTS_ASC),
     ("この人物に似た順", recommend.ORDER_SIMILAR),
     ("この人物に似ていない順", recommend.ORDER_DISSIMILAR),
 )
@@ -1368,11 +1370,19 @@ def format_sharpness(value: Optional[float]) -> str:
     return "鮮明さ 未計測" if value is None else f"鮮明さ {value:.0f}"
 
 
+def format_points(point: "selection.FacePoint") -> str:
+    """一覧に出す顔の点（#18）。測っていない項目があれば「約」、何も測っていなければ「点 未計測」。"""
+    if point.score is None:
+        return "点 未計測"
+    return f"{'約' if point.partial else ''}{point.score:.0f}点"
+
+
 def _fill_face_list(
     widget: QListWidget,
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
     show_sharpness: bool = False,
+    points: Optional[Dict[int, "selection.FacePoint"]] = None,
 ) -> None:
     """一覧を作り直す。**作り直しているあいだ、信号を止める。**
 
@@ -1386,7 +1396,7 @@ def _fill_face_list(
     """
     blocked = widget.blockSignals(True)
     try:
-        _repopulate_face_list(widget, records, age_labels, show_sharpness)
+        _repopulate_face_list(widget, records, age_labels, show_sharpness, points)
     finally:
         widget.blockSignals(blocked)
 
@@ -1396,6 +1406,7 @@ def _repopulate_face_list(
     records: List[dict],
     age_labels: Optional[Dict[int, Optional[str]]] = None,
     show_sharpness: bool = False,
+    points: Optional[Dict[int, "selection.FacePoint"]] = None,
 ) -> None:
     widget.clear()
     for record in records:
@@ -1419,6 +1430,9 @@ def _repopulate_face_list(
             age_text = None
         if age_text:
             label = f"{label} {age_text}"
+        # **点は2行目の先頭に置く**（続けて書くと、番号が長いときに「約81」と「点」の間で折り返される）
+        if points is not None and record["id"] in points:
+            label = f"{label}\n{format_points(points[record['id']])}"
         # **鮮明さで絞る・並べるときだけ顔の下に出す**（#135。枠が狭いので常には出さない）。
         # 閾値を決める手がかりなので、境目の顔の値が読めるようにする。
         if show_sharpness:
@@ -1475,6 +1489,10 @@ class MainWindow(QWidget):
         #: 「この人物に似た順」の距離。**ページ送りのあいだ持ち続ける**（#69）。
         #: 人物を選び直したら作り直す（`_similarity_for`）。
         self.similarity: Optional[recommend.PersonSimilarity] = None
+        #: 顔の点に使う重みを返すもの。`AppWindow` が写真の選定タブの重みへつなぐ（#18）。
+        self.face_weights: Callable[[], scoring.Weights] = scoring.Weights.default
+        #: いま一覧に出ている点を計算した重み。
+        self._points_weights: Optional[scoring.Weights] = None
         #: 直前に並べたとき、根拠にした手本の件数。0 なら似た順に並べられていない。
         self.similarity_teachers: Optional[int] = None
         #: 顔の操作を元に戻す・やり直す履歴（#116）。**開いている間だけ持つ**（利用者の決定）。
@@ -1565,7 +1583,9 @@ class MainWindow(QWidget):
             "（未分類は撮影日時の新しい順、"
             "人物は年齢の若い順、人物の未分類はこの人物に似た順）。\n"
             "「この人物に似た順」は、その人物の手本との距離で並べる"
-            "（5点整列ができなかった手本は使わない）。"
+            "（5点整列ができなかった手本は使わない）。\n"
+            "「点」は写真の選定タブの重みで出した顔の点（0〜100）。「約」は測っていない項目を中間の値で"
+            "計算した点。何も測っていない顔は最後に並ぶ。"
         )
         self.order_box.currentIndexChanged.connect(self._reset_page)
 
@@ -3010,7 +3030,25 @@ class MainWindow(QWidget):
         filters = self._filter_arguments()
         order = self._current_order()
         self.similarity_teachers = None
-        if order in recommend.ORDERS and self._current_person() is not None:
+        weights = self.face_weights()
+        self._points_weights = weights
+        points = None
+        if order in selection.ORDER_POINTS:
+            # **点の順も SQL で並べられない**（重みと写真で変わる値）。サムネイル抜きで全件読んで点を出す
+            # （実データの最大の人物 6,514 件で約 0.4 秒）。
+            with busy_cursor():
+                points = selection.face_points(
+                    self.connection, db.list_faces(self.connection, **filters), weights
+                )
+            ordered = selection.rank_by_points(points, descending=order == selection.ORDER_POINTS_DESC)
+            total = len(ordered)
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            self.page = max(0, min(self.page, pages - 1))
+            start = self.page * PAGE_SIZE
+            records = db.faces_by_ids(
+                self.connection, ordered[start : start + PAGE_SIZE], with_thumbnail=True
+            )
+        elif order in recommend.ORDERS and self._current_person() is not None:
             # **似た順は SQL で並べられない。** 条件に当たる id を全件取り
             # （サムネイル抜き）、手本との距離で並べてから1ページ分だけ読む。
             ordered = self._ids_by_similarity(
@@ -3042,6 +3080,7 @@ class MainWindow(QWidget):
             self._age_labels(records),
             show_sharpness=self._blur_filtering()
             or order in (db.ORDER_SHARPNESS_ASC, db.ORDER_SHARPNESS_DESC),
+            points=points if points is not None else selection.face_points(self.connection, records, weights),
         )
         # **桁を区切る。** 実データは万単位（未分類 31,275 件）で、
         # 区切らないと桁が読み取れない。
@@ -3055,6 +3094,14 @@ class MainWindow(QWidget):
         # 作り直した直後は何も選ばれていない。**信号を止めて作り直している**ので
         # `itemSelectionChanged` は出ない（`_fill_face_list`）。ここで合わせる。
         self._update_face_actions()
+
+    def refresh_points(self) -> None:
+        """写真の選定タブで重みが変わっていたら、顔の点を出し直す（#18）。
+
+        変わっていなければ読み直さない（読み直すと、選んでいる顔の選択が外れる）。
+        """
+        if self.face_weights() != self._points_weights:
+            self.reload_faces()
 
     def _similarity_for(self, person_id: int) -> "recommend.PersonSimilarity":
         """選んでいる人物の距離の控え。**人物が変わったら作り直す。**"""
@@ -3535,6 +3582,10 @@ class AppWindow(QMainWindow):
         self.jobs.started.connect(self._job_started)
         self.jobs.finished.connect(self._job_finished)
         self.tabs.currentChanged.connect(lambda _index: self._sync_menus())
+        self.tabs.currentChanged.connect(lambda _index: self._refresh_points_if_shown())
+        # 顔の点は「選ぶ」と同じく、写真の選定タブの画面の重みで出す（#18）
+        self.assignment.face_weights = self.selection.current_weights
+        self.assignment.refresh_points()
         self.assignment.measure_requested.connect(self.start_measure)
         #: 子プロセスの入口で呼ぶもの（テストがフェイクを入れる）
         self.measure_initializer = None
@@ -3567,6 +3618,10 @@ class AppWindow(QMainWindow):
         self.settings_action = self.settings_menu.addAction("設定…")
         self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
         self.settings_action.triggered.connect(self.open_settings)
+
+    def _refresh_points_if_shown(self) -> None:
+        if self.tabs.currentWidget() is self.assignment:
+            self.assignment.refresh_points()
 
     def _sync_menus(self) -> None:
         """**顔の割り当ての項目は、顔の割り当てタブのときだけ。** `match` と取り消しは裏の処理の実行中も押せない。
@@ -3625,6 +3680,7 @@ class AppWindow(QMainWindow):
         shown = self.assignment.source_roots
         shown = [shown] if isinstance(shown, str) else list(shown or [])
         self.selection.set_paths(get_rule_path(settings), get_output_root(settings), shown)
+        self._refresh_points_if_shown()
         for window in (self.import_wizard, self.assess_window):
             window.settings_roots = roots
             window.reload_roots()

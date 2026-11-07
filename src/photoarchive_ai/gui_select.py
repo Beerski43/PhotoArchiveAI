@@ -800,6 +800,10 @@ class SelectionPanel(QWidget):
             rule["count_per_year"] = counts
         return rule
 
+    def current_weights(self) -> scoring.Weights:
+        """画面の重み。「選ぶ」と同じ値（顔の割り当ての一覧の点もこれで出す・#18）。"""
+        return selection.rule_weights({"weights": {key: spin.value() for key, spin in self.weight_spins.items()}})
+
     def _year_values(self) -> Dict[Any, int]:
         """いま表に入っている枚数（``{年 / "unknown" / "later": 枚数}``）。"""
         values: Dict[Any, int] = {}

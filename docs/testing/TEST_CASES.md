@@ -1177,6 +1177,19 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_the_restart_notice_only_follows_a_changed_database_path` | 「次に起動したときから」は DB の欄を変えたときだけ（`--db` で起動していても・指摘3） |
 | `test_the_menu_opens_saves_and_applies` | メニューの `設定…` から開いて保存すると効き、DB を変えたら「次に起動したときから」と知らせる。閉じただけなら何も変えない |
 
+### `test_gui_face_points.py` — 顔の割り当ての一覧に顔の点を出し、点の順で並べる（#18）
+
+| テスト | 何を確認するか |
+|---|---|
+| `test_the_points_are_the_ones_select_uses` | **`select` と同じ式・同じ物差し**（写真でいちばん大きい顔・写真の縦横） |
+| `test_the_points_say_what_was_not_measured` | 測っていない項目があれば `partial`、何も測っていなければ点を出さない |
+| `test_the_face_label_shows_the_points` | `72点`・`約72点`・`点 未計測` |
+| `test_the_faces_can_be_ordered_by_points_with_unmeasured_last` | 点の高い順・低い順。**未計測の顔はどちらでも最後** |
+| `test_the_order_by_points_covers_every_page` | **全件を並べてからページに分ける**（重複・欠落なし） |
+| `test_the_points_appear_in_other_orders_too` | ほかの並びでも点が出る |
+| `test_the_points_follow_the_weights_on_the_selection_tab` | 写真の選定タブの重みで出す。タブを戻すと出し直す。**重みが同じなら読み直さず、選択が残る** |
+| `test_photo_quality_can_read_only_some_photos` | `db.photo_quality` は写真を指定して読める（ページごとに全件を読まない） |
+
 ### `test_blurry_faces.py` — ボケた顔を鮮明さで絞り、まとめて顔認証外にする（17件。#135）
 
 | テスト | 内容 |

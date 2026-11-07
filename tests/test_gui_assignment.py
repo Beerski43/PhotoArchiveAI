@@ -654,8 +654,9 @@ def test_a_calculated_age_is_told_apart_from_one_a_person_confirmed(window):
     labels = _labels(window)
     # **年齢の部分だけで見分ける。** ラベルには "(自動 0)" も入るので、
     # 括弧の有無をラベル全体で見てはいけない。
-    assert any(label.endswith(" 6歳") for label in labels), labels
-    assert any(label.endswith(" (6歳)") for label in labels), labels
+    # 年齢は1行目の最後（2行目は顔の点・#18）。
+    assert any(label.split("\n")[0].endswith(" 6歳") for label in labels), labels
+    assert any(label.split("\n")[0].endswith(" (6歳)") for label in labels), labels
     # **計算しただけの年齢を DB に書き戻していないこと。**
     unset = {row["id"] for row in db.list_faces(connection) if row["age"] is None}
     assert unset == set(face_ids[1:])
