@@ -979,6 +979,72 @@ def test_the_unknown_row_is_always_the_last_row(mixed, tmp_path, date):
     window.close()
 
 
+def _set_result_order(panel, value):
+    panel.order_box.setCurrentIndex(panel.order_box.findData(value))
+
+
+def _shown_results(panel):
+    return [panel.result_list.item(i).text() for i in range(panel.result_list.count())]
+
+
+def test_the_results_can_be_ordered_by_date_and_points(mixed, tmp_path):
+    """**結果にも `並び` がある**（#18・利用者の要望）。既定はいままでの順。年不明は日時の順では最後、点の順では点のとおり。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    assert panel.order_box.currentData() == gui_select.ORDER_YEAR
+    assert _shown_results(panel) == [
+        "2016 nofamily2016.jpg", "2017 auto2017.jpg", "2019 dated.jpg", "年不明 undated.jpg"
+    ]
+
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert _shown_results(panel) == [
+        "2019 dated.jpg", "2017 auto2017.jpg", "2016 nofamily2016.jpg", "年不明 undated.jpg"
+    ]
+    _set_result_order(panel, gui_select.ORDER_TAKEN_OLD)
+    assert _shown_results(panel)[0] == "2016 nofamily2016.jpg"
+    assert _shown_results(panel)[-1] == "年不明 undated.jpg"
+
+    scores = {"dated.jpg": 10.0, "auto2017.jpg": 40.0, "nofamily2016.jpg": 20.0, "undated.jpg": 30.0}
+    for media in panel.selected:
+        media["family_score"] = scores[Path(media["path"]).name]
+    _set_result_order(panel, gui_select.ORDER_POINTS_HIGH)
+    assert _shown_results(panel) == [
+        "2017 auto2017.jpg 40点", "年不明 undated.jpg 30点", "2016 nofamily2016.jpg 20点", "2019 dated.jpg 10点"
+    ]
+    _set_result_order(panel, gui_select.ORDER_POINTS_LOW)
+    assert _shown_results(panel)[0] == "2019 dated.jpg 10点"
+    window.close()
+
+
+def test_the_result_order_changes_only_the_view(mixed, tmp_path):
+    """**見せ方だけ。** 選んだ写真の順（出力の順位）は変えない。絞り込みと併せて効き、選び直しても保つ。"""
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    chosen = [media["id"] for media in panel.selected]
+    panel.page = 0
+
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert [media["id"] for media in panel.selected] == chosen
+    panel.include_unknown.setChecked(False)
+    panel.year_range.set_range("2016", "2017")
+    assert _shown_results(panel) == ["2017 auto2017.jpg", "2016 nofamily2016.jpg"]
+
+    panel.choose()
+    assert panel.order_box.currentData() == gui_select.ORDER_TAKEN_NEW
+    window.close()
+
+
+def test_a_new_result_order_goes_back_to_the_first_page(mixed, tmp_path, monkeypatch):
+    monkeypatch.setattr(gui_select, "RESULT_PAGE_SIZE", 2)
+    window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")
+    panel.choose()
+    panel._turn(1)
+    assert panel.page == 1
+    _set_result_order(panel, gui_select.ORDER_TAKEN_NEW)
+    assert panel.page == 0
+    window.close()
+
+
 def test_the_results_can_be_narrowed_by_month(mixed, tmp_path):
     """**年と月を別の欄で選ぶ**（#134・利用者の要望）。どの写真も 5 月なので、4 月までなら 2019 年は外れる。"""
     window, panel = _panel(mixed, tmp_path, "family_only: false\nremove_similar: false\n")

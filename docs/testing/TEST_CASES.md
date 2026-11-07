@@ -593,6 +593,9 @@
 | `test_reloading_clears_the_previous_results` | **割り当てが変わったら前の結果を捨てる**（PR #108 の指摘2）。「出力する」は古い結果を出力せず選び直しを求める（#113） |
 | `test_choosing_reloads_the_candidates_only_when_the_assignments_changed` | 「選ぶ」は割り当てが変わったときだけ候補を用意し直す。重みを動かすだけなら読み直さない（#113） |
 | `test_the_year_counts_from_the_database_match_the_prepared_candidates` | DB だけで数えた年ごとの枚数（`selection.year_counts`）が、候補を用意して数えたものと同じ（#113） |
+| `test_the_results_can_be_ordered_by_date_and_points` | **結果にも `並び`**（#18）。既定はいままでの順。年不明は日時の順では最後、点の順では点のとおり |
+| `test_the_result_order_changes_only_the_view` | 見せ方だけで、選んだ写真の順は変えない。絞り込みと併せて効き、選び直しても保つ |
+| `test_a_new_result_order_goes_back_to_the_first_page` | 並びを変えると1ページ目へ戻る |
 | `test_the_results_can_be_narrowed_to_a_range_of_years` | 結果は年の範囲で絞る。年不明は範囲と関係なく `年不明を入れる` で決める。既定は入れて最後に並ぶ。選び直しても保ち、選ぶ写真は変えない（#113・#134・#18） |
 | `test_the_unknown_row_is_always_the_last_row` | **年の表の「年不明」は必ず出て、常に一番下**（「〇年以降」より下・#18） |
 | `test_the_results_can_be_narrowed_by_month` | 年と月を別の欄で選び、欄を動かすと一覧が追いつく（#134） |

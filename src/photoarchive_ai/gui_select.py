@@ -25,7 +25,7 @@ CLI の `photoarchive select` は同じルールで同じ結果になる。
 from __future__ import annotations
 
 import shutil
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -300,6 +300,20 @@ class _Progress:
     def finish(self) -> None:
         self.dialog.close()
 
+
+#: 結果の一覧の並び（#18）。先頭が既定で、いままでの順（年の古い順・年の中は点の高い順）。
+ORDER_YEAR = "year"
+ORDER_TAKEN_NEW = "taken_new"
+ORDER_TAKEN_OLD = "taken_old"
+ORDER_POINTS_HIGH = "points_high"
+ORDER_POINTS_LOW = "points_low"
+RESULT_ORDERS = (
+    ("年の古い順", ORDER_YEAR),
+    ("撮影日時の新しい順", ORDER_TAKEN_NEW),
+    ("撮影日時の古い順", ORDER_TAKEN_OLD),
+    ("点の高い順", ORDER_POINTS_HIGH),
+    ("点の低い順", ORDER_POINTS_LOW),
+)
 
 #: ルールのファイルを選ぶ窓の絞り込みと、読み書きする拡張子（YAML だけ・#27）。先頭は拡張子を足すときに使う。
 RULE_FILE_FILTER = "YAML (*.yml *.yaml)"
@@ -648,14 +662,25 @@ class SelectionPanel(QWidget):
         self.include_unknown = QCheckBox(f"{YEAR_UNKNOWN}を入れる")
         self.include_unknown.setChecked(True)
         self.include_unknown.setToolTip(
-            "年の分からない写真を、範囲と関係なく一覧の最後に並べます。表示だけで、選ぶ写真と出力は変わりません"
+            "年の分からない写真を、範囲と関係なく一覧に入れます（点の順以外では最後に並びます）。"
+            "表示だけで、選ぶ写真と出力は変わりません"
         )
         self.include_unknown.toggled.connect(self._year_changed)
+        # **並びは見せ方だけ**（#18・利用者の要望）。選ぶ写真と出力の順は変えない
+        self.order_box = NoWheelComboBox()
+        for label, value in RESULT_ORDERS:
+            self.order_box.addItem(label, value)
+        self.order_box.setToolTip(
+            "一覧の並び順です。「年の古い順」は、年の中を点の高い順に並べます。選ぶ写真と出力は変わりません"
+        )
+        self.order_box.currentIndexChanged.connect(self._year_changed)
         self.previous_button = QPushButton("前へ")
         self.previous_button.clicked.connect(lambda: self._turn(-1))
         self.next_button = QPushButton("次へ")
         self.next_button.clicked.connect(lambda: self._turn(1))
         self.page_label = QLabel("")
+        top.addWidget(QLabel("並び"))
+        top.addWidget(self.order_box)
         top.addWidget(QLabel("撮影"))
         top.addWidget(self.year_range)
         top.addWidget(self.include_unknown)
@@ -1026,16 +1051,28 @@ class SelectionPanel(QWidget):
         return sorted(self.by_year, key=lambda y: (y is None, y or 0))
 
     def _current_year_media(self) -> List[Dict[str, Any]]:
-        """選んだ撮影時期の写真。年の古い順に、年の中は選んだ順。
+        """選んだ撮影時期の写真を、`並び` の順に。
 
-        **年不明は範囲と関係なく、`年不明を入れる` で決める**（入れるなら最後に並ぶ・#18）。
+        **年不明は範囲と関係なく、`年不明を入れる` で決める**（#18）。点の順では点のとおりに混ぜ、
+        それ以外の並びでは最後に置く（撮影時期で比べられないため）。
         月まで分からない写真は、**撮影時期がまるごと範囲に入るときだけ**出す（顔の割り当てタブと同じ）。
         """
         start, end = self.year_range.bounds()
         dated = [media for year in self._years_in_order() if year is not None for media in self.by_year[year]]
         if start is not None or end is not None:
             dated = [media for media in dated if _period_within(selection._media_period(media), start, end)]
-        return dated + list(self.by_year.get(None, ())) if self.include_unknown.isChecked() else dated
+        unknown = list(self.by_year.get(None, ())) if self.include_unknown.isChecked() else []
+        order = self.order_box.currentData()
+        # sorted は同じ値の順を保つ（reverse でも）。同じ点・同じ日時は選んだ順のまま
+        if order in (ORDER_POINTS_HIGH, ORDER_POINTS_LOW):
+            return sorted(
+                dated + unknown,
+                key=lambda media: media.get("family_score") or 0.0,
+                reverse=order == ORDER_POINTS_HIGH,
+            )
+        if order in (ORDER_TAKEN_OLD, ORDER_TAKEN_NEW):
+            dated = sorted(dated, key=_taken_key, reverse=order == ORDER_TAKEN_NEW)
+        return dated + unknown
 
     def _turn(self, step: int) -> None:
         pages = max(1, -(-len(self._current_year_media()) // RESULT_PAGE_SIZE))
@@ -1057,7 +1094,10 @@ class SelectionPanel(QWidget):
             for media in page:
                 # 年をまたいで並ぶので、どの年の写真かを添える。
                 year = year_label(selection._get_media_year(media))
-                item = QListWidgetItem(self._thumbnail_icon(media), f"{year} {Path(media['path']).name}")
+                text = f"{year} {Path(media['path']).name}"
+                if self.order_box.currentData() in (ORDER_POINTS_HIGH, ORDER_POINTS_LOW):
+                    text += f" {media.get('family_score') or 0.0:.0f}点"
+                item = QListWidgetItem(self._thumbnail_icon(media), text)
                 item.setData(Qt.UserRole, media["id"])
                 item.setToolTip(media["path"])
                 self.result_list.addItem(item)
@@ -1270,6 +1310,12 @@ class SelectionPanel(QWidget):
         finally:
             progress.finish()
         self.status.setText(f"{copied} 枚を {self.output_root} にコピーしました。")
+
+
+def _taken_key(media: Dict[str, Any]) -> tuple:
+    """撮影時期で並べるキー。月や年までしか分からない写真は、その区間の始まりで比べる。"""
+    period = selection._media_period(media)
+    return (period is not None, period[0] if period else datetime.min)
 
 
 def _month_text(moment) -> str:
