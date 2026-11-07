@@ -904,6 +904,64 @@ def test_a_value_off_the_gauge_is_kept_as_typed(window):
     assert panel.current_rule()["similar_seconds"] == 600
 
 
+def test_the_settings_column_fits_without_a_sideways_scroll(window):
+    """長い項目名は折り返す。**押し広げると「既定」ボタンが切れて、横スクロールが出ていた**（#18 で見つけた）。"""
+    from PySide6.QtWidgets import QScrollArea
+
+    panel = window.selection
+    window.resize(1240, 820)
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    assert panel.findChild(QScrollArea).horizontalScrollBar().maximum() == 0
+
+
+def test_each_gauge_marks_its_default_value(window):
+    """**ゲージの既定値の位置に印が出る**（#18）。値を動かしても印は動かない。"""
+    panel = window.selection
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    rows = list(panel.weight_rows.values()) + list(panel.number_rows.values())
+    assert rows
+    for row in rows:
+        slider = row.slider
+        assert slider.mark == round(row.default / row.step)
+        if slider.mark > slider.maximum():
+            assert slider.mark_x() is None
+            continue
+        x = slider.mark_x()
+        assert 0 <= x < slider.width()
+        slider.setValue(slider.maximum() if slider.mark < slider.maximum() / 2 else 0)
+        QApplication.processEvents()
+        assert slider.mark_x() == x, "取っ手を動かしても印は動かない"
+
+
+def test_the_mark_is_at_the_right_place_and_is_drawn(window):
+    panel = window.selection
+    window.tabs.setCurrentWidget(panel)
+    window.show()
+    QApplication.processEvents()
+    slider = panel.weight_rows["technical"].slider
+    slider.setValue(slider.maximum())  # 取っ手を印から離す
+    QApplication.processEvents()
+
+    slider.mark = 0
+    left = slider.mark_x()
+    slider.mark = slider.maximum()
+    right = slider.mark_x()
+    slider.mark = slider.maximum() // 2
+    middle = slider.mark_x()
+    assert left < middle < right
+    assert abs(middle - (left + right) / 2) <= 1
+
+    drawn = slider.grab().toImage()
+    slider.mark = slider.maximum() + 1  # 印を消す
+    bare = slider.grab().toImage()
+    assert slider.mark_x() is None
+    assert drawn.pixelColor(middle, 1) != bare.pixelColor(middle, 1), "描いた位置の色が変わる"
+
+
 def test_the_default_button_puts_back_only_its_own_value(window):
     """**項目ごとに1クリックで既定へ戻す**（#120）。既定のときは押せない。ほかの項目には触らない。"""
     panel = window.selection

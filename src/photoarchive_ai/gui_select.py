@@ -32,7 +32,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 import yaml
 from PIL import Image, ImageOps
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtGui import QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -55,6 +55,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -376,6 +378,42 @@ class NoWheelComboBox(_NoWheel, QComboBox):
         self._init_wheel_guard()
 
 
+class DefaultMarkSlider(NoWheelSlider):
+    """既定値の位置に縦の印を描くゲージ（#18・利用者の要望）。
+
+    `setTickPosition` の目盛りは等間隔にしか出せないので、自分で描く。印は取っ手の下に描く
+    （既定値に合っているときは取っ手に隠れ、上下だけが見える）。
+    """
+
+    def __init__(self, orientation, mark: int):
+        super().__init__(orientation)
+        #: 印を描く位置（ゲージの目盛り）。ゲージの右端より大きい既定値なら描かない。
+        self.mark = mark
+
+    def mark_x(self) -> Optional[int]:
+        """印の横位置（ピクセル）。範囲の外なら None。"""
+        if not self.minimum() <= self.mark <= self.maximum():
+            return None
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        offset = QStyle.sliderPositionFromValue(
+            self.minimum(), self.maximum(), self.mark, groove.width() - handle.width()
+        )
+        return groove.x() + offset + handle.width() // 2
+
+    def paintEvent(self, event) -> None:  # noqa: N802（Qt の名前）
+        x = self.mark_x()
+        if x is not None:
+            painter = QPainter(self)
+            painter.setPen(QPen(self.palette().color(QPalette.WindowText), 2))
+            painter.drawLine(x, 0, x, self.height() - 1)
+            painter.end()
+        super().paintEvent(event)
+
+
 class ParameterRow(QWidget):
     """1つの設定の行: 横ゲージ・入力欄・「既定」ボタン（#120）。
 
@@ -391,10 +429,11 @@ class ParameterRow(QWidget):
         self.spin = spin
         self.step = step
         self.default = default
-        self.slider = NoWheelSlider(Qt.Horizontal)
+        self.slider = DefaultMarkSlider(Qt.Horizontal, int(round(default / step)))
         self.slider.setRange(0, int(round(slider_maximum / step)))
         self.slider.setPageStep(max(1, self.slider.maximum() // 10))
         self.slider.setMinimumWidth(120)
+        self.slider.setToolTip(f"縦の印が既定値（{_number_text(default)}）です")
         self.reset_button = QPushButton(DEFAULT_LABEL)
         self.reset_button.setToolTip(f"既定値（{_number_text(default)}）に戻します")
         self.reset_button.clicked.connect(self.reset)
@@ -495,7 +534,10 @@ class SelectionPanel(QWidget):
             self.weight_spins[key] = spin
             row = ParameterRow(spin, step, WEIGHT_SLIDER_MAXIMUM[step], getattr(defaults, key))
             self.weight_rows[key] = row
-            weights_form.addRow(label, row)
+            # 折り返す。長い項目名が欄の幅を押し広げ、「既定」ボタンが切れて横スクロールが出ていた
+            name = QLabel(label)
+            name.setWordWrap(True)
+            weights_form.addRow(name, row)
         layout.addWidget(weights_box)
 
         period_box = QGroupBox("撮影時期（空欄なら絞り込まない）")

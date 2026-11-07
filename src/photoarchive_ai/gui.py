@@ -11,6 +11,7 @@ import argparse
 import os
 import sqlite3
 from contextlib import contextmanager
+import calendar
 from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Union
@@ -48,7 +49,7 @@ from . import db, face, matcher, migration, recommend, scoring, selection, undo
 from .gui_period import YearMonthRange
 # 写真の選定タブと同じ「フォーカスの無いときはホイールを受けない」部品（写しを作らない）。
 # gui_select は gui を関数の中でしか import しないので、循環しない
-from .gui_select import WheelSafeSlider, WheelSafeSpinBox
+from .gui_select import NoWheelComboBox, WheelSafeSlider, WheelSafeSpinBox
 from .config import find_settings_path
 
 # **日付の判断は `dates` に1つだけ持つ。** ここで再公開しているのは、
@@ -286,8 +287,12 @@ def _taken_age(birth_date: Optional[str], taken: Optional[Taken]) -> Optional[st
     return format_age(age_at(birth_date, taken), bool(taken and taken.inferred))
 
 
-#: 年・月・日の入力欄で「未入力」を表す値。`QSpinBox` の最小値に置く。
+#: 年・月・日の入力欄で「未入力」を表す値（コンボボックスの `--` の値）。
 BIRTH_DATE_UNSET = 0
+#: 誕生日の年の欄の、いちばん古い年。
+BIRTH_YEAR_FIRST = 1900
+#: 年が `--` のときに日の数を決める年（うるう年。2月29日を選べるように）。
+BIRTH_DAY_LEAP_YEAR = 2000
 
 
 def build_birth_date(year: int, month: int, day: int) -> Optional[str]:
@@ -1130,43 +1135,59 @@ class PersonDialog(QDialog):
         self.setLayout(form)
 
     def _build_birth_date_row(self, birth_date) -> QWidget:
-        """`[2011]年 [5]月 [3]日` の入力欄。
+        """`[2011]年 [5]月 [3]日` のコンボボックス（#18・利用者の指定）。
 
         1つの欄に `YYYY-MM-DD` と打たせると、区切りの書き方（`/` か `-` か）を
         間違えただけで弾かれる。**年・月・日に分ければ、書式を間違えようがない。**
 
-        `QDateEdit` は「未設定」を表せないので使わない。3つとも空（`0`）が未設定。
+        `QDateEdit` は「未設定」を表せないので使わない。3つとも `--`（`0`）が未設定。
+        **日の欄には、選んだ年月に実在する日だけを並べる。** 年は新しい順（並びの先頭に近いほど
+        最近の人物が選びやすい）。ホイールでは変わらない（上を通っただけで誕生日が変わらないように）。
         """
         year, month, day = split_birth_date(birth_date)
-        self.birth_year = QSpinBox()
-        self.birth_year.setRange(BIRTH_DATE_UNSET, 2200)
-        self.birth_year.setValue(year)
-        self.birth_month = QSpinBox()
-        self.birth_month.setRange(BIRTH_DATE_UNSET, 12)
-        self.birth_month.setValue(month)
-        self.birth_day = QSpinBox()
-        self.birth_day.setRange(BIRTH_DATE_UNSET, 31)
-        self.birth_day.setValue(day)
+        self.birth_year = NoWheelComboBox()
+        self.birth_month = NoWheelComboBox()
+        self.birth_day = NoWheelComboBox()
+        # 保存済みの年が範囲の外でも、選択肢から消さない（開いて保存しただけで消えないように）
+        years = set(range(BIRTH_YEAR_FIRST, date.today().year + 1)) | ({year} - {BIRTH_DATE_UNSET})
+        self._fill_birth_box(self.birth_year, sorted(years, reverse=True), year)
+        self._fill_birth_box(self.birth_month, range(1, 13), month)
+        self._fill_birth_day(day)
+        self.birth_year.currentIndexChanged.connect(lambda _index: self._fill_birth_day())
+        self.birth_month.currentIndexChanged.connect(lambda _index: self._fill_birth_day())
 
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        for spin, unit, width in (
-            (self.birth_year, "年", 80),
-            (self.birth_month, "月", 60),
-            (self.birth_day, "日", 60),
-        ):
-            # 未入力であることが分かるようにする。0 のままだと「0年0月0日」を
-            # 入れたように見える。
-            spin.setSpecialValueText("--")
-            spin.setFixedWidth(width)
-            # 「--」の文字が入った欄は、全選択しておかないと打鍵で置き換わらない
-            # （年齢の入力と同じ。▲を押すしかなくなる）。
-            spin.focusInEvent = _make_select_all_on_focus(spin)
-            layout.addWidget(spin)
+        for box, unit in ((self.birth_year, "年"), (self.birth_month, "月"), (self.birth_day, "日")):
+            box.setMaxVisibleItems(15)
+            layout.addWidget(box)
             layout.addWidget(QLabel(unit))
         layout.addStretch(1)
         return row
+
+    @staticmethod
+    def _fill_birth_box(box: QComboBox, values, keep: int) -> None:
+        """`--` と ``values`` を並べて ``keep`` を選ぶ。``keep`` が無ければ `--`。"""
+        blocked = box.blockSignals(True)
+        box.clear()
+        box.addItem("--", BIRTH_DATE_UNSET)
+        for value in values:
+            box.addItem(str(value), value)
+        box.setCurrentIndex(max(0, box.findData(keep)))
+        box.blockSignals(blocked)
+
+    def _fill_birth_day(self, keep: Optional[int] = None) -> None:
+        """日の欄を、選んでいる年月に実在する日で作り直す。
+
+        **その月に無くなった日は `--` に戻す**（31 日のまま 2 月にしたとき）。末日へ黙って丸めると、
+        違う誕生日が保存される。`--` なら保存のときに知らせが出る。年か月が `--` なら 31 日まで。
+        """
+        if keep is None:
+            keep = self.birth_day.currentData()
+        year, month = self.birth_year.currentData(), self.birth_month.currentData()
+        last = 31 if not month else calendar.monthrange(year or BIRTH_DAY_LEAP_YEAR, month)[1]
+        self._fill_birth_box(self.birth_day, range(1, last + 1), keep)
 
     def values(self):
         """入力された 名前 / 続柄 / メモ / 誕生日 `(年, 月, 日)`。
@@ -1178,7 +1199,7 @@ class PersonDialog(QDialog):
             self.name_input.text().strip(),
             self.relation_input.text().strip(),
             self.memo_input.toPlainText().strip(),
-            (self.birth_year.value(), self.birth_month.value(), self.birth_day.value()),
+            (self.birth_year.currentData(), self.birth_month.currentData(), self.birth_day.currentData()),
         )
 
     def scoring_values(self):

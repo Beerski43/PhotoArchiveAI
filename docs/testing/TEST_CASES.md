@@ -634,6 +634,9 @@
 | `test_saving_without_a_rule_file_asks_where` | `rule_path` が無いときの「ルールを保存」は保存先を聞く |
 | `test_a_loaded_file_survives_saving_the_settings_with_the_same_rule_path` | 設定の窓で `rule_path` を変えていなければ読み込んだファイルのまま。変えたらそちらが効く |
 | `test_a_broken_yaml_rule_at_startup_warns_instead_of_crashing` | 構文の壊れた YAML で起動しても落ちず知らせる（本筋の外で直した） |
+| `test_each_gauge_marks_its_default_value` | **ゲージの既定値の位置に印**（#18）。取っ手を動かしても印は動かない。右端より大きい既定値は印なし |
+| `test_the_mark_is_at_the_right_place_and_is_drawn` | 印の位置が左端・中央・右端で比例し、実際に描かれる |
+| `test_the_settings_column_fits_without_a_sideways_scroll` | 長い項目名を折り返し、設定欄に横スクロールが出ない（「既定」ボタンが切れない） |
 | `test_the_wheel_never_changes_a_value_in_the_settings_column` | **設定欄の入力部品はすべて、ホイールで値を変えない**（上を通っただけでも、クリックしたあとでも。年の表の欄も。設定欄をスクロールすると、マウスの下の値が黙って変わっていた。PR #122 のレビュー指摘1・#18）。イベントを受けず親へ渡す（スクロールになる）。部品を全部たどるので、足した欄も見張られる |
 | `test_the_sharpness_gauge_still_takes_the_wheel_after_clicking` | 顔の割り当てタブの鮮明さのゲージは、クリックしたあとならホイールで動く（設定欄とは扱いが違う・#135） |
 
@@ -680,7 +683,10 @@
 | `test_a_birth_date_can_be_registered_and_cleared` | 誕生日の登録と、空欄での未設定へ戻し |
 | `test_a_partly_filled_birth_date_is_rejected` | **年月日まで必須。** 一部だけの入力と、暦に無い日とで言うことを変える |
 | `test_the_birth_date_is_built_from_three_numbers` | 年・月・日の3つから組み立て、保存済みの値を3つに割る |
-| `test_typing_a_birth_date_straight_from_the_keyboard` | `--` の入った欄でも打鍵で置き換わる |
+| `test_typing_a_birth_date_straight_from_the_keyboard` | コンボボックスでも打鍵で選べる |
+| `test_the_birth_date_boxes_offer_only_days_that_exist` | 日の欄には、選んだ年月に実在する日だけ（うるう年も・#18） |
+| `test_a_day_that_no_longer_exists_goes_back_to_unset` | 無くなった日は `--` に戻す（末日へ丸めない）。あれば保つ |
+| `test_the_birth_year_box_is_newest_first_and_keeps_an_old_saved_year` | 年は新しい順。範囲の外の保存済みの年も消さない |
 | `test_the_edit_dialog_opens_with_the_stored_birth_date` | 編集ダイアログが今の誕生日で開く |
 | `test_the_person_dialog_round_trips_a_birth_date` | 実物のダイアログが誕生日を持ち帰る |
 | `test_the_person_details_show_the_birth_date` | 人物詳細に誕生日が出る（年齢が出ない理由が分かる） |
