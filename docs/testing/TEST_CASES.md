@@ -1123,6 +1123,8 @@ editable install のときだけ出すこと（通常のインストールでは
 | テスト | 内容 |
 |---|---|
 | `test_the_menu_bar_has_import_faces_and_settings` | メニューは取り込み・顔の割り当て・設定。タブは2枚で、進み具合はタブの右上のまま |
+| `test_the_rule_items_work_only_on_the_selection_tab` | ルールの操作はメニューから（#18）。写真の選定タブのときだけ押せる。タブのボタンは無い |
+| `test_each_rule_item_runs_its_operation` | メニューの3項目がそれぞれの操作を呼ぶ |
 | `test_the_face_items_work_only_on_the_assignment_tab` / `test_a_finished_job_on_the_selection_tab_keeps_the_face_items_off` | **顔の割り当ての項目は、顔の割り当てタブのときだけ**（裏の処理が終わっても勝手に戻らない） |
 | `test_match_and_unassign_are_blocked_while_a_job_runs` | 実行中は `match` と取り消しを押せない。`evaluate` の窓は開ける（測るボタンは止まる） |
 | `test_the_match_action_runs_match` | メニューから `match` の確認の窓が開く |
@@ -1174,6 +1176,7 @@ editable install のときだけ出すこと（通常のインストールでは
 | `test_nested_roots_and_an_output_overlapping_a_root_are_refused` | root の入れ子と、**出力先が root と重なる（同じ・内側・外側）**のは止める。まだ無い出力先は聞くだけ |
 | `test_a_missing_root_asks_instead_of_refusing` | 見つからない root は止めずに聞く（NFS が外れているだけのことがある） |
 | `test_saving_applies_roots_output_and_rule_to_the_open_tabs` | 保存したら**取り込みウィザードと assess の窓の root・選定タブの出力先とルール（読み直して重みに出る）・顔の割り当てのフォルダ表示**にすぐ効く |
+| `test_the_dialog_has_no_rule_field_and_keeps_the_rule_path_in_the_file` | **ルールの欄は無い**（#18）。設定ファイルの `rule_path` は保存しても消えない |
 | `test_the_same_rule_path_keeps_the_weights_moved_on_screen` | ルールのパスが同じなら、画面で動かした重みは読み直さない |
 | `test_a_new_database_path_waits_for_the_next_start` | **DB の場所は次に起動したときから**（開いている接続は差し替えない） |
 | `test_refused_settings_are_not_written` | 止めた・いいえと答えたときは書かない |

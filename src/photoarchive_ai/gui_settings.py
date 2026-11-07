@@ -1,8 +1,8 @@
 """設定の窓（#131・Phase 9 の 9.3）。``config/app_settings.yml`` を画面で見て直す。
 
 メニューの ``設定…`` から開く（タブにはしない・利用者の決定 2026-11-03。メニューへ移したのは #132）。
-直すのは DB の場所・写真の置き場所（root）・出力先・ルールのファイル。キーと既定は
-``docs/operation/CONFIG.md`` が正。
+直すのは DB の場所・写真の置き場所（root）・出力先。キーと既定は ``docs/operation/CONFIG.md`` が正。
+ルールのファイルの読み書きはメニューの ``写真の選定``（#18）。``rule_path`` はここでは書かず、ファイルの値を残す。
 
 - **保存は ``config.write_settings``**（書く前に ``.bak`` に控える・コメントは消える・
   画面に出さないキーは残す）
@@ -157,9 +157,6 @@ class SettingsDialog(QDialog):
         output_note = QLabel("select 専用のフォルダにしてください。出力のたびに、前回のファイルを消してからコピーします。")
         output_note.setWordWrap(True)
 
-        self.rule_edit = QLineEdit(str(self.settings.get("rule_path") or ""))
-        rule_row = self._with_button(self.rule_edit, "選ぶ…", self._choose_rule)
-
         form = QFormLayout()
         form.addRow("DB の場所", database_row)
         form.addRow("", database_note)
@@ -167,7 +164,6 @@ class SettingsDialog(QDialog):
         form.addRow("", roots_note)
         form.addRow("出力先", output_row)
         form.addRow("", output_note)
-        form.addRow("抽出ルール", rule_row)
 
         self.save_button = QPushButton("保存")
         self.save_button.setDefault(True)
@@ -228,13 +224,6 @@ class SettingsDialog(QDialog):
         if path:
             self.output_edit.setText(path)
 
-    def _choose_rule(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "抽出ルールを選ぶ", self._start_dir(self.rule_edit.text()), "YAML (*.yml *.yaml);;すべて (*)"
-        )
-        if path:
-            self.rule_edit.setText(path)
-
     # ------------------------------------------------------------------
     # 保存
     # ------------------------------------------------------------------
@@ -248,7 +237,6 @@ class SettingsDialog(QDialog):
             "database_path": self.database_edit.text().strip() or None,
             "source_roots": self.roots(),
             "output_root": self.output_edit.text().strip() or None,
-            "rule_path": self.rule_edit.text().strip() or None,
         }
 
     def _save_clicked(self) -> None:

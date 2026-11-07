@@ -3634,10 +3634,23 @@ class AppWindow(QMainWindow):
         self.evaluate_action = self.face_menu.addAction("精度を測る（evaluate）…")
         self.evaluate_action.triggered.connect(self.evaluate_window.open_window)
 
+        # ルールのファイルの操作はメニューから（#18・利用者の指定）。ボタンは置かない
+        self.selection_menu = bar.addMenu("写真の選定(&P)")
+        self.selection_menu.setToolTipsVisible(True)
+        self.load_rule_action = self.selection_menu.addAction("ルールを読み込む…")
+        self.load_rule_action.setToolTip("ファイルを選んで、画面の設定をその内容に置き換えます")
+        self.load_rule_action.triggered.connect(self.selection.load_rule_file)
+        self.save_rule_action = self.selection_menu.addAction("ルールを保存")
+        self.save_rule_action.setToolTip("いま読み込んでいるルールのファイルに上書きします")
+        self.save_rule_action.triggered.connect(self.selection.save_rule)
+        self.save_rule_as_action = self.selection_menu.addAction("別のファイルに保存…")
+        self.save_rule_as_action.setToolTip("保存先を選んで書きます。以後はそのファイルを読み書きします")
+        self.save_rule_as_action.triggered.connect(self.selection.save_rule_as)
+
         self.settings_menu = bar.addMenu("設定(&S)")
         self.settings_menu.setToolTipsVisible(True)
         self.settings_action = self.settings_menu.addAction("設定…")
-        self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先・抽出ルール（config/app_settings.yml）")
+        self.settings_action.setToolTip("DB の場所・写真の置き場所・出力先（config/app_settings.yml）")
         self.settings_action.triggered.connect(self.open_settings)
 
     def _refresh_points_if_shown(self) -> None:
@@ -3652,6 +3665,8 @@ class AppWindow(QMainWindow):
         on_faces = self.tabs.currentWidget() is self.assignment
         running = self.jobs.is_running()
         self.face_menu.setEnabled(on_faces)
+        # 写真の選定の項目も同じく、写真の選定タブのときだけ（#18）
+        self.selection_menu.setEnabled(not on_faces)
         self.match_action.setEnabled(on_faces and not running)
         self.unassign_action.setEnabled(on_faces and not running)
         self.evaluate_action.setEnabled(on_faces)

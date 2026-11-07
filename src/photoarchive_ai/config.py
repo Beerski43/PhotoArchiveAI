@@ -224,7 +224,7 @@ def get_dlib_model_dir(settings: Dict[str, Any]) -> Optional[str]:
 # ----------------------------------------------------------------------
 
 #: GUI の設定の窓が直すキー。**ほかのキー（``dlib_model_dir`` など）は書き戻すときもそのまま残す。**
-EDITABLE_KEYS = ("database_path", "source_roots", "output_root", "rule_path")
+EDITABLE_KEYS = ("database_path", "source_roots", "output_root")
 
 
 class SettingsWriteError(ValueError):
