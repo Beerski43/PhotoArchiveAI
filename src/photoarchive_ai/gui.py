@@ -844,6 +844,7 @@ class _AutoAssignDialog(QDialog):
         everyone_label: str,
         person_label: str,
         note: str = "",
+        person_by_default: bool = False,
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -855,6 +856,8 @@ class _AutoAssignDialog(QDialog):
         self.everyone_button = QRadioButton(everyone_label, self)
         self.person_button = QRadioButton(person_label, self)
         self.everyone_button.setChecked(True)
+        if person is not None and person_by_default:
+            self.person_button.setChecked(True)
         if person is not None:
             layout.addWidget(self.everyone_button)
             layout.addWidget(self.person_button)
@@ -928,7 +931,7 @@ class MatchDialog(_AutoAssignDialog):
     できるので、外せるようにもしてある（利用者の選択・2026-10-09）。
 
     **左で人物を選んでいれば、その人物だけを付け直すこともできる**（#123。
-    `photoarchive match --person` と同じ）。既定は全員（いままでどおり）。
+    `photoarchive match --person` と同じ）。**人物を選んでいれば、既定はその人物だけ**（#18・利用者の指定）。
     """
 
     def __init__(
@@ -949,6 +952,7 @@ class MatchDialog(_AutoAssignDialog):
             "全員を付け直す",
             f"{person['name']} だけを付け直す（ほかの人物の自動割当には触らない）" if person else "",
             note="途中で止めることはできません（半分だけ付け直した状態になるため）。",
+            person_by_default=True,
         )
 
     def _update_detail(self, *_args) -> None:

@@ -564,7 +564,8 @@
 | `test_the_dialog_backs_up_by_default_and_does_not_start_on_enter` | 控えは既定で取る。既定のボタンは「やめる」 |
 | `test_the_summary_names_each_person_and_the_backup` | 結果に人物ごとの件数（多い順）と控えの場所を出す |
 | `test_matching_only_the_selected_person_from_the_window` | **左で選んだ人物だけを付け直せる**。ほかの人物の顔には触らず、1位がほかの人物だった件数を結果に出す（#123） |
-| `test_the_dialog_offers_the_selected_person_but_defaults_to_everyone` | 確認の窓は選んでいる人物を選べるが、既定は全員（#123） |
+| `test_the_dialog_defaults_to_the_selected_person_and_can_switch_to_everyone` | 確認の窓は人物を選んでいれば既定がその人物だけ（#18）。全員にも切り替えられ、文も追従する |
+| `test_the_unassign_dialog_still_defaults_to_everyone` | 取り消しの窓の既定は全員のまま |
 | `test_without_a_selected_person_the_choice_is_not_offered` | 人物を選んでいなければ選ぶ欄を出さない（#123） |
 
 ### `test_gui_select.py` — 写真の選定タブ（53件。#104・#106・#113・#120・#134）
